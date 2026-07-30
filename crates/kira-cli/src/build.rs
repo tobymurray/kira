@@ -5,13 +5,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::sha256_hex;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use kira_core::catalog::{
-    App, Catalog, Origin, Release, ReleaseOrder, SCHEMA, Source, VersionEntry, partition_unique,
-    sort_newest_first,
+    App, BuiltFrom, Catalog, Origin, Release, ReleaseOrder, SCHEMA, Source, VersionEntry,
+    partition_unique, sort_newest_first,
 };
 use kira_core::icon;
-use kira_core::uapp::{AppId, Uapp};
+use kira_core::uapp::{AppId, Uapp, Version};
+
+use crate::build_app::flags_id;
+use crate::recipe::Recipe;
 use serde::Deserialize;
 
 /// Command-line inputs for a build.
@@ -27,6 +30,14 @@ pub(crate) struct Args {
     pub repo: Option<String>,
     /// Tag to assume for a single-release source.
     pub tag: Option<String>,
+    /// Directory of binaries Kira has already built, named by recipe.
+    ///
+    /// Any version with a build here is served from it; the rest fall back to
+    /// upstream's binary, which `origin` records.
+    pub built: Option<PathBuf>,
+    /// Toolchain identity the store was built with. Required with `--built`,
+    /// since the recipe -- and therefore the artifact name -- depends on it.
+    pub toolchain: Option<String>,
 }
 
 /// Release metadata as fetched from the GitHub API by the workflow.
@@ -67,6 +78,8 @@ struct Binary {
     folder: String,
     file: String,
     bytes: Vec<u8>,
+    /// `AppID` as upstream's binary reports it, to cross-check Kira's build.
+    app_id_hint: AppId,
 }
 
 /// Directory entries that are directories, sorted by name.
@@ -104,11 +117,17 @@ fn discover_binaries(root: &Path) -> Result<Vec<Binary>> {
             [] => {}
             [file] => {
                 let path = dir.join(file);
+                let bytes =
+                    fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+                let app_id_hint = Uapp::parse(&bytes)
+                    .with_context(|| format!("parsing {}", path.display()))?
+                    .header()
+                    .app_id;
                 found.push(Binary {
                     folder,
                     file: file.clone(),
-                    bytes: fs::read(&path)
-                        .with_context(|| format!("reading {}", path.display()))?,
+                    bytes,
+                    app_id_hint,
                 });
             }
             // The watch loads the FIRST .uapp it finds in a folder, so shipping
@@ -167,11 +186,159 @@ fn release_dirs(args: &Args) -> Result<Vec<ReleaseDir>> {
     Ok(dirs)
 }
 
+/// How many versions each origin contributed, for the run summary.
+#[derive(Debug, Default)]
+struct OriginCounts {
+    kira: usize,
+    upstream: usize,
+    diverged: usize,
+}
+
+impl OriginCounts {
+    fn record(&mut self, origin: Origin, matches_upstream: bool) {
+        match origin {
+            Origin::Kira => {
+                self.kira += 1;
+                if !matches_upstream {
+                    self.diverged += 1;
+                }
+            }
+            Origin::Upstream => self.upstream += 1,
+        }
+    }
+}
+
+/// The binary chosen for publication, and what is known about it.
+struct Chosen {
+    bytes: Vec<u8>,
+    payload_sha256: String,
+    origin: Origin,
+    /// Hash of what upstream published for the same app and version.
+    upstream_sha256: String,
+    /// Whether the served bytes are upstream's bytes.
+    matches_upstream: bool,
+    built_from: Option<BuiltFrom>,
+}
+
+/// Publish Kira's build where one exists, otherwise upstream's.
+///
+/// A Kira build is accepted only if it agrees with upstream's binary about which
+/// app and version it is; a mismatch means the recipe or the label produced the
+/// wrong file, which is a bug rather than something to publish.
+fn choose_binary(
+    built: Option<&BuiltStore>,
+    release: &ReleaseDir,
+    upstream: &Binary,
+    version: Version,
+) -> Result<Chosen> {
+    let upstream_sha256 = sha256_hex(&upstream.bytes);
+    let upstream_payload = sha256_hex(
+        Uapp::parse(&upstream.bytes)
+            .context("re-parsing the upstream binary")?
+            .payload(),
+    );
+
+    let found = built.and_then(|store| store.look_up(&release.tag, &upstream.folder, version));
+    let Some((recipe, path)) = found else {
+        return Ok(Chosen {
+            payload_sha256: upstream_payload,
+            origin: Origin::Upstream,
+            matches_upstream: true,
+            upstream_sha256,
+            bytes: upstream.bytes.clone(),
+            built_from: None,
+        });
+    };
+
+    let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    let parsed = Uapp::parse(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+    ensure!(
+        parsed.verify_crc().is_valid(),
+        "{}: CRC mismatch in a binary from the store",
+        path.display()
+    );
+    ensure!(
+        parsed.header().app_id == upstream.app_id_hint,
+        "{}: built AppID {} does not match upstream's {} for the same app",
+        path.display(),
+        parsed.header().app_id,
+        upstream.app_id_hint
+    );
+    ensure!(
+        parsed.header().version == version,
+        "{}: built version {} does not match {version}",
+        path.display(),
+        parsed.header().version
+    );
+
+    let matches_upstream = bytes == upstream.bytes;
+    Ok(Chosen {
+        payload_sha256: sha256_hex(parsed.payload()),
+        origin: Origin::Kira,
+        matches_upstream,
+        upstream_sha256,
+        bytes,
+        built_from: Some(BuiltFrom {
+            app_source: recipe.app_source.clone(),
+            sdk_rev: recipe.sdk_rev.clone(),
+            toolchain: recipe.toolchain.clone(),
+            recipe: recipe.key(),
+        }),
+    })
+}
+
+/// The binaries Kira has already built, as a flat directory of artifacts named by
+/// recipe.
+///
+/// Populated by the app-binaries workflow; absent during a transition, in which
+/// case the pipeline falls back to republishing upstream's binary and says so.
+struct BuiltStore {
+    dir: PathBuf,
+    names: std::collections::BTreeSet<String>,
+    toolchain: String,
+}
+
+impl BuiltStore {
+    fn load(dir: PathBuf, toolchain: String) -> Result<Self> {
+        let mut names = std::collections::BTreeSet::new();
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            if name.to_lowercase().ends_with(".uapp") {
+                names.insert(name);
+            }
+        }
+        Ok(Self {
+            dir,
+            names,
+            toolchain,
+        })
+    }
+
+    /// The recipe by which an app in an SDK release would have been built.
+    fn recipe(&self, tag: &str, folder: &str, version: Version) -> Recipe {
+        Recipe {
+            app_source: format!("sdk:{tag}:Examples/Apps/{folder}"),
+            sdk_rev: tag.to_owned(),
+            toolchain: self.toolchain.clone(),
+            build_version: version,
+            flags: flags_id(),
+        }
+    }
+
+    /// Kira's build of an app, if one has been made under the current recipe.
+    fn look_up(&self, tag: &str, folder: &str, version: Version) -> Option<(Recipe, PathBuf)> {
+        let recipe = self.recipe(tag, folder, version);
+        let name = recipe.artifact_name(folder);
+        self.names
+            .contains(&name)
+            .then(|| (recipe, self.dir.join(name)))
+    }
+}
+
 /// A binary with its header parsed and its hashes computed.
 struct Parsed {
     binary: Binary,
     header: kira_core::uapp::Header,
-    payload_sha256: String,
     normal_icon: Vec<u8>,
     small_icon: Vec<u8>,
 }
@@ -197,7 +364,6 @@ fn parse_release(tag: &str, binaries: Vec<Binary>) -> Result<Vec<Parsed>> {
             }
             Ok(Parsed {
                 header: uapp.header().clone(),
-                payload_sha256: sha256_hex(uapp.payload()),
                 normal_icon: uapp.normal_icon().to_vec(),
                 small_icon: uapp.small_icon().to_vec(),
                 binary,
@@ -221,6 +387,8 @@ fn process_release(
     data: &Path,
     apps: &mut BTreeMap<AppId, App>,
     total_bytes: &mut u64,
+    built: Option<&BuiltStore>,
+    counts: &mut OriginCounts,
 ) -> Result<Processed> {
     let parsed = parse_release(&release.tag, discover_binaries(&release.dir)?)?;
 
@@ -252,17 +420,22 @@ fn process_release(
     for Parsed {
         binary,
         header,
-        payload_sha256,
         normal_icon,
         small_icon,
     } in partitioned.unique
     {
+        // Prefer Kira's own build. Falling back to upstream's binary keeps
+        // releases that have not been built yet in the catalogue, and `origin`
+        // says which it is rather than papering over the difference.
+        let chosen = choose_binary(built, release, &binary, header.version)?;
+        counts.record(chosen.origin, chosen.matches_upstream);
+
         let download = format!("apps/{}/{}/{}", release.tag, binary.folder, binary.file);
         let target = data.join(&download);
         fs::create_dir_all(target.parent().expect("download path has a parent"))?;
-        fs::write(&target, &binary.bytes)
+        fs::write(&target, &chosen.bytes)
             .with_context(|| format!("writing {}", target.display()))?;
-        *total_bytes += binary.bytes.len() as u64;
+        *total_bytes += chosen.bytes.len() as u64;
 
         let entry = apps.entry(header.app_id).or_insert_with(|| App {
             app_id: header.app_id,
@@ -287,21 +460,19 @@ fn process_release(
             file: binary.file.clone(),
             libc_version: header.libc_version,
             autostart: header.autostart(),
-            size: binary.bytes.len(),
-            sha256: sha256_hex(&binary.bytes),
-            payload_sha256,
+            size: chosen.bytes.len(),
+            sha256: sha256_hex(&chosen.bytes),
+            payload_sha256: chosen.payload_sha256,
             download,
             // Filled once every version is known.
             changed: None,
             delta_bytes: None,
-            // These binaries come straight from an upstream release, so they are
-            // upstream's by definition and trivially match themselves. When the
-            // pipeline switches to Kira-built binaries this becomes Origin::Kira
-            // with a builtFrom, and matchesUpstream stops being a tautology.
-            origin: Origin::Upstream,
-            upstream_sha256: Some(sha256_hex(&binary.bytes)),
-            matches_upstream: Some(true),
-            built_from: None,
+            origin: chosen.origin,
+            // Recorded whichever binary is served, so a watch carrying the
+            // vendor's build can be recognised rather than nagged.
+            upstream_sha256: Some(chosen.upstream_sha256),
+            matches_upstream: Some(chosen.matches_upstream),
+            built_from: chosen.built_from,
         });
 
         // Icons come from the newest version that has any. A declared length
@@ -359,13 +530,33 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     }
     fs::create_dir_all(data.join("icons"))?;
 
+    let built = match (args.built.clone(), args.toolchain.clone()) {
+        (Some(dir), Some(toolchain)) => {
+            let store = BuiltStore::load(dir, toolchain)?;
+            println!("store holds {} built binaries", store.names.len());
+            Some(store)
+        }
+        // Without the toolchain the artifact names cannot be computed, and
+        // guessing would silently publish upstream binaries as if Kira built them.
+        (Some(_), None) => bail!("--built requires --toolchain, which the recipe depends on"),
+        _ => None,
+    };
+    let mut counts = OriginCounts::default();
+
     let mut apps: BTreeMap<AppId, App> = BTreeMap::new();
     let mut releases: Vec<Release> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     let mut total_bytes: u64 = 0;
 
     for release in &releases_dirs {
-        match process_release(release, &data, &mut apps, &mut total_bytes)? {
+        match process_release(
+            release,
+            &data,
+            &mut apps,
+            &mut total_bytes,
+            built.as_ref(),
+            &mut counts,
+        )? {
             Processed::Included(record) => releases.push(record),
             Processed::Skipped => skipped.push(release.tag.clone()),
         }
@@ -418,6 +609,18 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         println!("skipped (no usable apps): {}", skipped.join(", "));
     }
     println!("{restamps} version(s) are re-stamps with identical code");
+    println!(
+        "{} version(s) built by Kira, {} republished from upstream",
+        counts.kira, counts.upstream
+    );
+    if counts.diverged > 0 {
+        // Expected until the SDK carries the path-independence fix: Kira's build
+        // is byte-for-byte different from upstream's for the same source.
+        println!(
+            "{} of Kira's builds differ byte-for-byte from upstream's",
+            counts.diverged
+        );
+    }
     #[allow(clippy::cast_precision_loss)]
     let mib = total_bytes as f64 / 1024.0 / 1024.0;
     println!("{mib:.2} MiB of binaries -> {}", data.display());
@@ -435,16 +638,28 @@ fn annotate_history(app: &mut App) {
             (
                 v.payload_sha256.clone(),
                 i64::try_from(v.size).unwrap_or(i64::MAX),
+                v.origin,
             )
         });
         let current_size = i64::try_from(app.versions[index].size).unwrap_or(i64::MAX);
         let entry = &mut app.versions[index];
-        if let Some((older_hash, older_size)) = older {
-            entry.changed = Some(entry.payload_sha256 != older_hash);
-            entry.delta_bytes = Some(current_size - older_size);
-        } else {
-            entry.changed = None;
-            entry.delta_bytes = None;
+        match older {
+            // Comparing across builders says nothing about whether the code
+            // changed -- two builds of one source differ by embedded paths alone.
+            // Unknown beats a false claim, and this is what keeps the switch to
+            // Kira-built binaries from reading as "code changed" on every app.
+            Some((_, _, older_origin)) if older_origin != entry.origin => {
+                entry.changed = None;
+                entry.delta_bytes = None;
+            }
+            Some((older_hash, older_size, _)) => {
+                entry.changed = Some(entry.payload_sha256 != older_hash);
+                entry.delta_bytes = Some(current_size - older_size);
+            }
+            None => {
+                entry.changed = None;
+                entry.delta_bytes = None;
+            }
         }
     }
     // Present-tense metadata tracks the newest build.

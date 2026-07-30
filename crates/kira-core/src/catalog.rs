@@ -259,6 +259,17 @@ impl App {
             };
         }
 
+        if latest.changed.is_none() {
+            // Not comparable: the two versions were produced by different
+            // builders, so a byte difference says nothing about the code. Saying
+            // "changed" here would be the false claim the build deliberately
+            // avoided recording.
+            return match self.versions.get(1) {
+                Some(older) => format!("not comparable with {}", older.version),
+                None => format!("only {} published", latest.version),
+            };
+        }
+
         match latest.delta_bytes {
             Some(delta) if delta != 0 => {
                 format!("code changed in {} ({delta:+} B)", latest.version)
@@ -573,6 +584,22 @@ mod tests {
             app(versions).describe_history(),
             "code unchanged across 3 releases"
         );
+    }
+
+    #[test]
+    fn history_admits_when_versions_are_not_comparable() {
+        // Different builders produced these, so the byte difference is not
+        // evidence about the code and must not be reported as a change.
+        let mut newest = version_entry("1.3.0");
+        newest.changed = None;
+        newest.delta_bytes = None;
+        newest.origin = Origin::Kira;
+        let mut older = version_entry("1.2.0");
+        older.origin = Origin::Upstream;
+
+        let described = app(vec![newest, older]).describe_history();
+        assert_eq!(described, "not comparable with 1.2.0");
+        assert!(!described.contains("changed"), "{described}");
     }
 
     #[test]

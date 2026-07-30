@@ -294,6 +294,12 @@ button.ghost:hover:not(:disabled),
   color: var(--ink-soft);
 }
 
+.meta.provenance {
+  font-size: 11px;
+  opacity: 0.75;
+  margin: -6px 0 6px;
+}
+
 .meta.appid {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;

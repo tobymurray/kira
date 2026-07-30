@@ -279,6 +279,22 @@ function renderCard(app, entry) {
     `${fmtSize(selected.size)}${selected.autostart ? ' · autostarts' : ''} · ${app.history}`;
   body.appendChild(meta);
 
+  // Who built the binary on offer. For a Kira build the recipe is shown on hover,
+  // since that plus the published inputs is what makes it reproducible.
+  const provenance = document.createElement('div');
+  provenance.className = 'meta provenance';
+  if (selected.origin === 'kira') {
+    provenance.textContent = 'built by Kira from source';
+    const built = selected.builtFrom;
+    if (built) {
+      provenance.title =
+        `recipe ${built.recipe}\nsource ${built.appSource}\ntoolchain ${built.toolchain}`;
+    }
+  } else {
+    provenance.textContent = "the vendor's own build";
+  }
+  body.appendChild(provenance);
+
   // Upstream reassigned AppIDs: three Glances carry one id up to apps-v0.1.9-rc1
   // and a different one after. Those are separate identities to the watch and the
   // phone, so they stay separate entries — but say which is which.

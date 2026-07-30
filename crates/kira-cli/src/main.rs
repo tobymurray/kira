@@ -63,6 +63,15 @@ enum Command {
         /// Tag to assume when --src holds a single release.
         #[arg(long)]
         tag: Option<String>,
+        /// Directory of binaries Kira has already built, named by recipe.
+        ///
+        /// Versions with a build here are served from it; the rest fall back to
+        /// upstream's binary, and the catalogue records which is which.
+        #[arg(long)]
+        built: Option<PathBuf>,
+        /// Toolchain identity the store was built with. Required with --built.
+        #[arg(long)]
+        toolchain: Option<String>,
     },
 
     /// Serve the site locally over HTTP.
@@ -154,6 +163,27 @@ enum Command {
     },
 }
 
+/// Say so when a recipe input is missing, rather than minting a key that
+/// identifies nothing and caching an artifact under it.
+fn warn_if_unpinned(toolchain: &str, app_source: &str, sdk_rev: &str) {
+    let unpinned: Vec<&str> = [
+        ("toolchain", toolchain),
+        ("app-source", app_source),
+        ("sdk-rev", sdk_rev),
+    ]
+    .into_iter()
+    .filter(|(_, value)| *value == "unpinned")
+    .map(|(name, _)| name)
+    .collect();
+    if !unpinned.is_empty() {
+        eprintln!(
+            "warning: {} not given, so the recipe does not identify this build; \
+             do not cache the result",
+            unpinned.join(", ")
+        );
+    }
+}
+
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Build {
@@ -162,12 +192,16 @@ fn main() -> Result<()> {
             releases,
             repo,
             tag,
+            built,
+            toolchain,
         } => build::run(&build::Args {
             src,
             out,
             releases,
             repo,
             tag,
+            built,
+            toolchain,
         }),
         Command::BuildApp {
             app,
@@ -180,24 +214,7 @@ fn main() -> Result<()> {
             app_source,
             sdk_rev,
         } => {
-            let unpinned: Vec<&str> = [
-                ("toolchain", toolchain.as_str()),
-                ("app-source", app_source.as_str()),
-                ("sdk-rev", sdk_rev.as_str()),
-            ]
-            .into_iter()
-            .filter(|(_, value)| *value == "unpinned")
-            .map(|(name, _)| name)
-            .collect();
-            if !unpinned.is_empty() {
-                // Better to say so than to mint a recipe key that describes
-                // nothing and then cache an artifact under it.
-                eprintln!(
-                    "warning: {} not given, so the recipe does not identify this build; \
-                     do not cache the result",
-                    unpinned.join(", ")
-                );
-            }
+            warn_if_unpinned(&toolchain, &app_source, &sdk_rev);
             let jobs = jobs.unwrap_or_else(|| {
                 std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
             });
