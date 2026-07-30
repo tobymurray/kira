@@ -67,7 +67,11 @@ jobs:
             --src apps --out site --releases releases.json --repo UNAWatch/una-sdk
 
           test -s site/data/catalog.json
-          jq -e '.schema == 2 and (.releases | length) == 2' site/data/catalog.json > /dev/null
+          # Deliberately hardcoded: a schema bump should require updating this.
+          jq -e '.schema == 3 and (.releases | length) == 2' site/data/catalog.json > /dev/null
+          # Provenance must actually be populated, not just declared in the types.
+          jq -e '[.apps[].versions[] | select(.origin == null)] | length == 0' \
+            site/data/catalog.json > /dev/null
           jq -e '[.apps[] | select((.versions | length) > 1)] | length > 0' \
             site/data/catalog.json > /dev/null
           echo "$(jq '.apps | length' site/data/catalog.json) apps with history"
