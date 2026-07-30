@@ -142,8 +142,11 @@ async function idbGet(key) {
 async function loadCatalog() {
   const res = await fetch(`${DATA_BASE}/catalog.json`, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`catalog.json: HTTP ${res.status}`);
+  // Parsing is left to the browser's own JSON parser and handed over as an
+  // object: linking a second JSON parser into the WebAssembly module cost about
+  // 16 kB gzipped for no benefit.
   // The store validates the schema and throws if it is not the expected one.
-  state.store = new Store(await res.text());
+  state.store = new Store(await res.json());
 
   const when = new Date(state.store.generated).toLocaleDateString();
   el('catalogue-meta').textContent =

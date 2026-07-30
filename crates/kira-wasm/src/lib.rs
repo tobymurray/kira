@@ -188,13 +188,17 @@ pub struct Store {
 
 #[wasm_bindgen]
 impl Store {
-    /// Parse a `catalog.json`.
+    /// Take a parsed `catalog.json`.
+    ///
+    /// The caller passes the result of `JSON.parse` rather than a string: the
+    /// browser already has a JSON parser, and linking a second one in here cost
+    /// about 16 kB gzipped.
     ///
     /// # Errors
-    /// If the JSON is malformed, or its schema is not the one this build expects.
+    /// If the value does not match the schema this build expects.
     #[wasm_bindgen(constructor)]
-    pub fn new(json: &str) -> Result<Store, JsError> {
-        let catalog: Catalog = serde_json::from_str(json).map_err(js_err)?;
+    pub fn new(catalog: JsValue) -> Result<Store, JsError> {
+        let catalog: Catalog = serde_wasm_bindgen::from_value(catalog).map_err(js_err)?;
         if catalog.schema != catalog::SCHEMA {
             return Err(JsError::new(&format!(
                 "unsupported catalogue schema {} (expected {})",

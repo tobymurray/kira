@@ -162,6 +162,28 @@ It cross-checks the planner against hashes it recomputes itself, so it holds for
 whichever two releases it is given, with the known 1.2.0-to-1.3.0 split pinned as
 a regression check. CI runs it against the two newest releases.
 
+### Module size
+
+The published `.wasm` is ~58 kB gzipped. Two dependencies were worth removing,
+each measured rather than guessed:
+
+| Change | gzipped |
+| --- | --- |
+| baseline | 90.0 kB |
+| drop `serde_json` — the browser already has a JSON parser, so `Store::new` takes the result of `JSON.parse` | 73.9 kB |
+| drop `crc32fast` for a `const` table — it ships SIMD dispatch and multi-kilobyte slice-by-N tables that compress poorly | 58.2 kB |
+
+**`wasm-opt` is deliberately not used.** It shrinks the raw module by ~11%
+(152 kB → 135 kB) but makes it *less compressible*, so the gzipped transfer grows
+to ~60 kB. Raw size still matters for parse time and memory, so it is a real
+trade — just not the one that helps a visitor on a network. Measure gzipped
+output before adding it.
+
+What remains is mostly unavoidable: ~12 kB of float-to-decimal formatting pulled
+in by serde's error machinery, ~5 kB of allocator, and ~10 kB of generated
+deserializers. Removing an unused `sha2` dependency from `kira-core` changed
+nothing measurable, since LTO was already discarding it.
+
 ### Icons
 
 `make icons` derives the favicons, apple-touch icon and link-preview card from
@@ -189,8 +211,9 @@ unchanged at a `github.io/kira/` subpath or on a custom domain.
 - **Chromium desktop only for installing.** Mozilla has filed a negative
   standards position on the File System Access API and WebKit has not shipped it,
   so this gap is not expected to close.
-- **The WebAssembly module is ~90 kB gzipped**, which is more than the JavaScript
-  it replaced. The trade is one implementation instead of two.
+- **The WebAssembly module is ~58 kB gzipped** (152 kB raw), which is more than
+  the JavaScript it replaced. The trade is one implementation instead of two.
+  See [Module size](#module-size) before trying to shrink it further.
 - **No signing.** Integrity is SHA-256 (against this catalogue) plus the `.uapp`
   CRC-32. That protects against corruption and truncation, not against a
   malicious publisher. Kira republishes upstream binaries verbatim and claims no

@@ -386,6 +386,40 @@ impl Header {
     }
 }
 
+/// CRC-32/ISO-HDLC, the polynomial the packer uses.
+///
+/// Hand-rolled rather than pulled from a crate: this runs over a few hundred
+/// kilobytes at a time, so a table-driven byte-at-a-time loop is ample, and the
+/// browser build has no room for a dependency that ships SIMD dispatch it will
+/// never use.
+fn crc32(bytes: &[u8]) -> u32 {
+    const TABLE: [u32; 256] = {
+        let mut table = [0u32; 256];
+        let mut n = 0;
+        while n < 256 {
+            let mut c = n as u32;
+            let mut k = 0;
+            while k < 8 {
+                c = if c & 1 != 0 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
+                k += 1;
+            }
+            table[n] = c;
+            n += 1;
+        }
+        table
+    };
+
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in bytes {
+        crc = TABLE[((crc ^ u32::from(byte)) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
 /// Result of checking the CRC-32 footer.
 ///
 /// A file failing this check is dropped *silently* by the watch kernel — the app
@@ -503,7 +537,7 @@ impl<'a> Uapp<'a> {
         let stored = u32::from_le_bytes([footer[0], footer[1], footer[2], footer[3]]);
         CrcCheck {
             stored,
-            computed: crc32fast::hash(body),
+            computed: crc32(body),
         }
     }
 }
@@ -533,9 +567,17 @@ mod tests {
         {
             *byte = i as u8;
         }
-        let crc = crc32fast::hash(&bytes[..total - CRC_LEN]);
+        let crc = crc32(&bytes[..total - CRC_LEN]);
         bytes[total - CRC_LEN..].copy_from_slice(&crc.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn crc32_matches_the_reference_vector() {
+        // The check value for CRC-32/ISO-HDLC, which is what zlib.crc32 in the
+        // packer computes. A hand-rolled table is only trustworthy against this.
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(b""), 0);
     }
 
     #[test]

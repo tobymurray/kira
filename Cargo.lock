@@ -422,7 +422,6 @@ name = "kira-core"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
- "crc32fast",
  "serde",
  "serde_json",
  "sha2",
@@ -436,7 +435,6 @@ dependencies = [
  "kira-core",
  "serde",
  "serde-wasm-bindgen",
- "serde_json",
  "wasm-bindgen",
 ]
 
