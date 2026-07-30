@@ -79,5 +79,7 @@ jobs:
           set -euo pipefail
           new=$(jq -r '.[0].tag' releases.json)
           old=$(jq -r '.[1].tag' releases.json)
-          KIRA_FIXTURE_NEW="apps/$new" KIRA_FIXTURE_OLD="apps/$old" \
+          # Absolute: cargo runs a test binary with the crate directory as its
+          # working directory, not the workspace root.
+          KIRA_FIXTURE_NEW="$PWD/apps/$new" KIRA_FIXTURE_OLD="$PWD/apps/$old" \
             cargo test -p kira-core --test release_diff -- --nocapture

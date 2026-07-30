@@ -40,7 +40,16 @@ struct Fixture {
 }
 
 /// Walk `<root>/<Folder>/<one>.uapp`, mirroring the release zip layout.
+///
+/// Note that cargo runs a test binary with the crate directory as its working
+/// directory, so relative fixture paths are resolved against `crates/kira-core`
+/// rather than the workspace root. Absolute paths avoid the surprise.
 fn collect(root: &Path) -> Vec<Fixture> {
+    assert!(
+        root.is_dir(),
+        "fixture directory not found: {} (an absolute path is usually wanted)",
+        root.display()
+    );
     let mut found = Vec::new();
     let mut dirs: Vec<PathBuf> = fs::read_dir(root)
         .expect("fixture directory is readable")
