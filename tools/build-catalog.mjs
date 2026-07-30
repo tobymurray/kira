@@ -32,7 +32,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseUapp, decodeIcon, isBlankIcon, payloadOf, compareVersions } from '../src/uapp.js';
-import { SCHEMA, sortReleases } from '../src/catalog.js';
+import { SCHEMA, partitionByUniqueId, sortReleases } from '../src/catalog.js';
 import { encodePng } from '../src/png.js';
 
 const SHARED_MODULES = ['uapp.js', 'plan.js', 'catalog.js'];
@@ -89,8 +89,7 @@ async function detectLayout(src) {
 
 /** Parse every app in one release directory. */
 async function readRelease(tag, dir) {
-  const apps = [];
-  const seen = new Map();
+  const parsed = [];
 
   for (const { folder, file, path } of await discoverApps(dir)) {
     const bytes = new Uint8Array(await readFile(path));
@@ -104,20 +103,25 @@ async function readRelease(tag, dir) {
           `computed 0x${app.crc.computed?.toString(16)}) — refusing to publish`,
       );
     }
-    // Within one release an AppID must be unique; across releases it repeats by
-    // design, which is how versions are grouped.
-    if (seen.has(app.appId)) {
-      throw new Error(
-        `${tag}: duplicate AppID ${app.appId} in ${folder} and ${seen.get(app.appId)}`,
-      );
-    }
-    seen.set(app.appId, folder);
-
-    apps.push({ tag, folder, file, bytes, app });
+    parsed.push({ tag, folder, file, bytes, app });
   }
 
-  if (apps.length === 0) throw new Error(`${tag}: no <Folder>/*.uapp found under ${dir}`);
-  return apps;
+  // Within one release an AppID must be unique; across releases it repeats by
+  // design, which is how versions are grouped. Older releases do contain
+  // collisions — apps-v0.1.9-rc3 ships GlanceStrain and GlanceActivity under
+  // the same ID — and since AppID is the identity Kira installs against, a
+  // colliding binary cannot be attributed to either app without guessing.
+  // Drop every side of a collision and say so, rather than guessing or letting
+  // one bad historical release sink the whole catalogue.
+  const { unique, collisions } = partitionByUniqueId(
+    parsed,
+    (e) => e.app.appId,
+    (e) => e.folder,
+  );
+  return {
+    apps: unique,
+    dropped: collisions.map((c) => `${c.id} claimed by ${c.labels.join(' and ')}`),
+  };
 }
 
 async function main() {
@@ -157,9 +161,21 @@ async function main() {
   const releases = [];
   let totalBytes = 0;
 
+  const skipped = [];
+
   for (const release of ordered) {
-    const entries = await readRelease(release.tag, release.dir);
-    console.log(`${release.tag}: ${entries.length} apps`);
+    const { apps: entries, dropped } = await readRelease(release.tag, release.dir);
+    for (const collision of dropped) {
+      console.warn(`  ! ${release.tag}: dropped AppID collision — ${collision}`);
+    }
+    console.log(
+      `${release.tag}: ${entries.length} apps` +
+        (dropped.length ? ` (${dropped.length} dropped)` : ''),
+    );
+    if (entries.length === 0) {
+      skipped.push(release.tag);
+      continue;
+    }
 
     for (const { tag, folder, file, bytes, app } of entries) {
       const download = ['apps', tag, folder, file].join('/');
@@ -252,6 +268,8 @@ async function main() {
   };
   await writeFile(join(out, 'catalog.json'), `${JSON.stringify(catalog, null, 2)}\n`);
 
+  if (releases.length === 0) throw new Error('no usable releases: nothing to publish');
+
   const versionCount = catalog.apps.reduce((n, a) => n + a.versions.length, 0);
   const restamps = catalog.apps.reduce(
     (n, a) => n + a.versions.filter((v) => v.changed === false).length,
@@ -259,6 +277,7 @@ async function main() {
   );
   console.log(
     `\n${catalog.apps.length} apps · ${versionCount} versions across ${releases.length} release(s)` +
+      (skipped.length ? `\nskipped (no usable apps): ${skipped.join(', ')}` : '') +
       `\n${restamps} version(s) are re-stamps with identical code` +
       `\n${(totalBytes / 1024 / 1024).toFixed(2)} MiB of binaries -> ${out}` +
       `\nshared modules -> ${join(site, 'lib')} (${SHARED_MODULES.join(', ')})`,

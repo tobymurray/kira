@@ -6,6 +6,7 @@ import {
   describeHistory,
   findVersion,
   latestOf,
+  partitionByUniqueId,
   releaseFor,
   resolveTargets,
   sortReleases,
@@ -178,4 +179,30 @@ test('release metadata is looked up by tag', () => {
   assert.equal(releaseFor(c, 'apps-v1.3.0').notes, 'hello');
   assert.equal(releaseFor(c, 'apps-v9.9.9'), undefined);
   assert.equal(releaseFor({ apps: [] }, 'apps-v1.3.0'), undefined);
+});
+
+test('a duplicated AppID within one release drops every side of the collision', () => {
+  // apps-v0.1.9-rc3 really does ship GlanceStrain and GlanceActivity under
+  // A1E84D2F7A9C5B60. Neither can be attributed, and guessing would install the
+  // wrong binary.
+  const entries = [
+    { id: 'AAAA', folder: 'Alarm' },
+    { id: 'BBBB', folder: 'GlanceActivity' },
+    { id: 'BBBB', folder: 'GlanceStrain' },
+    { id: 'CCCC', folder: 'Running' },
+  ];
+  const { unique, collisions } = partitionByUniqueId(
+    entries,
+    (e) => e.id,
+    (e) => e.folder,
+  );
+  assert.deepEqual(unique.map((e) => e.folder), ['Alarm', 'Running']);
+  assert.deepEqual(collisions, [{ id: 'BBBB', labels: ['GlanceActivity', 'GlanceStrain'] }]);
+});
+
+test('a release with no collisions passes everything through in order', () => {
+  const entries = [{ id: 'A', folder: 'One' }, { id: 'B', folder: 'Two' }];
+  const { unique, collisions } = partitionByUniqueId(entries, (e) => e.id, (e) => e.folder);
+  assert.deepEqual(unique.map((e) => e.folder), ['One', 'Two']);
+  assert.deepEqual(collisions, []);
 });

@@ -87,6 +87,37 @@ export function describeHistory(app) {
   return `code changed in ${latest.version}${size}`;
 }
 
+/**
+ * Split entries into those with a unique AppID and a description of any
+ * collisions.
+ *
+ * AppID is the identity everything else keys on, so two apps in one release
+ * claiming the same ID makes both unattributable — apps-v0.1.9-rc3 really does
+ * ship GlanceStrain and GlanceActivity under A1E84D2F7A9C5B60. Every side of a
+ * collision is dropped rather than guessed at, because the wrong guess would
+ * install the wrong binary.
+ *
+ * @param {Array} entries anything with an id and a label
+ * @param {(entry: any) => string} idOf
+ * @param {(entry: any) => string} labelOf
+ */
+export function partitionByUniqueId(entries, idOf, labelOf) {
+  const byId = new Map();
+  for (const entry of entries) {
+    const id = idOf(entry);
+    if (!byId.has(id)) byId.set(id, []);
+    byId.get(id).push(entry);
+  }
+
+  const unique = [];
+  const collisions = [];
+  for (const [id, group] of byId) {
+    if (group.length === 1) unique.push(group[0]);
+    else collisions.push({ id, labels: group.map(labelOf) });
+  }
+  return { unique, collisions };
+}
+
 /** Release metadata for a tag, if the build captured any. */
 export function releaseFor(catalog, tag) {
   return (catalog.releases ?? []).find((r) => r.tag === tag);
