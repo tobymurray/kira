@@ -1,0 +1,22 @@
+[package]
+name = "kira-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bitflags = "2.13.1"
+crc32fast = "1.5.0"
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.0"
+thiserror = "2.0.19"
+
+[dev-dependencies]
+serde_json = "1.0.151"
+sha2 = "0.11.0"

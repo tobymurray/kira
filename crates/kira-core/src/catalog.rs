@@ -1,0 +1,600 @@
+//! The published catalogue, and selection of a version per app.
+//!
+//! Schema 1 held one version per app. Schema 2 holds every release Kira knows
+//! about, grouped per app, newest first, because upstream publishes no per-app
+//! changelog and no way to fetch a specific older build.
+//!
+//! [`resolve_targets`] flattens a catalogue down to one chosen version per app —
+//! the shape [`crate::plan`] consumes — so version selection lives here alone.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+pub use crate::uapp::AppType;
+use crate::uapp::{AppId, Version};
+
+/// Schema version emitted and expected by this crate.
+pub const SCHEMA: u32 = 2;
+
+/// A complete catalogue, as published to `data/catalog.json`.
+///
+/// Field order is the serialised order; it matches schema 2 exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Catalog {
+    /// Always [`SCHEMA`].
+    pub schema: u32,
+    /// RFC 3339 build timestamp.
+    pub generated: String,
+    /// Where the binaries came from.
+    pub source: Source,
+    /// Releases included, newest first.
+    pub releases: Vec<Release>,
+    /// Apps, sorted by display name.
+    pub apps: Vec<App>,
+}
+
+/// Provenance of the published binaries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Source {
+    /// Upstream repository, e.g. `UNAWatch/una-sdk`.
+    pub repo: Option<String>,
+}
+
+/// One upstream release.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Release {
+    /// Git tag, e.g. `apps-v1.3.0`.
+    pub tag: String,
+    /// RFC 3339 publish time, if known.
+    pub published_at: Option<String>,
+    /// Link to the upstream release.
+    pub url: Option<String>,
+    /// Whether upstream marked it a pre-release.
+    pub is_prerelease: bool,
+    /// The release body, verbatim.
+    ///
+    /// Third-party Markdown. Render as text, never as HTML.
+    pub notes: Option<String>,
+    /// How many apps this release contributed.
+    pub app_count: usize,
+}
+
+/// An app, with every version of it that Kira publishes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct App {
+    /// Stable identity. Two entries may share a display name while differing
+    /// here: upstream reassigned the IDs of three Glances after `apps-v0.1.9-rc1`.
+    pub app_id: AppId,
+    /// Display name from the newest build.
+    pub name: String,
+    /// What kind of app this is.
+    #[serde(rename = "type")]
+    pub app_type: AppType,
+    /// On-device folder under `Apps\`, from the newest build.
+    pub folder: String,
+    /// Versions, newest first.
+    pub versions: Vec<VersionEntry>,
+    /// Path to the 60x60 icon, absent when no version carries pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Path to the 30x30 icon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_small: Option<String>,
+}
+
+/// One published build of an app.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionEntry {
+    /// Version as stamped from the release tag.
+    pub version: Version,
+    /// The same value packed, retained for schema compatibility.
+    pub version_packed: u32,
+    /// Release this build came from.
+    pub tag: String,
+    /// On-device folder for this build.
+    pub folder: String,
+    /// File name, which encodes the version.
+    pub file: String,
+    /// `LibC` ABI this build was linked against.
+    pub libc_version: Version,
+    /// Whether it starts at boot.
+    pub autostart: bool,
+    /// File length in bytes.
+    pub size: usize,
+    /// Hash of the whole file.
+    pub sha256: String,
+    /// Hash of the code alone, excluding the version stamp and CRC footer.
+    pub payload_sha256: String,
+    /// Path under `data/` to download this build.
+    pub download: String,
+    /// Whether the code differs from the next older version. `None` when there
+    /// is no older version published here, which is unknown rather than false.
+    pub changed: Option<bool>,
+    /// Size difference against the next older version.
+    pub delta_bytes: Option<i64>,
+}
+
+/// One version of one app, chosen for installation or download.
+///
+/// Deliberately flat: the planner should not have to know that versions exist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Target {
+    /// Stable identity.
+    pub app_id: AppId,
+    /// Display name.
+    pub name: String,
+    /// What kind of app this is.
+    #[serde(rename = "type")]
+    pub app_type: AppType,
+    /// Path to the 60x60 icon, if any.
+    pub icon: Option<String>,
+    /// Path to the 30x30 icon, if any.
+    pub icon_small: Option<String>,
+    /// On-device folder under `Apps\`.
+    pub folder: String,
+    /// File name to write.
+    pub file: String,
+    /// Chosen version.
+    pub version: Version,
+    /// `LibC` ABI this build needs.
+    pub libc_version: Version,
+    /// Whether it starts at boot.
+    pub autostart: bool,
+    /// File length in bytes.
+    pub size: usize,
+    /// Hash of the whole file, checked before writing.
+    pub sha256: String,
+    /// Hash of the code alone.
+    pub payload_sha256: String,
+    /// Path under `data/` to fetch it from.
+    pub download: String,
+    /// Release it came from.
+    pub tag: String,
+    /// Whether this version changed the code.
+    pub changed: Option<bool>,
+    /// Whether this is the newest published version.
+    pub is_latest: bool,
+}
+
+impl App {
+    /// The newest version. Version lists are stored newest first.
+    ///
+    /// # Panics
+    /// If the app has no versions, which the builder never emits.
+    #[must_use]
+    pub fn latest(&self) -> &VersionEntry {
+        self.versions
+            .first()
+            .expect("catalogue apps always have at least one version")
+    }
+
+    /// Look up a specific version.
+    #[must_use]
+    pub fn find(&self, version: Version) -> Option<&VersionEntry> {
+        self.versions.iter().find(|v| v.version == version)
+    }
+
+    /// A one-line history, derived from bytes rather than prose.
+    ///
+    /// `changed` is computed at build time by comparing payload hashes, so this
+    /// says whether the *code* moved, not whether the release tag did.
+    #[must_use]
+    pub fn describe_history(&self) -> String {
+        let latest = self.latest();
+        if self.versions.len() == 1 {
+            return format!("only {} published", latest.version);
+        }
+
+        if latest.changed == Some(false) {
+            // Walk back to the last version that actually changed the app.
+            let last_real = self.versions.iter().find(|v| v.changed != Some(false));
+            return match last_real {
+                Some(v) if v.version != latest.version => {
+                    format!("code unchanged since {}", v.version)
+                }
+                _ => format!("code unchanged across {} releases", self.versions.len()),
+            };
+        }
+
+        match latest.delta_bytes {
+            Some(delta) if delta != 0 => {
+                format!("code changed in {} ({delta:+} B)", latest.version)
+            }
+            _ => format!("code changed in {}", latest.version),
+        }
+    }
+}
+
+impl Catalog {
+    /// Release metadata for a tag.
+    #[must_use]
+    pub fn release(&self, tag: &str) -> Option<&Release> {
+        self.releases.iter().find(|r| r.tag == tag)
+    }
+
+    /// Display names shared by more than one [`AppId`], so a UI can say which is
+    /// which instead of showing identical-looking entries.
+    #[must_use]
+    pub fn ambiguous_names(&self) -> Vec<String> {
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for app in &self.apps {
+            *counts.entry(app.name.as_str()).or_default() += 1;
+        }
+        counts
+            .into_iter()
+            .filter(|&(_, n)| n > 1)
+            .map(|(name, _)| name.to_owned())
+            .collect()
+    }
+}
+
+/// Choose one version per app and flatten to the planner's shape.
+///
+/// `pinned` maps an app to a specific version; anything unpinned, or pinned to a
+/// version that is no longer published, uses the newest available rather than
+/// becoming unresolvable.
+#[must_use]
+pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, Version>) -> Vec<Target> {
+    catalog
+        .apps
+        .iter()
+        .map(|app| {
+            let chosen = pinned
+                .get(&app.app_id)
+                .and_then(|&v| app.find(v))
+                .unwrap_or_else(|| app.latest());
+
+            Target {
+                app_id: app.app_id,
+                name: app.name.clone(),
+                app_type: app.app_type,
+                icon: app.icon.clone(),
+                icon_small: app.icon_small.clone(),
+                folder: chosen.folder.clone(),
+                file: chosen.file.clone(),
+                version: chosen.version,
+                libc_version: chosen.libc_version,
+                autostart: chosen.autostart,
+                size: chosen.size,
+                sha256: chosen.sha256.clone(),
+                payload_sha256: chosen.payload_sha256.clone(),
+                download: chosen.download.clone(),
+                tag: chosen.tag.clone(),
+                changed: chosen.changed,
+                is_latest: chosen.version == app.latest().version,
+            }
+        })
+        .collect()
+}
+
+/// The version embedded in a release tag, e.g. `apps-v1.3.0` or `apps-v0.1.9-rc3`.
+///
+/// Parses from the first digit, so any prefix convention works.
+#[must_use]
+pub fn version_from_tag(tag: &str) -> Option<Version> {
+    let start = tag.find(|c: char| c.is_ascii_digit())?;
+    tag[start..].parse().ok()
+}
+
+/// Anything that can be ordered as a release.
+pub trait ReleaseOrder {
+    /// The git tag.
+    fn tag(&self) -> &str;
+    /// Publish time, if known.
+    fn published_at(&self) -> Option<&str>;
+}
+
+impl ReleaseOrder for Release {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn published_at(&self) -> Option<&str> {
+        self.published_at.as_deref()
+    }
+}
+
+/// Sort releases newest first.
+///
+/// Prefers the version in the tag, since that is what the binaries are stamped
+/// with, and falls back to publish date. The fallback is load-bearing: upstream
+/// publishes `apps-v0.1.9-rc1`, `-rc2` and `-rc3` as full releases and all three
+/// parse to `0.1.9`.
+pub fn sort_newest_first<T: ReleaseOrder>(releases: &mut [T]) {
+    releases.sort_by(|a, b| {
+        let av = version_from_tag(a.tag());
+        let bv = version_from_tag(b.tag());
+        bv.cmp(&av).then_with(|| {
+            b.published_at()
+                .unwrap_or_default()
+                .cmp(a.published_at().unwrap_or_default())
+        })
+    });
+}
+
+/// Split entries into those with a unique id, and a description of collisions.
+///
+/// [`AppId`] is the identity everything keys on, so two apps in one release
+/// claiming the same id makes both unattributable — `apps-v0.1.9-rc3` really does
+/// ship `GlanceStrain` and `GlanceActivity` under `A1E84D2F7A9C5B60`. Every side
+/// of a collision is dropped rather than guessed at, because the wrong guess
+/// installs the wrong binary.
+pub fn partition_unique<T, I, L>(entries: Vec<T>, id_of: I, label_of: L) -> Partitioned<T>
+where
+    I: Fn(&T) -> AppId,
+    L: Fn(&T) -> String,
+{
+    let mut groups: BTreeMap<AppId, Vec<T>> = BTreeMap::new();
+    for entry in entries {
+        groups.entry(id_of(&entry)).or_default().push(entry);
+    }
+
+    let mut unique = Vec::new();
+    let mut collisions = Vec::new();
+    for (id, group) in groups {
+        // TryFrom gives the single-element case without an unwrap, handing the
+        // Vec back untouched when there is more than one.
+        match <[T; 1]>::try_from(group) {
+            Ok([only]) => unique.push(only),
+            Err(group) => collisions.push(Collision {
+                app_id: id,
+                labels: group.iter().map(&label_of).collect(),
+            }),
+        }
+    }
+    Partitioned { unique, collisions }
+}
+
+/// Output of [`partition_unique`].
+#[derive(Debug)]
+pub struct Partitioned<T> {
+    /// Entries whose id appeared exactly once.
+    pub unique: Vec<T>,
+    /// Ids claimed more than once, with the labels that claimed them.
+    pub collisions: Vec<Collision>,
+}
+
+/// Two or more entries claiming one [`AppId`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Collision {
+    /// The contested identity.
+    pub app_id: AppId,
+    /// Labels of everything that claimed it, e.g. folder names.
+    pub labels: Vec<String>,
+}
+
+impl std::fmt::Display for Collision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} claimed by {}",
+            self.app_id,
+            self.labels.join(" and ")
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn version_entry(v: &str) -> VersionEntry {
+        let version: Version = v.parse().unwrap();
+        VersionEntry {
+            version,
+            version_packed: version.packed(),
+            tag: format!("apps-v{v}"),
+            folder: "GlanceHR".into(),
+            file: format!("Live_HR_{v}.uapp"),
+            libc_version: Version::new(0, 0, 3),
+            autostart: false,
+            size: 22980,
+            sha256: format!("sha-{v}"),
+            payload_sha256: format!("payload-{v}"),
+            download: format!("apps/apps-v{v}/GlanceHR/Live_HR_{v}.uapp"),
+            changed: Some(true),
+            delta_bytes: Some(0),
+        }
+    }
+
+    fn app(versions: Vec<VersionEntry>) -> App {
+        App {
+            app_id: AppId::new(0xA135_8F7C_2E9D_4BA6),
+            name: "Live HR".into(),
+            app_type: AppType::Glance,
+            folder: "GlanceHR".into(),
+            versions,
+            icon: None,
+            icon_small: None,
+        }
+    }
+
+    fn catalog(apps: Vec<App>) -> Catalog {
+        Catalog {
+            schema: SCHEMA,
+            generated: "2026-07-30T00:00:00.000Z".into(),
+            source: Source { repo: None },
+            releases: Vec::new(),
+            apps,
+        }
+    }
+
+    #[test]
+    fn latest_is_the_head_of_the_list() {
+        let a = app(vec![version_entry("1.3.0"), version_entry("1.2.0")]);
+        assert_eq!(a.latest().version, Version::new(1, 3, 0));
+        assert!(a.find(Version::new(1, 2, 0)).is_some());
+        assert!(a.find(Version::new(9, 9, 9)).is_none());
+    }
+
+    #[test]
+    fn unpinned_apps_resolve_to_the_newest_version() {
+        let c = catalog(vec![app(vec![
+            version_entry("1.3.0"),
+            version_entry("1.2.0"),
+        ])]);
+        let targets = resolve_targets(&c, &BTreeMap::new());
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].version, Version::new(1, 3, 0));
+        assert!(targets[0].is_latest);
+    }
+
+    #[test]
+    fn a_pin_selects_an_older_version() {
+        let c = catalog(vec![app(vec![
+            version_entry("1.3.0"),
+            version_entry("1.2.0"),
+        ])]);
+        let pinned = BTreeMap::from([(c.apps[0].app_id, Version::new(1, 2, 0))]);
+        let targets = resolve_targets(&c, &pinned);
+        assert_eq!(targets[0].version, Version::new(1, 2, 0));
+        assert!(!targets[0].is_latest);
+        assert_eq!(targets[0].file, "Live_HR_1.2.0.uapp");
+    }
+
+    #[test]
+    fn a_pin_to_an_unpublished_version_falls_back_to_newest() {
+        let c = catalog(vec![app(vec![version_entry("1.3.0")])]);
+        let pinned = BTreeMap::from([(c.apps[0].app_id, Version::new(0, 9, 0))]);
+        assert_eq!(
+            resolve_targets(&c, &pinned)[0].version,
+            Version::new(1, 3, 0)
+        );
+    }
+
+    #[test]
+    fn history_reports_which_release_changed_the_code() {
+        let mut newest = version_entry("1.3.0");
+        newest.delta_bytes = Some(17288);
+        let mut oldest = version_entry("1.2.0");
+        oldest.changed = None;
+        oldest.delta_bytes = None;
+        assert_eq!(
+            app(vec![newest, oldest]).describe_history(),
+            "code changed in 1.3.0 (+17288 B)"
+        );
+    }
+
+    #[test]
+    fn history_reports_the_last_release_that_changed_an_unchanged_app() {
+        let mut newest = version_entry("1.3.0");
+        newest.changed = Some(false);
+        let middle = version_entry("1.2.0");
+        let mut oldest = version_entry("1.1.2");
+        oldest.changed = None;
+        assert_eq!(
+            app(vec![newest, middle, oldest]).describe_history(),
+            "code unchanged since 1.2.0"
+        );
+    }
+
+    #[test]
+    fn history_handles_an_app_that_never_changed() {
+        let versions = ["1.3.0", "1.2.0", "1.1.2"]
+            .iter()
+            .map(|v| {
+                let mut entry = version_entry(v);
+                entry.changed = Some(false);
+                entry
+            })
+            .collect();
+        assert_eq!(
+            app(versions).describe_history(),
+            "code unchanged across 3 releases"
+        );
+    }
+
+    #[test]
+    fn history_handles_a_single_published_version() {
+        let mut only = version_entry("1.3.0");
+        only.changed = None;
+        assert_eq!(app(vec![only]).describe_history(), "only 1.3.0 published");
+    }
+
+    #[test]
+    fn releases_sort_newest_first_by_tag_version() {
+        let mut releases = ["apps-v1.1.2", "apps-v1.3.0", "apps-v1.2.0"]
+            .iter()
+            .map(|tag| Release {
+                tag: (*tag).to_owned(),
+                published_at: Some("2026-06-09T00:00:00Z".into()),
+                url: None,
+                is_prerelease: false,
+                notes: None,
+                app_count: 13,
+            })
+            .collect::<Vec<_>>();
+        sort_newest_first(&mut releases);
+        let tags: Vec<_> = releases.iter().map(|r| r.tag.as_str()).collect();
+        assert_eq!(tags, ["apps-v1.3.0", "apps-v1.2.0", "apps-v1.1.2"]);
+    }
+
+    #[test]
+    fn tags_parsing_to_the_same_version_fall_back_to_date() {
+        // Upstream publishes all three of these as full releases.
+        let mut releases = [
+            ("apps-v0.1.9-rc1", "2026-05-19T00:00:00Z"),
+            ("apps-v0.1.9-rc3", "2026-06-02T12:00:00Z"),
+            ("apps-v0.1.9-rc2", "2026-06-02T09:00:00Z"),
+        ]
+        .iter()
+        .map(|(tag, when)| Release {
+            tag: (*tag).to_owned(),
+            published_at: Some((*when).to_owned()),
+            url: None,
+            is_prerelease: false,
+            notes: None,
+            app_count: 13,
+        })
+        .collect::<Vec<_>>();
+        sort_newest_first(&mut releases);
+        let tags: Vec<_> = releases.iter().map(|r| r.tag.as_str()).collect();
+        assert_eq!(
+            tags,
+            ["apps-v0.1.9-rc3", "apps-v0.1.9-rc2", "apps-v0.1.9-rc1"]
+        );
+    }
+
+    #[test]
+    fn version_is_read_from_any_tag_prefix() {
+        assert_eq!(version_from_tag("apps-v1.3.0"), Some(Version::new(1, 3, 0)));
+        assert_eq!(
+            version_from_tag("apps-v0.1.9-rc3"),
+            Some(Version::new(0, 1, 9))
+        );
+        assert_eq!(version_from_tag("nightly"), None);
+    }
+
+    #[test]
+    fn a_duplicated_id_drops_every_side_of_the_collision() {
+        let entries = vec![
+            (AppId::new(0xAAAA), "Alarm"),
+            (AppId::new(0xBBBB), "GlanceActivity"),
+            (AppId::new(0xBBBB), "GlanceStrain"),
+            (AppId::new(0xCCCC), "Running"),
+        ];
+        let result = partition_unique(entries, |e| e.0, |e| e.1.to_owned());
+        let kept: Vec<_> = result.unique.iter().map(|e| e.1).collect();
+        assert_eq!(kept, ["Alarm", "Running"]);
+        assert_eq!(result.collisions.len(), 1);
+        assert_eq!(
+            result.collisions[0].labels,
+            ["GlanceActivity", "GlanceStrain"]
+        );
+    }
+
+    #[test]
+    fn duplicate_display_names_are_reported() {
+        let mut second = app(vec![version_entry("0.1.9")]);
+        second.app_id = AppId::new(0xDEAD_BEEF);
+        let c = catalog(vec![app(vec![version_entry("1.3.0")]), second]);
+        assert_eq!(c.ambiguous_names(), ["Live HR"]);
+    }
+}

@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+repository = "https://github.com/tobymurray/kira"
+authors = ["Toby Murray"]
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Casts are pervasive when parsing a packed binary header; each is bounded and
+# checked at the point of use.
+cast_possible_truncation = "allow"
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# The .wasm ships to every visitor, so it is built for size rather than speed.
+# `panic = "abort"` is safe here: the bindings return Result and never unwind
+# into JavaScript.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+panic = "abort"

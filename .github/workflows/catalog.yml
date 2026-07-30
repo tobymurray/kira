@@ -40,12 +40,35 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      # rust-toolchain.toml pins the compiler and pulls in the wasm target.
+      - uses: actions/cache@v4
         with:
-          node-version: '22'
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
 
       - name: Run tests
-        run: npm test
+        run: cargo test --workspace
+
+      - name: Build the browser module
+        run: |
+          set -euo pipefail
+          # wasm-bindgen-cli must match the wasm-bindgen crate exactly, so the
+          # version comes from the lockfile rather than being pinned by hand.
+          want=$(cargo metadata --format-version 1 \
+            | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version' | head -n 1)
+          have=$(wasm-bindgen --version 2>/dev/null | awk '{print $2}' || true)
+          if [ "$want" != "$have" ]; then
+            echo "installing wasm-bindgen-cli $want (had '${have:-none}')"
+            cargo install wasm-bindgen-cli --version "$want" --locked
+          fi
+          make wasm
+          test -s site/lib/kira_wasm_bg.wasm
 
       - name: Fetch release list and notes
         id: fetch
@@ -109,7 +132,7 @@ jobs:
 
       - name: Build the catalogue
         run: |
-          node tools/build-catalog.mjs \
+          cargo run --release -p kira-cli -- build \
             --src apps \
             --out site \
             --releases releases.json \

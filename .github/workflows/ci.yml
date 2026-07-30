@@ -8,18 +8,40 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+
+      # rust-toolchain.toml pins the compiler and pulls in clippy, rustfmt and
+      # the wasm target, so there is nothing to configure here.
+      - name: Show toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+
+      - uses: actions/cache@v4
         with:
-          node-version: '22'
-      - run: npm test
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The browser crate only compiles for wasm, so it needs its own pass.
+      - run: cargo clippy -p kira-wasm --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo test --workspace
 
       # Prove the catalogue builds from real releases, not just that units pass.
-      # Two releases, so the multi-release grouping and the changed/re-stamp
+      # Two releases, so multi-release grouping and the changed/re-stamp
       # annotation are both exercised rather than just the single-release path.
       - name: Build against the two newest upstream releases
         env:
@@ -41,29 +63,21 @@ jobs:
             unzip -q "$(find "zips/$tag" -name '*.zip' | head -n 1)" -d "apps/$tag"
           done
 
-          node tools/build-catalog.mjs --src apps --out site \
-            --releases releases.json --repo UNAWatch/una-sdk
+          cargo run --release -p kira-cli -- build \
+            --src apps --out site --releases releases.json --repo UNAWatch/una-sdk
 
           test -s site/data/catalog.json
-          test -s site/lib/catalog.js
-          # The grouping must actually have produced multiple versions per app.
-          node -e '
-            const c = require("./site/data/catalog.json");
-            if (c.schema !== 2) throw new Error("expected schema 2, got " + c.schema);
-            if (c.releases.length !== 2) throw new Error("expected 2 releases");
-            const multi = c.apps.filter((a) => a.versions.length > 1).length;
-            if (multi === 0) throw new Error("no app has more than one version");
-            console.log(`${c.apps.length} apps, ${multi} with history`);
-          '
+          jq -e '.schema == 2 and (.releases | length) == 2' site/data/catalog.json > /dev/null
+          jq -e '[.apps[] | select((.versions | length) > 1)] | length > 0' \
+            site/data/catalog.json > /dev/null
+          echo "$(jq '.apps | length' site/data/catalog.json) apps with history"
 
       # The fixture-backed planner test needs two unzipped releases, which the
       # step above just produced.
-      - name: Planner check across the two releases
-        env:
-          KIRA_FIXTURE_NEW: apps
+      - name: Planner check across those two releases
         run: |
           set -euo pipefail
           new=$(jq -r '.[0].tag' releases.json)
           old=$(jq -r '.[1].tag' releases.json)
           KIRA_FIXTURE_NEW="apps/$new" KIRA_FIXTURE_OLD="apps/$old" \
-            node --test test/release-diff.test.mjs
+            cargo test -p kira-core --test release_diff -- --nocapture

@@ -1,0 +1,6 @@
+# Pinned so every machine and CI run builds with the same compiler, the way
+# .tool-versions pinned Node before the conversion.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
