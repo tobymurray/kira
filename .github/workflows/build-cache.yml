@@ -169,6 +169,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Written unconditionally: a fully cached run builds nothing, and an
+          # empty upload would leave the publish job with no artifact to fetch.
+          {
+            echo "sdk_ref=${{ inputs.sdk_ref || 'apps-v1.3.0' }}"
+            echo "version=${{ inputs.version || '1.3.0' }}"
+            echo "toolchain=$TOOLCHAIN"
+            echo "built=$(ls artifacts/*.uapp 2>/dev/null | wc -l | tr -d ' ')"
+          } > artifacts/MANIFEST.txt
           {
             echo "### Build cache"
             echo
@@ -183,8 +191,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: built-uapps
-          path: artifacts/*.uapp
-          if-no-files-found: warn
+          # The whole directory, so MANIFEST.txt guarantees the artifact exists
+          # even when nothing needed building.
+          path: artifacts/
+          if-no-files-found: error
 
   publish:
     name: Upload to the cache release
@@ -205,13 +215,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          cat artifacts/MANIFEST.txt
+
+          shopt -s nullglob
+          built=(artifacts/*.uapp)
+          if [ ${#built[@]} -eq 0 ]; then
+            echo "nothing new to upload; the cache already had everything"
+            exit 0
+          fi
+
           # One long-lived release acting as a content-addressed store. Artifacts
           # are named by recipe, so uploads never need to replace anything.
-          gh release view "$CACHE_TAG" >/dev/null 2>&1 || \
+          if ! gh release view "$CACHE_TAG" >/dev/null 2>&1; then
             gh release create "$CACHE_TAG" \
               --title "Build cache" \
               --notes "Binaries Kira built from source, named by recipe key. Not a user-facing release." \
               --latest=false
-          gh release upload "$CACHE_TAG" artifacts/*.uapp --clobber
-          gh release view "$CACHE_TAG" --json assets --jq '.assets | length' \
-            | xargs -I{} echo "cache now holds {} artifact(s)"
+          fi
+          gh release upload "$CACHE_TAG" "${built[@]}" --clobber
+          echo "cache now holds $(gh release view "$CACHE_TAG" --json assets --jq '.assets | length') artifact(s)"
