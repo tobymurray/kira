@@ -1,0 +1,213 @@
+name: Build cache
+
+# Builds app binaries from source and keeps them in a recipe-keyed cache, so the
+# catalogue can serve binaries Kira built rather than binaries it was handed.
+#
+# The toolchain container has no Rust, so `kira` is cross-compiled to a static
+# musl binary first and carried in. That also means the container job needs no
+# toolchain of its own beyond what the image already provides.
+#
+# Manual for now: `publish: true` creates and writes to the cache release, which
+# is a durable change to this repository, so it should be a deliberate act.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_ref:
+        description: 'SDK ref whose Examples/Apps to build'
+        required: true
+        default: 'apps-v1.3.0'
+      version:
+        description: 'Version to stamp into the binaries'
+        required: true
+        default: '1.3.0'
+      publish:
+        description: 'Upload the results to the cache release'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Pinned by digest: a re-pushed tag would silently change the output, and the
+  # digest is part of every recipe key.
+  TOOLCHAIN: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
+  CACHE_TAG: build-cache
+
+jobs:
+  tool:
+    name: Build the kira binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-musl-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-musl-${{ runner.os }}-
+
+      - name: Cross-compile statically
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          # Static, so it runs inside a container with any libc.
+          cargo build --release -p kira-cli --target x86_64-unknown-linux-musl
+          file target/x86_64-unknown-linux-musl/release/kira
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kira-bin
+          path: target/x86_64-unknown-linux-musl/release/kira
+          retention-days: 1
+
+  build:
+    name: Build apps from source
+    needs: tool
+    runs-on: ubuntu-latest
+    container: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
+    steps:
+      - name: Install build dependencies
+        run: |
+          find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -i 's#security\.ubuntu\.com/ubuntu#archive.ubuntu.com/ubuntu#g' {} + || true
+          apt-get update
+          apt-get install -y bash git python3-full python3-pip python-is-python3 cmake curl jq
+
+      - uses: actions/checkout@v5
+        with:
+          repository: UNAWatch/una-sdk
+          ref: ${{ inputs.sdk_ref }}
+          path: sdk
+
+      - name: Install packer requirements
+        run: python3 -m pip install --break-system-packages -r sdk/Utilities/Scripts/app_packer/requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kira-bin
+          path: /usr/local/bin
+
+      - name: Prepare the tool and the toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x /usr/local/bin/kira
+          kira --version
+          # The image ships these unexecutable.
+          for tool in make arm-none-eabi-gcc arm-none-eabi-g++ arm-none-eabi-objcopy; do
+            chmod +x "$(find /opt/st/stm32cubeide_* -type f -name "$tool" | head -n 1)" || true
+          done
+          {
+            find /opt/st/stm32cubeide_* -type f -name arm-none-eabi-objcopy | head -n 1 | xargs dirname
+            find /opt/st/stm32cubeide_* -type f -name make | head -n 1 | xargs dirname
+          } >> "$GITHUB_PATH"
+
+      - name: List what the cache already holds
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A missing release simply means an empty cache.
+          if gh release view "$CACHE_TAG" -R "$GITHUB_REPOSITORY" --json assets \
+               --jq '.assets[].name' > available.txt 2>/dev/null; then
+            echo "cache holds $(wc -l < available.txt) artifact(s)"
+          else
+            : > available.txt
+            echo "no cache release yet; treating the cache as empty"
+          fi
+
+      - name: Plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          kira cache-plan \
+            --sdk sdk \
+            --sdk-rev "${{ inputs.sdk_ref }}" \
+            --version "${{ inputs.version }}" \
+            --toolchain "$TOOLCHAIN" \
+            --available available.txt \
+            --out plan.json
+          jq -r '.[] | "  \(.action)  \(.folder)  \(.asset)"' plan.json
+
+      - name: Build what is missing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          count=$(jq '[.[] | select(.action == "build")] | length' plan.json)
+          echo "building $count app(s)"
+          jq -r '.[] | select(.action == "build") | "\(.folder)\t\(.asset)"' plan.json |
+          while IFS=$'\t' read -r folder asset; do
+            echo "::group::$folder"
+            # Kira verifies the result against the app's own CMakeLists and CRC,
+            # so a build that disagrees with its source fails here.
+            kira build-app \
+              --app "sdk/Examples/Apps/$folder" \
+              --sdk sdk \
+              --version "${{ inputs.version }}" \
+              --out "artifacts/$asset" \
+              --toolchain "$TOOLCHAIN" \
+              --sdk-rev "${{ inputs.sdk_ref }}" \
+              --app-source "sdk:${{ inputs.sdk_ref }}:Examples/Apps/$folder"
+            echo "::endgroup::"
+          done
+          ls -la artifacts
+
+      - name: Summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Build cache"
+            echo
+            echo "| app | asset | bytes |"
+            echo "| --- | --- | --- |"
+            for f in artifacts/*.uapp; do
+              [ -e "$f" ] || continue
+              echo "| $(basename "$f" | cut -d- -f1) | $(basename "$f") | $(stat -c%s "$f") |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: built-uapps
+          path: artifacts/*.uapp
+          if-no-files-found: warn
+
+  publish:
+    name: Upload to the cache release
+    needs: build
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: built-uapps
+          path: artifacts
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # One long-lived release acting as a content-addressed store. Artifacts
+          # are named by recipe, so uploads never need to replace anything.
+          gh release view "$CACHE_TAG" >/dev/null 2>&1 || \
+            gh release create "$CACHE_TAG" \
+              --title "Build cache" \
+              --notes "Binaries Kira built from source, named by recipe key. Not a user-facing release." \
+              --latest=false
+          gh release upload "$CACHE_TAG" artifacts/*.uapp --clobber
+          gh release view "$CACHE_TAG" --json assets --jq '.assets | length' \
+            | xargs -I{} echo "cache now holds {} artifact(s)"

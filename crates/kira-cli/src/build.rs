@@ -1,10 +1,10 @@
 //! Building the published catalogue from unzipped releases.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::sha256_hex;
 use anyhow::{Context, Result, bail};
 use kira_core::catalog::{
     App, Catalog, Release, ReleaseOrder, SCHEMA, Source, VersionEntry, partition_unique,
@@ -13,7 +13,6 @@ use kira_core::catalog::{
 use kira_core::icon;
 use kira_core::uapp::{AppId, Uapp};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 /// Command-line inputs for a build.
 #[derive(Debug)]
@@ -68,17 +67,6 @@ struct Binary {
     folder: String,
     file: String,
     bytes: Vec<u8>,
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    // sha2 0.11 returns a plain byte array, which has no hex formatting of its
-    // own, and one dependency for that is not worth it.
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 /// Directory entries that are directories, sorted by name.
