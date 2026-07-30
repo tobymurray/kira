@@ -91,9 +91,23 @@ src/uapp.js              .uapp parser, CRC-32, ABGR2222 icon decode  (shared)
 src/plan.js              catalogue-vs-watch diff, install script generation (shared)
 src/png.js               dependency-free RGBA -> PNG encoder (build only)
 tools/build-catalog.mjs  release dir -> site/data/{catalog.json,icons,apps} + site/lib
+tools/make-icons.sh      assets/kira-mark.png -> site/img/* + site/favicon.ico
 tools/serve.mjs          local static server
+assets/kira-mark.png     source artwork for the icons
 site/                    the published page
 ```
+
+### Icons
+
+`tools/make-icons.sh` regenerates the favicons, apple-touch icon and link-preview
+card from `assets/kira-mark.png`. It needs ImageMagick 7; the outputs are
+committed, so it only runs when the artwork changes.
+
+The crop geometry in that script is the **measured** bounding box of the mark
+(`440x440+484+164`). It is deliberately not `-trim`, because the source render
+carries a generator watermark in one corner that a trim would include — the
+script checks the source dimensions and refuses to run if they change, rather
+than silently cropping the wrong region.
 
 ## Deploying
 

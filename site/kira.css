@@ -56,6 +56,21 @@ body {
   padding: 22px 0 18px;
 }
 
+.topbar-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+/* The mark carries its own dark background, so it needs rounding to sit well on
+   a light page rather than reading as a black square. */
+.mark {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 10px;
+}
+
 .topbar h1 {
   margin: 0;
   font-size: 26px;

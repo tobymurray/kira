@@ -8,16 +8,39 @@
       name="description"
       content="Install and update apps on a USB-connected UNA Watch from your browser. Unofficial."
     />
+
+    <!-- Explicit icon links matter here: the site lives at a /kira/ subpath, and
+         a bare /favicon.ico request would miss it. -->
+    <link rel="icon" href="favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="img/mark-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="img/mark-16.png" />
+    <link rel="apple-touch-icon" href="img/mark-180.png" />
+    <meta name="theme-color" content="#080808" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Kira — an app store for UNA Watch" />
+    <meta
+      property="og:description"
+      content="Install and update apps on a USB-connected UNA Watch from your browser. Unofficial."
+    />
+    <!-- Relative on purpose, so it survives the move to a custom domain. Make it
+         absolute if a scraper that requires that ever matters. -->
+    <meta property="og:image" content="img/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+
     <link rel="stylesheet" href="kira.css" />
   </head>
   <body>
     <header class="topbar">
-      <div class="wrap">
-        <h1>Kira</h1>
-        <p class="tagline">An app store for UNA&nbsp;Watch</p>
-        <p class="unaffiliated">
-          Unofficial. Not affiliated with, endorsed or sponsored by UNA Watch Ltd.
-        </p>
+      <div class="wrap topbar-inner">
+        <img class="mark" src="img/mark-512.png" alt="" width="44" height="44" />
+        <div>
+          <h1>Kira</h1>
+          <p class="tagline">An app store for UNA&nbsp;Watch</p>
+          <p class="unaffiliated">
+            Unofficial. Not affiliated with, endorsed or sponsored by UNA Watch Ltd.
+          </p>
+        </div>
       </div>
     </header>
 
