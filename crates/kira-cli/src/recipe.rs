@@ -81,12 +81,39 @@ impl Recipe {
 
     /// Name of the cached artifact for this recipe.
     ///
-    /// Flat, because release assets have no directories. Carries the `AppID` and
-    /// version so a human can read the listing, and the recipe key so different
-    /// recipes never collide.
+    /// Flat, because release assets have no directories. Leads with a
+    /// human-readable label so a listing can be skimmed; uniqueness comes from
+    /// the recipe key, not the label, so two apps sharing a folder name across
+    /// releases still get distinct artifacts.
     #[must_use]
-    pub(crate) fn artifact_name(&self, app_id: AppId) -> String {
-        format!("{app_id}-{}-{}.uapp", self.build_version, self.key())
+    pub(crate) fn artifact_name(&self, label: &str) -> String {
+        format!(
+            "{}-{}-{}.uapp",
+            sanitise(label),
+            self.build_version,
+            self.key()
+        )
+    }
+}
+
+/// Keep a label safe for a flat asset name.
+///
+/// Folder names are already path-safe, but a submission's could be anything.
+fn sanitise(label: &str) -> String {
+    let cleaned: String = label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "app".to_owned()
+    } else {
+        cleaned
     }
 }
 
@@ -126,7 +153,7 @@ pub(crate) fn plan(wanted: &[Wanted], available: &BTreeSet<String>) -> Vec<(Want
     wanted
         .iter()
         .map(|item| {
-            let name = item.recipe.artifact_name(item.app_id);
+            let name = item.recipe.artifact_name(&item.folder);
             let action = if available.contains(&name) {
                 Action::Fetch(name)
             } else {
@@ -294,12 +321,39 @@ mod tests {
     }
 
     #[test]
-    fn the_artifact_name_carries_id_version_and_key() {
-        let name = recipe().artifact_name(ALARM);
-        assert!(name.starts_with("A19C2A7E4F8B6D31-1.3.0-"));
+    fn the_artifact_name_is_readable_and_recipe_keyed() {
+        let name = recipe().artifact_name("Alarm");
+        assert!(name.starts_with("Alarm-1.3.0-"), "{name}");
+        assert!(name.ends_with(&format!("{}.uapp", recipe().key())));
         assert_eq!(std::path::Path::new(&name).extension().unwrap(), "uapp");
         // No path separators: release assets are a flat namespace.
         assert!(!name.contains('/'));
+    }
+
+    #[test]
+    fn a_label_cannot_introduce_a_path_or_spaces() {
+        // A display name could be anything -- "AVG / R HR" really exists.
+        let name = recipe().artifact_name("AVG / R HR");
+        assert!(!name.contains('/'), "{name}");
+        assert!(!name.contains(' '), "{name}");
+        assert!(name.starts_with("AVG___R_HR-"), "{name}");
+    }
+
+    #[test]
+    fn the_label_does_not_affect_uniqueness() {
+        // Same recipe, different labels: the key is what distinguishes artifacts,
+        // so a renamed folder does not silently alias a different build.
+        let recipe = recipe();
+        assert!(
+            recipe
+                .artifact_name("One")
+                .ends_with(&format!("{}.uapp", recipe.key()))
+        );
+        assert!(
+            recipe
+                .artifact_name("Two")
+                .ends_with(&format!("{}.uapp", recipe.key()))
+        );
     }
 
     #[test]
@@ -316,14 +370,14 @@ mod tests {
                 recipe: recipe(),
             },
         ];
-        let available = BTreeSet::from([wanted[0].recipe.artifact_name(wanted[0].app_id)]);
+        let available = BTreeSet::from([wanted[0].recipe.artifact_name(&wanted[0].folder)]);
 
         let planned = plan(&wanted, &available);
         assert!(matches!(planned[0].1, Action::Fetch(_)));
         assert!(matches!(planned[1].1, Action::Build(_)));
         assert_eq!(
             planned[0].1.asset(),
-            planned[0].0.recipe.artifact_name(ALARM)
+            planned[0].0.recipe.artifact_name(&planned[0].0.folder)
         );
     }
 
@@ -334,7 +388,7 @@ mod tests {
             folder: "Alarm".into(),
             recipe: recipe(),
         };
-        let available = BTreeSet::from([old.recipe.artifact_name(ALARM)]);
+        let available = BTreeSet::from([old.recipe.artifact_name(&old.folder)]);
 
         let mut bumped = old.clone();
         bumped.recipe.toolchain = "sha256:0000newimage".into();

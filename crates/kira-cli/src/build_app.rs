@@ -325,7 +325,13 @@ pub(crate) fn run_build(args: &Args) -> Result<Built> {
         build_version: args.version,
         flags: flags_id(),
     };
-    let artifact = recipe.artifact_name(header.app_id);
+    // The directory name is the on-device folder for SDK apps, and the repository
+    // name for a submission: either way it is what a human recognises.
+    let label = app.file_name().map_or_else(
+        || declared.name.clone(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let artifact = recipe.artifact_name(&label);
 
     if let Some(parent) = args.out.parent() {
         fs::create_dir_all(parent)?;
