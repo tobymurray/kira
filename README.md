@@ -24,7 +24,15 @@ ARM toolchain container, so Kira consumes those artifacts.
 The interesting logic is Rust. `kira-core` reads the `.uapp` container, models the
 catalogue, diffs it against a watch and generates installers; it does no I/O, so
 the catalogue build links it natively and the browser loads the very same code
-compiled to WebAssembly. There is no second implementation to drift.
+compiled to WebAssembly.
+
+That sharing is not itself the reason for Rust — the JavaScript this replaced was
+also one implementation, imported by Node and copied to the browser. What the
+rewrite buys is a type system over a packed binary format: `AppId` and `Version`
+are newtypes rather than strings, version ordering is the derived `Ord` on a
+packed `u32` rather than a hand-written comparison, and `AppType`/`Status` are
+enums the compiler checks every match against. It costs about 56 kB gzipped —
+see [Module size](#module-size).
 
 ```
 crates/kira-core   the .uapp format, catalogue model, planner, script generation
@@ -164,8 +172,22 @@ a regression check. CI runs it against the two newest releases.
 
 ### Module size
 
-The published `.wasm` is ~58 kB gzipped. Two dependencies were worth removing,
-each measured rather than guessed:
+The published `.wasm` is ~58 kB gzipped, and the whole page is ~100 kB:
+
+| | gzipped |
+| --- | --- |
+| scripts before the Rust rewrite (`app.js` + three shared modules) | 18.5 kB |
+| scripts now (`app.js` + bindgen glue + `.wasm`) | 74.4 kB |
+| ...of which the module itself | 58.2 kB |
+| `catalog.json` (13 releases, 151 versions) | 20.6 kB |
+| one app install, e.g. Running 1.3.0 | 520 kB |
+
+So the rewrite costs ~56 kB on first load, against a page that already transfers
+20 kB of catalogue and, the moment anyone does the thing the site exists for,
+half a megabyte per app. It is cached after the first visit. On a slow connection
+the first load is nonetheless noticeably heavier, and that is the honest cost.
+
+Two dependencies were worth removing, each measured rather than guessed:
 
 | Change | gzipped |
 | --- | --- |
