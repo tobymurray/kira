@@ -36,6 +36,18 @@ pub struct Installed {
     /// expensive, so callers deepen only what looks like an update.
     #[serde(default)]
     pub payload_sha256: Option<String>,
+    /// Hash of the whole file, once read.
+    ///
+    /// This is what identifies *which build* is installed, since the same version
+    /// can legitimately exist as more than one binary.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// Whether the installed file's own CRC-32 footer checks out, once read.
+    ///
+    /// The discriminator between "a different but intact build" and "a corrupted
+    /// install". Size alone cannot tell those apart.
+    #[serde(default)]
+    pub crc_valid: Option<bool>,
 }
 
 /// What should happen to an app.
@@ -44,13 +56,35 @@ pub struct Installed {
 pub enum Status {
     /// Not on the watch at all.
     Install,
-    /// A different build is on the watch.
+    /// An older version is on the watch.
     Update,
     /// The selected version is already installed.
     Current,
     /// The watch has something newer than the selected version, so installing
     /// would be a downgrade.
     NewerOnWatch,
+    /// The right version, intact, but not a binary Kira recognises.
+    ///
+    /// Reported rather than offered: a user may have built it themselves, and
+    /// overwriting it uninvited would be presumptuous.
+    DifferentBuild,
+    /// The installed file fails its own CRC, so the watch is silently ignoring
+    /// it. Always worth reinstalling.
+    Corrupt,
+}
+
+/// Which build of a version is on the watch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Recognised {
+    /// Byte-identical to what Kira publishes.
+    KiraBuild,
+    /// Byte-identical to what upstream published for this version.
+    UpstreamBuild,
+    /// Intact, but matches neither. Worth telling the user about.
+    Unrecognised,
+    /// Not hashed yet, so unknown.
+    Unhashed,
 }
 
 /// A planned action for one app.
@@ -67,13 +101,21 @@ pub struct Entry {
     ///
     /// Only knowable once the installed file has been hashed.
     pub identical_payload: bool,
+    /// Which build is installed, when anything is.
+    pub recognised: Recognised,
 }
 
 impl Entry {
     /// Whether this entry would write to the watch.
+    ///
+    /// A corrupt install counts: the watch is ignoring that file, so replacing it
+    /// is the fix. A merely different build does not -- see [`Status::DifferentBuild`].
     #[must_use]
     pub const fn is_actionable(&self) -> bool {
-        matches!(self.status, Status::Install | Status::Update)
+        matches!(
+            self.status,
+            Status::Install | Status::Update | Status::Corrupt
+        )
     }
 
     /// Whether the installed file still needs hashing to classify this entry.
@@ -92,11 +134,27 @@ impl Entry {
         let Some(installed) = &self.installed else {
             return format!("install {}", self.app.version);
         };
-        let move_ = format!("{} → {}", installed.version, self.app.version);
-        if self.identical_payload {
-            format!("{move_} · version stamp only, identical code")
-        } else {
-            move_
+        match self.status {
+            Status::Corrupt => format!("{} is corrupt, reinstall", installed.file),
+            Status::DifferentBuild => {
+                format!(
+                    "{} installed, but not a build we recognise",
+                    installed.version
+                )
+            }
+            Status::Current => match self.recognised {
+                Recognised::UpstreamBuild => format!("{}, the vendor's build", installed.version),
+                Recognised::KiraBuild => format!("{}, built by Kira", installed.version),
+                _ => installed.version.to_string(),
+            },
+            _ => {
+                let move_ = format!("{} → {}", installed.version, self.app.version);
+                if self.identical_payload {
+                    format!("{move_} · version stamp only, identical code")
+                } else {
+                    move_
+                }
+            }
         }
     }
 }
@@ -130,6 +188,60 @@ impl Plan {
     }
 }
 
+/// Identify which build is on the watch.
+///
+/// Requires the installed file's hash, which means reading it in full; a
+/// header-only scan yields [`Recognised::Unhashed`].
+fn recognise(on_watch: &Installed, target: &Target) -> Recognised {
+    let Some(installed) = on_watch.sha256.as_ref() else {
+        return Recognised::Unhashed;
+    };
+    if *installed == target.sha256 {
+        Recognised::KiraBuild
+    } else if target
+        .upstream_sha256
+        .as_ref()
+        .is_some_and(|upstream| upstream == installed)
+    {
+        // The vendor's own binary for this version. Equivalent, not stale.
+        Recognised::UpstreamBuild
+    } else {
+        Recognised::Unrecognised
+    }
+}
+
+/// Decide what should happen to an installed app.
+///
+/// Version ordering decides first. At the same version the question is *which
+/// build*, which is why this needs hashes rather than sizes: two legitimate
+/// builds of one version differ in bytes, and so does a truncated one. The CRC
+/// separates those cases -- a corrupt file is being silently ignored by the
+/// watch, whereas an unrecognised intact one may be the user's own build.
+fn classify(on_watch: &Installed, target: &Target, recognised: Recognised) -> Status {
+    match target.version.cmp(&on_watch.version) {
+        std::cmp::Ordering::Greater => Status::Update,
+        std::cmp::Ordering::Less => Status::NewerOnWatch,
+        std::cmp::Ordering::Equal => {
+            if on_watch.crc_valid == Some(false) {
+                return Status::Corrupt;
+            }
+            #[allow(
+                clippy::match_same_arms,
+                reason = "the recognised arms and the unhashed fallback reach the \
+                          same status for different reasons; merging them would hide that"
+            )]
+            match recognised {
+                Recognised::KiraBuild | Recognised::UpstreamBuild => Status::Current,
+                Recognised::Unrecognised => Status::DifferentBuild,
+                // Without a hash, fall back to what a header scan can see. A
+                // size difference at the same version means something is wrong.
+                Recognised::Unhashed if on_watch.size != target.size => Status::Update,
+                Recognised::Unhashed => Status::Current,
+            }
+        }
+    }
+}
+
 /// Compare selected versions against what is installed.
 ///
 /// Keyed on [`AppId`], never on folder or display name: folders are arbitrary and
@@ -148,17 +260,12 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
                     status: Status::Install,
                     installed: None,
                     identical_payload: false,
+                    recognised: Recognised::Unhashed,
                 };
             };
 
-            let status = match target.version.cmp(&on_watch.version) {
-                std::cmp::Ordering::Greater => Status::Update,
-                std::cmp::Ordering::Less => Status::NewerOnWatch,
-                // Same version but different bytes still warrants a rewrite: a
-                // truncated or half-written install reports the right version.
-                std::cmp::Ordering::Equal if on_watch.size != target.size => Status::Update,
-                std::cmp::Ordering::Equal => Status::Current,
-            };
+            let recognised = recognise(on_watch, target);
+            let status = classify(on_watch, target, recognised);
 
             // Version moved but the code did not. Still offered, since installing
             // changes what the watch reports, but labelled rather than presented
@@ -174,6 +281,7 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
                 status,
                 installed: Some(on_watch.clone()),
                 identical_payload,
+                recognised,
             }
         })
         .collect();
@@ -222,6 +330,8 @@ fn job_note(entry: &Entry) -> String {
         Status::Update => "update",
         Status::Current => "current",
         Status::NewerOnWatch => "newer-on-watch",
+        Status::DifferentBuild => "different-build",
+        Status::Corrupt => "corrupt, reinstalling",
     };
     if entry.identical_payload {
         format!("{status}; identical code, version stamp only")
@@ -412,6 +522,10 @@ mod tests {
             tag: format!("apps-v{version}"),
             changed: Some(true),
             is_latest: true,
+            origin: crate::catalog::Origin::Kira,
+            built_from: None,
+            upstream_sha256: None,
+            matches_upstream: None,
         }
     }
 
@@ -425,6 +539,8 @@ mod tests {
             size,
             extra_uapps: Vec::new(),
             payload_sha256: None,
+            sha256: None,
+            crc_valid: None,
         }
     }
 
@@ -522,6 +638,112 @@ mod tests {
         assert_eq!(plan.entries[0].describe(), "1.2.0 → 1.3.0");
         assert!(plan.entries[0].needs_payload_hash());
         assert_eq!(plan.needing_payload_hash().count(), 1);
+    }
+
+    #[test]
+    fn a_watch_holding_kiras_own_build_is_up_to_date() {
+        let target = target("1.3.0");
+        let mut on_watch = installed("1.3.0", target.size);
+        on_watch.sha256 = Some(target.sha256.clone());
+        on_watch.crc_valid = Some(true);
+
+        let plan = build(&[target], &[on_watch]);
+        assert_eq!(plan.entries[0].status, Status::Current);
+        assert_eq!(plan.entries[0].recognised, Recognised::KiraBuild);
+        assert_eq!(plan.actionable().count(), 0);
+    }
+
+    #[test]
+    fn a_watch_holding_the_vendors_build_is_recognised_not_nagged() {
+        // The case that would otherwise show "Update 1.3.0 -> 1.3.0" forever on
+        // every app, once Kira serves its own builds.
+        let mut target = target("1.3.0");
+        target.upstream_sha256 = Some("v".repeat(64));
+        let mut on_watch = installed("1.3.0", 999);
+        on_watch.sha256 = Some("v".repeat(64));
+        on_watch.crc_valid = Some(true);
+
+        let plan = build(&[target], &[on_watch]);
+        assert_eq!(plan.entries[0].status, Status::Current);
+        assert_eq!(plan.entries[0].recognised, Recognised::UpstreamBuild);
+        assert_eq!(
+            plan.actionable().count(),
+            0,
+            "must not be offered as an update"
+        );
+        assert!(plan.entries[0].describe().contains("vendor"));
+    }
+
+    #[test]
+    fn an_intact_but_unknown_build_is_reported_not_overwritten() {
+        // Possibly the user's own build. Saying so beats silently replacing it.
+        let mut target = target("1.3.0");
+        target.upstream_sha256 = Some("v".repeat(64));
+        let mut on_watch = installed("1.3.0", 12345);
+        on_watch.sha256 = Some("z".repeat(64));
+        on_watch.crc_valid = Some(true);
+
+        let plan = build(&[target], &[on_watch]);
+        assert_eq!(plan.entries[0].status, Status::DifferentBuild);
+        assert_eq!(plan.entries[0].recognised, Recognised::Unrecognised);
+        assert_eq!(plan.actionable().count(), 0);
+        assert!(plan.entries[0].describe().contains("recognise"));
+    }
+
+    #[test]
+    fn a_corrupt_install_is_offered_for_reinstall() {
+        // The watch silently ignores a file that fails its CRC, so the app just
+        // never appears. That has to be actionable.
+        let target = target("1.3.0");
+        let mut on_watch = installed("1.3.0", target.size);
+        on_watch.sha256 = Some("z".repeat(64));
+        on_watch.crc_valid = Some(false);
+
+        let plan = build(&[target], &[on_watch]);
+        assert_eq!(plan.entries[0].status, Status::Corrupt);
+        assert_eq!(plan.actionable().count(), 1);
+        assert!(plan.entries[0].describe().contains("corrupt"));
+    }
+
+    #[test]
+    fn corruption_outranks_a_matching_hash() {
+        // A file cannot both match and fail its CRC, but if the inputs disagree
+        // the safe reading is that something is wrong with it.
+        let target = target("1.3.0");
+        let mut on_watch = installed("1.3.0", target.size);
+        on_watch.sha256 = Some(target.sha256.clone());
+        on_watch.crc_valid = Some(false);
+
+        assert_eq!(
+            build(&[target], &[on_watch]).entries[0].status,
+            Status::Corrupt
+        );
+    }
+
+    #[test]
+    fn without_a_hash_it_falls_back_to_what_a_header_scan_can_see() {
+        let target = target("1.3.0");
+        // Same version and size, unhashed: nothing suggests a problem.
+        let plan = build(
+            std::slice::from_ref(&target),
+            &[installed("1.3.0", target.size)],
+        );
+        assert_eq!(plan.entries[0].status, Status::Current);
+        assert_eq!(plan.entries[0].recognised, Recognised::Unhashed);
+
+        // Same version, different size, unhashed: something is off.
+        let plan = build(&[target], &[installed("1.3.0", 4)]);
+        assert_eq!(plan.entries[0].status, Status::Update);
+    }
+
+    #[test]
+    fn an_older_version_is_an_update_whatever_its_hash() {
+        let target = target("1.3.0");
+        let mut on_watch = installed("1.2.0", 100);
+        on_watch.sha256 = Some("z".repeat(64));
+        on_watch.crc_valid = Some(true);
+        let plan = build(&[target], &[on_watch]);
+        assert_eq!(plan.entries[0].status, Status::Update);
     }
 
     #[test]

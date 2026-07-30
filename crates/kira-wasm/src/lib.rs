@@ -135,6 +135,8 @@ struct EntryView<'a> {
     status: plan::Status,
     installed: Option<&'a Installed>,
     identical_payload: bool,
+    /// Which build is on the watch: Kira's, the vendor's, or neither.
+    recognised: plan::Recognised,
     /// Why this entry is in the plan, e.g. "1.2.0 → 1.3.0".
     describe: String,
 }
@@ -165,6 +167,7 @@ impl<'a> PlanView<'a> {
                     status: entry.status,
                     installed: entry.installed.as_ref(),
                     identical_payload: entry.identical_payload,
+                    recognised: entry.recognised,
                     describe: entry.describe(),
                 })
                 .collect(),

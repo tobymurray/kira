@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::sha256_hex;
 use anyhow::{Context, Result, bail};
 use kira_core::catalog::{
-    App, Catalog, Release, ReleaseOrder, SCHEMA, Source, VersionEntry, partition_unique,
+    App, Catalog, Origin, Release, ReleaseOrder, SCHEMA, Source, VersionEntry, partition_unique,
     sort_newest_first,
 };
 use kira_core::icon;
@@ -294,6 +294,14 @@ fn process_release(
             // Filled once every version is known.
             changed: None,
             delta_bytes: None,
+            // These binaries come straight from an upstream release, so they are
+            // upstream's by definition and trivially match themselves. When the
+            // pipeline switches to Kira-built binaries this becomes Origin::Kira
+            // with a builtFrom, and matchesUpstream stops being a tautology.
+            origin: Origin::Upstream,
+            upstream_sha256: Some(sha256_hex(&binary.bytes)),
+            matches_upstream: Some(true),
+            built_from: None,
         });
 
         // Icons come from the newest version that has any. A declared length

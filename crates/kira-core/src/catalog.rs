@@ -15,7 +15,10 @@ pub use crate::uapp::AppType;
 use crate::uapp::{AppId, Version};
 
 /// Schema version emitted and expected by this crate.
-pub const SCHEMA: u32 = 2;
+///
+/// 3 adds provenance: who built each binary, by what recipe, and how it relates
+/// to what upstream published.
+pub const SCHEMA: u32 = 3;
 
 /// A complete catalogue, as published to `data/catalog.json`.
 ///
@@ -87,6 +90,33 @@ pub struct App {
     pub icon_small: Option<String>,
 }
 
+/// Who produced the binary Kira serves for a version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Origin {
+    /// Republished verbatim from an upstream release.
+    Upstream,
+    /// Built by Kira from source.
+    Kira,
+}
+
+/// Everything needed to rebuild a binary and get the same bytes.
+///
+/// Published so the claim "built from this source" can be checked rather than
+/// taken on trust. See `docs/reproducibility.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltFrom {
+    /// Canonical identity of the app's source.
+    pub app_source: String,
+    /// SDK revision it was compiled against.
+    pub sdk_rev: String,
+    /// Toolchain container, by digest.
+    pub toolchain: String,
+    /// Hash of the whole recipe, for cache identity.
+    pub recipe: String,
+}
+
 /// One published build of an app.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +148,24 @@ pub struct VersionEntry {
     pub changed: Option<bool>,
     /// Size difference against the next older version.
     pub delta_bytes: Option<i64>,
+    /// Who produced the binary being served.
+    pub origin: Origin,
+    /// How to reproduce it, when Kira built it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_from: Option<BuiltFrom>,
+    /// Hash of the binary upstream published for this same app and version.
+    ///
+    /// Recorded even when Kira serves its own build, so a watch carrying the
+    /// vendor's binary can be recognised rather than nagged about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_sha256: Option<String>,
+    /// Whether the served binary is byte-identical to upstream's.
+    ///
+    /// Derived, not asserted. Before the SDK carries the path-independence fix
+    /// this is expected to be false for Kira-built binaries; it should start
+    /// coming out true on its own afterwards, with no special-casing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches_upstream: Option<bool>,
 }
 
 /// One version of one app, chosen for installation or download.
@@ -161,6 +209,14 @@ pub struct Target {
     pub changed: Option<bool>,
     /// Whether this is the newest published version.
     pub is_latest: bool,
+    /// Who produced this binary.
+    pub origin: Origin,
+    /// How to reproduce it, when Kira built it.
+    pub built_from: Option<BuiltFrom>,
+    /// Hash of upstream's binary for the same version, if known.
+    pub upstream_sha256: Option<String>,
+    /// Whether the two are byte-identical.
+    pub matches_upstream: Option<bool>,
 }
 
 impl App {
@@ -269,6 +325,10 @@ pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, Version>) -> 
                 tag: chosen.tag.clone(),
                 changed: chosen.changed,
                 is_latest: chosen.version == app.latest().version,
+                origin: chosen.origin,
+                built_from: chosen.built_from.clone(),
+                upstream_sha256: chosen.upstream_sha256.clone(),
+                matches_upstream: chosen.matches_upstream,
             }
         })
         .collect()
@@ -401,6 +461,10 @@ mod tests {
             download: format!("apps/apps-v{v}/GlanceHR/Live_HR_{v}.uapp"),
             changed: Some(true),
             delta_bytes: Some(0),
+            origin: Origin::Kira,
+            built_from: None,
+            upstream_sha256: None,
+            matches_upstream: None,
         }
     }
 

@@ -203,9 +203,21 @@ function statusLabel(entry) {
         ? [`${entry.installed.version} → ${entry.app.version} · same code`, '']
         : [`Update ${entry.installed.version} → ${entry.app.version}`, 'update'];
     case 'current':
-      return ['Up to date', 'current'];
+      // Which build it is matters: the vendor's binary for the same version is
+      // equivalent, not stale.
+      return [
+        entry.recognised === 'upstream-build' ? 'Up to date · vendor build' : 'Up to date',
+        'current',
+      ];
     case 'newer-on-watch':
       return [`Watch has ${entry.installed.version}`, ''];
+    case 'different-build':
+      // Possibly the user's own build. Report it rather than offering to replace it.
+      return [`${entry.installed.version} · unrecognised build`, ''];
+    case 'corrupt':
+      // A file failing its CRC is silently ignored by the watch, so the app never
+      // appears. Always worth replacing.
+      return ['Corrupt — reinstall', 'update'];
     default:
       return [entry.status, ''];
   }
@@ -407,7 +419,10 @@ function installedFrom(header, folder, file, size, extraUapps) {
     version: header.version,
     size,
     extraUapps,
+    // Filled by hashInstalled() once the file has been read.
     payloadSha256: null,
+    sha256: null,
+    crcValid: null,
   };
 }
 
@@ -752,42 +767,37 @@ function setBusy(busy) {
 }
 
 /**
- * Hash the code of anything that looks like an update, so a release-tag bump can
- * be told apart from a real change.
+ * Read each installed app once and record what identifies it.
  *
- * Only update candidates are read in full — the initial scan reads 48-byte
- * headers, and reading every app off a USB volume to answer a cosmetic question
- * would not be worth the wait.
+ * Three answers come out of the same read: the whole-file hash, which says *which
+ * build* is installed; the payload hash, which tells a real change from a
+ * release-tag bump; and whether the CRC checks out, which separates a corrupt
+ * install from a merely unfamiliar one. A header scan cannot answer any of those.
+ *
+ * That is a couple of megabytes read off the watch per connect, which is the
+ * price of classifying rather than guessing.
  */
-async function deepenUpdateCandidates() {
-  const pending = state.plan.entries.filter(
-    (e) => e.status === 'update' && e.installed && !e.installed.payloadSha256,
-  );
-  if (pending.length === 0) return false;
-
-  for (const entry of pending) {
-    const match = state.installed.find((i) => i.appId === entry.app.appId);
-    if (!match) continue;
+async function hashInstalled() {
+  for (const app of state.installed) {
+    if (app.sha256) continue;
     try {
-      match.payloadSha256 = await payloadHash(await readInstalledBytes(match));
+      const bytes = await readInstalledBytes(app);
+      app.sha256 = await sha256Hex(bytes);
+      app.payloadSha256 = await payloadHash(bytes);
+      app.crcValid = crcIsValid(bytes);
     } catch (err) {
-      // Non-fatal: without a hash the entry stays an ordinary update.
-      log(`  could not hash ${match.folder}/${match.file}: ${err.message}`);
+      // Non-fatal: the planner falls back to what the header alone showed.
+      log(`  could not read ${app.folder}/${app.file}: ${err.message}`);
     }
   }
-  return true;
 }
 
 async function refreshInventory() {
   if (state.mode === 'write') {
     state.installed = await readInstalledFromHandles(state.appsDir);
   }
+  await hashInstalled();
   state.plan = state.store.plan(state.installed);
-
-  // Re-plan once the payload hashes are known, so labels reflect them.
-  if (await deepenUpdateCandidates()) {
-    state.plan = state.store.plan(state.installed);
-  }
 
   renderPlan();
   renderCatalogue();

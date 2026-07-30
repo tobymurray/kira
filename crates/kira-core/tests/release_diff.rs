@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use kira_core::catalog::{App, AppType, Catalog, Source, VersionEntry, resolve_targets};
+use kira_core::catalog::{App, AppType, Catalog, Origin, Source, VersionEntry, resolve_targets};
 use kira_core::plan::{self, Installed, Status};
 use kira_core::uapp::Uapp;
 use sha2::{Digest, Sha256};
@@ -115,6 +115,10 @@ fn catalog_from(fixtures: &[Fixture], tag: &str) -> Catalog {
                     download: format!("apps/{tag}/{}/{}", fixture.folder, fixture.file),
                     changed: None,
                     delta_bytes: None,
+                    origin: Origin::Kira,
+                    built_from: None,
+                    upstream_sha256: None,
+                    matches_upstream: None,
                 }],
                 icon: None,
                 icon_small: None,
@@ -145,6 +149,8 @@ fn installed_from(fixtures: &[Fixture]) -> Vec<Installed> {
                 size: fixture.bytes.len(),
                 extra_uapps: Vec::new(),
                 payload_sha256: Some(sha256_hex(uapp.payload())),
+                sha256: Some(sha256_hex(&fixture.bytes)),
+                crc_valid: Some(uapp.verify_crc().is_valid()),
             }
         })
         .collect()
