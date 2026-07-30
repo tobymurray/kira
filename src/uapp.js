@@ -171,6 +171,24 @@ export function verifyCrc(input) {
   return { ok: stored === computed, stored, computed };
 }
 
+/**
+ * The bytes between the header and the CRC footer: icons, service image and GUI
+ * image. This is the app itself, with no version stamp in it.
+ *
+ * Hashing this rather than the whole file distinguishes "the code changed" from
+ * "the release tag moved". App versions are stamped from the `apps-v*` tag and
+ * applied to every app in the release, so a version bump alone says nothing
+ * about whether a given app changed — in apps-v1.3.0, six of the thirteen were
+ * byte-identical to their apps-v1.2.0 builds.
+ */
+export function payloadOf(input) {
+  const u8 = toU8(input);
+  if (u8.length < HEADER_SIZE + CRC_SIZE) {
+    throw new Error(`too short to hold a payload: ${u8.length}`);
+  }
+  return u8.subarray(HEADER_SIZE, u8.length - CRC_SIZE);
+}
+
 /** Full parse: header, derived sizes, and CRC verification. */
 export function parseUapp(input) {
   const u8 = toU8(input);

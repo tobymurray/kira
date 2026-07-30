@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 const SHARED_MODULES = ['uapp.js', 'plan.js'];
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-import { parseUapp, decodeIcon, isBlankIcon } from '../src/uapp.js';
+import { parseUapp, decodeIcon, isBlankIcon, payloadOf } from '../src/uapp.js';
 import { encodePng } from '../src/png.js';
 
 function parseArgs(argv) {
@@ -146,6 +146,9 @@ async function main() {
       serviceSize: app.serviceSize,
       guiSize: app.guiSize,
       sha256: createHash('sha256').update(bytes).digest('hex'),
+      // Hash of the code alone, excluding the version stamp and CRC. Lets the
+      // UI tell a real update apart from a release-tag bump.
+      payloadSha256: createHash('sha256').update(payloadOf(bytes)).digest('hex'),
       ...icons,
       download,
     });

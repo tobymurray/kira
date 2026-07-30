@@ -13,8 +13,15 @@
  * removed, so settings.json and Activity/ survive an update.
  */
 
-import { HEADER_SIZE, parseHeader, verifyCrc } from './lib/uapp.js';
-import { actionable, buildPlan, powershellScript, shellScript } from './lib/plan.js';
+import { HEADER_SIZE, parseHeader, payloadOf, verifyCrc } from './lib/uapp.js';
+import {
+  actionable,
+  buildPlan,
+  describeJob,
+  needsPayloadHash,
+  powershellScript,
+  shellScript,
+} from './lib/plan.js';
 
 const CAN_WRITE = typeof window.showDirectoryPicker === 'function';
 const DATA_BASE = new URL('data', location.href).href.replace(/\/$/, '');
@@ -129,7 +136,11 @@ function statusLabel(status, entry) {
     case 'install':
       return ['Not installed', 'install'];
     case 'update':
-      return [`Update ${entry.installed.version} → ${entry.app.version}`, 'update'];
+      // A version-only bump is not a neutral "update" — saying so would imply
+      // new code that is not there. Deliberately not styled as attention-worthy.
+      return entry.identicalPayload
+        ? [`${entry.installed.version} → ${entry.app.version} · same code`, '']
+        : [`Update ${entry.installed.version} → ${entry.app.version}`, 'update'];
     case 'current':
       return ['Up to date', 'current'];
     case 'newer-on-watch':
@@ -487,14 +498,7 @@ async function verifyFlash() {
       continue;
     }
 
-    let bytes;
-    if (installed.blob) {
-      bytes = new Uint8Array(await installed.blob.arrayBuffer());
-    } else {
-      const dir = await state.appsDir.getDirectoryHandle(installed.folder);
-      const handle = await dir.getFileHandle(installed.file);
-      bytes = new Uint8Array(await (await handle.getFile()).arrayBuffer());
-    }
+    const bytes = await readInstalledBytes(installed);
 
     checked++;
     const sha = await sha256Hex(bytes);
@@ -531,8 +535,11 @@ function renderPlan() {
   const jobs = actionable(state.plan);
   const counts = { install: 0, update: 0, current: 0 };
   for (const e of state.plan.entries) counts[e.status] = (counts[e.status] ?? 0) + 1;
+  const restamps = state.plan.entries.filter((e) => e.identicalPayload).length;
   el('plan-summary').textContent =
-    `${counts.install ?? 0} to install · ${counts.update ?? 0} to update · ${counts.current ?? 0} up to date`;
+    `${counts.install ?? 0} to install · ${counts.update ?? 0} to update · ` +
+    `${counts.current ?? 0} up to date` +
+    (restamps > 0 ? ` · ${restamps} version-only` : '');
 
   // Same grouping order as the catalogue, so the two lists read consistently.
   const typeOrder = new Map(TYPE_SECTIONS.map((s, i) => [s.type, i]));
@@ -552,10 +559,8 @@ function renderPlan() {
     left.appendChild(name);
     const what = document.createElement('div');
     what.className = 'what';
-    what.textContent =
-      entry.status === 'install'
-        ? `install ${entry.app.version} → Apps/${entry.app.folder}/`
-        : `${entry.installed.version} → ${entry.app.version} in Apps/${entry.installed.folder}/`;
+    const where = entry.installed ? entry.installed.folder : entry.app.folder;
+    what.textContent = `${describeJob(entry)} · Apps/${where}/`;
     left.appendChild(what);
     row.appendChild(left);
 
@@ -633,11 +638,49 @@ function setBusy(busy) {
   }
 }
 
+/** Read a whole installed .uapp, in either connection mode. */
+async function readInstalledBytes(installed) {
+  if (installed.blob) return new Uint8Array(await installed.blob.arrayBuffer());
+  const dir = await state.appsDir.getDirectoryHandle(installed.folder);
+  const handle = await dir.getFileHandle(installed.file);
+  return new Uint8Array(await (await handle.getFile()).arrayBuffer());
+}
+
+/**
+ * Hash the code of anything that looks like an update, so a release-tag bump can
+ * be told apart from a real change.
+ *
+ * Only update candidates are read in full — the initial scan reads 48-byte
+ * headers, and reading every app off a USB volume to answer a cosmetic question
+ * would not be worth the wait.
+ */
+async function deepenUpdateCandidates(plan) {
+  const pending = needsPayloadHash(plan);
+  if (pending.length === 0) return false;
+
+  for (const entry of pending) {
+    try {
+      const bytes = await readInstalledBytes(entry.installed);
+      entry.installed.payloadSha256 = await sha256Hex(payloadOf(bytes));
+    } catch (err) {
+      // Non-fatal: without a hash the entry stays an ordinary update.
+      log(`  could not hash ${entry.installed.folder}/${entry.installed.file}: ${err.message}`);
+    }
+  }
+  return true;
+}
+
 async function refreshInventory() {
   if (state.mode === 'write') {
     state.installed = await readInstalledFromHandles(state.appsDir);
   }
   state.plan = buildPlan(state.catalog, state.installed);
+
+  // Re-plan once the payload hashes are known, so labels reflect them.
+  if (await deepenUpdateCandidates(state.plan)) {
+    state.plan = buildPlan(state.catalog, state.installed);
+  }
+
   renderPlan();
   renderCatalogue();
 }

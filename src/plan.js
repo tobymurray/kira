@@ -21,7 +21,7 @@ export function buildPlan(catalog, installed) {
   const byId = new Map(installed.map((i) => [i.appId, i]));
   const entries = catalog.apps.map((app) => {
     const on = byId.get(app.appId);
-    if (!on) return { app, status: 'install', installed: null };
+    if (!on) return { app, status: 'install', installed: null, identicalPayload: false };
     const delta = compareVersions(app.versionPacked, on.versionPacked);
     let status = 'current';
     if (delta > 0) status = 'update';
@@ -29,7 +29,18 @@ export function buildPlan(catalog, installed) {
     // Same version but different bytes still warrants a rewrite: a truncated or
     // corrupted install reports the right version in its header.
     else if (on.size !== app.size) status = 'update';
-    return { app, status, installed: on };
+
+    // Version moved but the code did not. Still offered — installing does change
+    // what the watch reports — but the UI says so rather than implying new code.
+    // Only known once the installed file has been hashed, which the caller does
+    // lazily for update candidates.
+    const identicalPayload =
+      status === 'update' &&
+      Boolean(on.payloadSha256) &&
+      Boolean(app.payloadSha256) &&
+      on.payloadSha256 === app.payloadSha256;
+
+    return { app, status, installed: on, identicalPayload };
   });
 
   const known = new Set(catalog.apps.map((a) => a.appId));
@@ -40,6 +51,25 @@ export function buildPlan(catalog, installed) {
 /** Entries that would be written, in catalogue order. */
 export function actionable(plan) {
   return plan.entries.filter((e) => e.status === 'install' || e.status === 'update');
+}
+
+/**
+ * Update candidates whose installed bytes have not been hashed yet.
+ *
+ * Reading a whole .uapp off the watch is far more expensive than reading its
+ * 48-byte header, so callers scan headers first and only deepen these.
+ */
+export function needsPayloadHash(plan) {
+  return plan.entries.filter(
+    (e) => e.status === 'update' && e.installed && !e.installed.payloadSha256,
+  );
+}
+
+/** Human-readable reason a job is in the plan. */
+export function describeJob(entry) {
+  if (entry.status === 'install') return `install ${entry.app.version}`;
+  const move = `${entry.installed.version} → ${entry.app.version}`;
+  return entry.identicalPayload ? `${move} · version stamp only, identical code` : move;
 }
 
 function shQuote(s) {
@@ -86,10 +116,12 @@ export function powershellScript(plan, { baseUrl, label = 'UNA WATCH' } = {}) {
     'try {',
   ];
 
-  for (const { app, status } of jobs) {
+  for (const entry of jobs) {
+    const { app, status } = entry;
+    const note = entry.identicalPayload ? `${status}; identical code, version stamp only` : status;
     lines.push(
       '',
-      `  # ${app.name} ${app.version} (${status})`,
+      `  # ${app.name} ${app.version} (${note})`,
       `  $folder = ${psQuote(app.folder)}; $file = ${psQuote(app.file)}; $sha = ${psQuote(app.sha256)}`,
       `  $url = "$BaseUrl/${app.download}"`,
       '  $dl = Join-Path $tmp $file',
@@ -152,10 +184,12 @@ export function shellScript(plan, { baseUrl, mount = '/Volumes/UNA WATCH' } = {}
     '}',
   ];
 
-  for (const { app, status } of jobs) {
+  for (const entry of jobs) {
+    const { app, status } = entry;
+    const note = entry.identicalPayload ? `${status}; identical code, version stamp only` : status;
     lines.push(
       '',
-      `# ${app.name} ${app.version} (${status})`,
+      `# ${app.name} ${app.version} (${note})`,
       `folder=${shQuote(app.folder)}; file=${shQuote(app.file)}; sha=${shQuote(app.sha256)}`,
       `echo "  downloading $folder/$file"`,
       `curl -fsSL "$BASE_URL/${app.download}" -o "$TMP/$file"`,
