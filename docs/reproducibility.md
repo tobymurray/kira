@@ -17,6 +17,10 @@ so all of them are part of the recipe that keys a cached artifact:
 | `BUILD_VERSION` | compiled in as a string, so it changes `.rodata` |
 | flags Kira adds | see below |
 
+Built binaries are stored as assets on a long-lived `app-binaries` release, named
+`<app>-<version>-<recipe key>.uapp`. That is unrelated to the Actions cache under
+Settings, which holds cargo build caches.
+
 `crates/kira-cli/src/recipe.rs` hashes a canonical serialisation of those into a
 short key, and `RECIPE_SCHEME` exists so the meaning of a recipe can be changed
 deliberately, invalidating every cached artifact rather than silently reusing one

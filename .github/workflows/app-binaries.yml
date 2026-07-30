@@ -1,7 +1,11 @@
-name: Build cache
+name: App binaries
 
-# Builds app binaries from source and keeps them in a recipe-keyed cache, so the
+# Builds app binaries from source and keeps them on a long-lived release, so the
 # catalogue can serve binaries Kira built rather than binaries it was handed.
+#
+# Not to be confused with the Actions cache under Settings -> Actions -> Caches,
+# which holds cargo build caches and nothing to do with app binaries. These live
+# as release assets, at releases/tag/app-binaries.
 #
 # The toolchain container has no Rust, so `kira` is cross-compiled to a static
 # musl binary first and carried in. That also means the container job needs no
@@ -14,7 +18,7 @@ on:
   # A push to this branch is the practical trigger: dispatching requires admin
   # rights, which not every contributor's token has.
   push:
-    branches: [build-cache]
+    branches: [app-binaries]
   workflow_dispatch:
     inputs:
       sdk_ref:
@@ -26,7 +30,7 @@ on:
         required: true
         default: '1.3.0'
       publish:
-        description: 'Upload the results to the cache release'
+        description: 'Upload the results to the app-binaries release'
         type: boolean
         required: false
         default: false
@@ -38,7 +42,7 @@ env:
   # Pinned by digest: a re-pushed tag would silently change the output, and the
   # digest is part of every recipe key.
   TOOLCHAIN: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
-  CACHE_TAG: build-cache
+  BINARIES_TAG: app-binaries
 
 jobs:
   tool:
@@ -120,12 +124,12 @@ jobs:
         run: |
           set -euo pipefail
           # A missing release simply means an empty cache.
-          if gh release view "$CACHE_TAG" -R "$GITHUB_REPOSITORY" --json assets \
+          if gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" --json assets \
                --jq '.assets[].name' > available.txt 2>/dev/null; then
-            echo "cache holds $(wc -l < available.txt) artifact(s)"
+            echo "store holds $(wc -l < available.txt) artifact(s)"
           else
             : > available.txt
-            echo "no cache release yet; treating the cache as empty"
+            echo "no app-binaries release yet; treating the store as empty"
           fi
 
       - name: Plan
@@ -178,7 +182,7 @@ jobs:
             echo "built=$(ls artifacts/*.uapp 2>/dev/null | wc -l | tr -d ' ')"
           } > artifacts/MANIFEST.txt
           {
-            echo "### Build cache"
+            echo "### App binaries"
             echo
             echo "| app | asset | bytes |"
             echo "| --- | --- | --- |"
@@ -195,9 +199,11 @@ jobs:
           # even when nothing needed building.
           path: artifacts/
           if-no-files-found: error
+          # Redundant once uploaded to the release; no need to keep it 90 days.
+          retention-days: 7
 
   publish:
-    name: Upload to the cache release
+    name: Upload to the app-binaries release
     needs: build
     if: inputs.publish == true
     runs-on: ubuntu-latest
@@ -220,17 +226,17 @@ jobs:
           shopt -s nullglob
           built=(artifacts/*.uapp)
           if [ ${#built[@]} -eq 0 ]; then
-            echo "nothing new to upload; the cache already had everything"
+            echo "nothing new to upload; every binary was already stored"
             exit 0
           fi
 
           # One long-lived release acting as a content-addressed store. Artifacts
           # are named by recipe, so uploads never need to replace anything.
-          if ! gh release view "$CACHE_TAG" >/dev/null 2>&1; then
-            gh release create "$CACHE_TAG" \
-              --title "Build cache" \
-              --notes "Binaries Kira built from source, named by recipe key. Not a user-facing release." \
+          if ! gh release view "$BINARIES_TAG" >/dev/null 2>&1; then
+            gh release create "$BINARIES_TAG" \
+              --title "App binaries" \
+              --notes "Binaries Kira built from source, named by recipe key. A store for the build pipeline, not a user-facing release." \
               --latest=false
           fi
-          gh release upload "$CACHE_TAG" "${built[@]}" --clobber
-          echo "cache now holds $(gh release view "$CACHE_TAG" --json assets --jq '.assets | length') artifact(s)"
+          gh release upload "$BINARIES_TAG" "${built[@]}" --clobber
+          echo "store now holds $(gh release view "$BINARIES_TAG" --json assets --jq '.assets | length') artifact(s)"
