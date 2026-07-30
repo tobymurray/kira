@@ -1,0 +1,109 @@
+name: Catalogue
+
+# Rebuilds the catalogue from the newest una-apps release and publishes the site
+# to GitHub Pages. Apps are not rebuilt here: the UNA SDK's own CI already
+# builds every app in its ARM toolchain container and publishes the binaries as
+# a release asset, so Kira consumes that.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Daily, to pick up a new apps-v* release without a manual nudge.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'apps-v* tag to publish (blank = latest non-prerelease)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run tests
+        run: npm test
+
+      - name: Pick the release to publish
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED" ]; then
+            tag="$REQUESTED"
+          else
+            # Newest non-prerelease tag beginning apps-v. The release list is
+            # newest-first, so the first match wins.
+            tag=$(gh release list -R UNAWatch/una-sdk --limit 100 \
+                    --json tagName,isPrerelease \
+                    --jq '[.[] | select(.isPrerelease == false)
+                              | select(.tagName | startswith("apps-v"))][0].tagName')
+          fi
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "No apps-v* release found upstream." >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing $tag"
+
+      - name: Download the app binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release apps
+          gh release download "$TAG" -R UNAWatch/una-sdk -D release --clobber
+          # The release ships a single zip of per-app subfolders.
+          zip=$(find release -name '*.zip' | head -n 1)
+          [ -n "$zip" ] || { echo "No zip asset in $TAG" >&2; exit 1; }
+          unzip -q "$zip" -d apps
+          find apps -name '*.uapp' | sort
+
+      - name: Build the catalogue
+        run: |
+          node tools/build-catalog.mjs \
+            --src apps \
+            --out site \
+            --repo UNAWatch/una-sdk \
+            --tag '${{ steps.pick.outputs.tag }}'
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Summary
+        run: |
+          echo "Published ${{ needs.build.outputs.tag }} to ${{ steps.deploy.outputs.page_url }}" \
+            >> "$GITHUB_STEP_SUMMARY"

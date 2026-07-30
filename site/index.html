@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kira — an app store for UNA Watch</title>
+    <meta
+      name="description"
+      content="Install and update apps on a USB-connected UNA Watch from your browser. Unofficial."
+    />
+    <link rel="stylesheet" href="kira.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="wrap">
+        <h1>Kira</h1>
+        <p class="tagline">An app store for UNA&nbsp;Watch</p>
+        <p class="unaffiliated">
+          Unofficial. Not affiliated with, endorsed or sponsored by UNA Watch Ltd.
+        </p>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section id="connect" class="panel">
+        <div class="panel-head">
+          <h2>Your watch</h2>
+          <span id="source" class="muted"></span>
+        </div>
+
+        <div id="connect-body">
+          <p id="connect-blurb" class="muted">
+            Connect the watch by USB and wait for it to appear as a drive, then pick it below.
+          </p>
+
+          <div class="row">
+            <button id="pick" class="primary" type="button" hidden>Connect watch</button>
+
+            <label id="pick-fallback" class="button" hidden>
+              <input id="pick-input" type="file" webkitdirectory multiple hidden />
+              Choose the watch’s <code>Apps</code> folder
+            </label>
+
+            <button id="verify" class="ghost" type="button" hidden>Verify flash</button>
+            <button id="forget" class="ghost" type="button" hidden>Disconnect</button>
+          </div>
+
+          <p id="readonly-note" class="note" hidden>
+            This browser can read the watch but cannot write to it — only Chromium-based desktop
+            browsers (Chrome, Edge, Opera) implement the directory-write API. You will get a
+            ready-to-run install script instead.
+          </p>
+
+          <div id="status" class="status" hidden></div>
+        </div>
+      </section>
+
+      <section id="plan-section" class="panel" hidden>
+        <div class="panel-head">
+          <h2>Pending changes</h2>
+          <span id="plan-summary" class="muted"></span>
+        </div>
+        <div id="plan-actions" class="row"></div>
+        <div id="plan-list"></div>
+        <details id="script-details" hidden>
+          <summary>Install script</summary>
+          <div class="row script-row">
+            <button id="script-copy" class="ghost" type="button">Copy</button>
+            <button id="script-download" class="ghost" type="button">Download</button>
+            <select id="script-kind">
+              <option value="ps1">Windows — PowerShell</option>
+              <option value="sh">macOS / Linux — sh</option>
+            </select>
+          </div>
+          <pre id="script-body" class="script"></pre>
+        </details>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Catalogue</h2>
+          <span id="catalogue-meta" class="muted"></span>
+        </div>
+        <div id="catalogue" aria-busy="true">
+          <p class="muted">Loading catalogue…</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <p>
+        Kira is an independent project. “UNA”, “UNA Watch” and the UNA logo are trademarks of UNA
+        Watch Ltd, used here only to state compatibility. App binaries are redistributed from the
+        UNA SDK’s public releases under the MIT licence — see
+        <a href="https://github.com/tobymurray/kira/blob/main/THIRD-PARTY.md">THIRD-PARTY.md</a>.
+      </p>
+      <p>
+        Installing writes files to a removable drive. Kira never deletes an app folder, so
+        <code>settings.json</code> and <code>Activity/</code> are preserved.
+        <a href="https://github.com/tobymurray/kira">Source</a>
+      </p>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

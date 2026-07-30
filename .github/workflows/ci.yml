@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+
+      # Prove the catalogue builds from a real release, not just that units pass.
+      - name: Build against the latest upstream release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list -R UNAWatch/una-sdk --limit 100 \
+                  --json tagName,isPrerelease \
+                  --jq '[.[] | select(.isPrerelease == false)
+                            | select(.tagName | startswith("apps-v"))][0].tagName')
+          mkdir -p release apps
+          gh release download "$tag" -R UNAWatch/una-sdk -D release --clobber
+          unzip -q "$(find release -name '*.zip' | head -n 1)" -d apps
+          node tools/build-catalog.mjs --src apps --out site --repo UNAWatch/una-sdk --tag "$tag"
+          test -s site/data/catalog.json
+          test -s site/lib/uapp.js
