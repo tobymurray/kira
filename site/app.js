@@ -275,6 +275,18 @@ function renderCard(app, target, entry) {
     `${fmtSize(target.size)}${target.autostart ? ' · autostarts' : ''} · ${describeHistory(app)}`;
   body.appendChild(meta);
 
+  // Upstream has reassigned AppIDs: three Glances carry one ID up to
+  // apps-v0.1.9-rc1 and a different one after. Those are separate identities as
+  // far as the watch and the phone are concerned, so they stay separate entries
+  // — but say which is which rather than showing two identical-looking cards.
+  if (duplicateNames.has(app.name)) {
+    const id = document.createElement('div');
+    id.className = 'meta appid';
+    id.textContent = `AppID ${app.appId}`;
+    id.title = 'Another entry shares this name under a different AppID';
+    body.appendChild(id);
+  }
+
   // Upstream offers no way to fetch a specific build, so every published
   // version is selectable here. Newest is the default.
   if (app.versions.length > 1) {
@@ -326,10 +338,17 @@ async function pinVersion(app, version) {
   else renderCatalogue();
 }
 
+/** Display names shared by more than one AppID, so cards can disambiguate. */
+let duplicateNames = new Set();
+
 function renderCatalogue() {
   const root = el('catalogue');
   root.removeAttribute('aria-busy');
   root.textContent = '';
+
+  const counts = new Map();
+  for (const a of state.catalog.apps) counts.set(a.name, (counts.get(a.name) ?? 0) + 1);
+  duplicateNames = new Set([...counts].filter(([, n]) => n > 1).map(([name]) => name));
 
   const byId = new Map((state.plan?.entries ?? []).map((e) => [e.app.appId, e]));
   const seen = new Set();

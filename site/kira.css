@@ -294,6 +294,13 @@ button.ghost:hover:not(:disabled),
   color: var(--ink-soft);
 }
 
+.meta.appid {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  opacity: 0.8;
+  margin-bottom: 4px;
+}
+
 select.version {
   font-size: 12px;
   padding: 3px 6px;
