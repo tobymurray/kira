@@ -234,7 +234,13 @@ daily on a schedule, or via *Run workflow* (optionally pinning a specific
 **Settings → Pages → Source** must be set to **GitHub Actions**.
 
 All asset paths are resolved relative to the page's own URL, so the site works
-unchanged at a `github.io/kira/` subpath or on a custom domain.
+unchanged at a `github.io/kira/` subpath or on a custom domain. The domain lives
+in `site/CNAME` as well as the repository settings, so a deploy cannot drop it.
+
+**The custom domain must serve HTTPS.** The File System Access API requires a
+secure context, so on plain HTTP the install path silently disappears and every
+visitor gets the read-only tier. Enforce HTTPS in Settings → Pages once GitHub has
+issued the certificate.
 
 ## Known limitations
 
