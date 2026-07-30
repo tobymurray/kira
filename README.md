@@ -170,6 +170,14 @@ It cross-checks the planner against hashes it recomputes itself, so it holds for
 whichever two releases it is given, with the known 1.2.0-to-1.3.0 split pinned as
 a regression check. CI runs it against the two newest releases.
 
+### Reproducible builds
+
+Every app Kira serves is built from source by a recipe that pins the SDK
+revision, the toolchain container digest, the stamped version and the flags. See
+[docs/reproducibility.md](docs/reproducibility.md) for what that rests on, what
+has been verified, and the weak points — including the fact that reproducibility
+is not authenticity.
+
 ### Module size
 
 The published `.wasm` is ~58 kB gzipped, and the whole page is ~100 kB:
