@@ -45,8 +45,8 @@ jobs:
     name: Build the kira binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -65,7 +65,7 @@ jobs:
           cargo build --release -p kira-cli --target x86_64-unknown-linux-musl
           file target/x86_64-unknown-linux-musl/release/kira
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kira-bin
           path: target/x86_64-unknown-linux-musl/release/kira
@@ -84,7 +84,7 @@ jobs:
           apt-get update
           apt-get install -y bash git python3-full python3-pip python-is-python3 cmake curl jq
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: UNAWatch/una-sdk
           ref: ${{ inputs.sdk_ref || 'apps-v1.3.0' }}
@@ -93,7 +93,7 @@ jobs:
       - name: Install packer requirements
         run: python3 -m pip install --break-system-packages -r sdk/Utilities/Scripts/app_packer/requirements.txt
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: kira-bin
           path: /usr/local/bin
@@ -188,7 +188,7 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: built-uapps
           # The whole directory, so MANIFEST.txt guarantees the artifact exists
@@ -204,8 +204,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: built-uapps
           path: artifacts
