@@ -22,6 +22,7 @@ import {
   powershellScript,
   shellScript,
 } from './lib/plan.js';
+import { SCHEMA, describeHistory, latestOf, resolveTargets } from './lib/catalog.js';
 
 const CAN_WRITE = typeof window.showDirectoryPicker === 'function';
 const DATA_BASE = new URL('data', location.href).href.replace(/\/$/, '');
@@ -37,6 +38,10 @@ const state = {
   appsDir: null, // FileSystemDirectoryHandle, write mode only
   installed: [],
   plan: null,
+  /** appId -> version, for anything the user pinned away from the newest. */
+  pinned: new Map(),
+  /** One chosen version per app, flattened for the planner. */
+  targets: [],
 };
 
 // ---------------------------------------------------------------- utilities
@@ -121,14 +126,66 @@ async function loadCatalog() {
   const res = await fetch(`${DATA_BASE}/catalog.json`, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`catalog.json: HTTP ${res.status}`);
   const catalog = await res.json();
-  if (catalog.schema !== 1) throw new Error(`unsupported catalogue schema ${catalog.schema}`);
+  if (catalog.schema !== SCHEMA) {
+    throw new Error(`unsupported catalogue schema ${catalog.schema} (expected ${SCHEMA})`);
+  }
   state.catalog = catalog;
+  retarget();
 
-  const { source, generated, apps } = catalog;
-  const when = new Date(generated).toLocaleDateString();
-  const src = source?.tag ? `${source.tag} · ` : '';
-  el('catalogue-meta').textContent = `${src}${apps.length} apps · built ${when}`;
+  const versions = catalog.apps.reduce((n, a) => n + a.versions.length, 0);
+  const when = new Date(catalog.generated).toLocaleDateString();
+  el('catalogue-meta').textContent =
+    `${catalog.apps.length} apps · ${versions} versions · ` +
+    `${catalog.releases.length} releases · built ${when}`;
+  renderReleaseNotes();
   return catalog;
+}
+
+/** Re-resolve which version of each app is selected. */
+function retarget() {
+  state.targets = resolveTargets(state.catalog, state.pinned);
+}
+
+/** The version currently selected for an app. */
+function targetFor(appId) {
+  return state.targets.find((t) => t.appId === appId);
+}
+
+/**
+ * Upstream release bodies, rendered as text.
+ *
+ * Deliberately not parsed as Markdown or injected as HTML: this is third-party
+ * content fetched from another project's releases.
+ */
+function renderReleaseNotes() {
+  const root = el('release-notes');
+  root.textContent = '';
+
+  for (const release of state.catalog.releases) {
+    const box = document.createElement('details');
+    const summary = document.createElement('summary');
+    const date = release.publishedAt
+      ? new Date(release.publishedAt).toLocaleDateString()
+      : 'date unknown';
+    summary.textContent = `${release.tag} · ${date} · ${release.appCount} apps`;
+    box.appendChild(summary);
+
+    const body = document.createElement('pre');
+    body.className = 'notes';
+    body.textContent = release.notes || 'No release notes published upstream.';
+    box.appendChild(body);
+
+    if (release.url) {
+      const link = document.createElement('a');
+      link.className = 'dl';
+      link.href = release.url;
+      link.rel = 'noopener noreferrer';
+      link.target = '_blank';
+      link.textContent = 'Upstream release →';
+      box.appendChild(link);
+    }
+    root.appendChild(box);
+  }
 }
 
 function statusLabel(status, entry) {
@@ -178,7 +235,12 @@ const TYPE_SECTIONS = [
   },
 ];
 
-function renderCard(app, entry) {
+/**
+ * @param {object} app     catalogue record, with the full version list
+ * @param {object} target  the version currently selected for this app
+ * @param {object} [entry] plan entry, when a watch is connected
+ */
+function renderCard(app, target, entry) {
   const card = document.createElement('div');
   card.className = 'card';
 
@@ -209,8 +271,29 @@ function renderCard(app, entry) {
   const meta = document.createElement('div');
   meta.className = 'meta';
   // The type is the section heading here, so the card need not repeat it.
-  meta.textContent = `${app.version} · ${fmtSize(app.size)}${app.autostart ? ' · autostarts' : ''}`;
+  meta.textContent =
+    `${fmtSize(target.size)}${target.autostart ? ' · autostarts' : ''} · ${describeHistory(app)}`;
   body.appendChild(meta);
+
+  // Upstream offers no way to fetch a specific build, so every published
+  // version is selectable here. Newest is the default.
+  if (app.versions.length > 1) {
+    const picker = document.createElement('select');
+    picker.className = 'version';
+    picker.setAttribute('aria-label', `Version of ${app.name}`);
+    for (const v of app.versions) {
+      const option = document.createElement('option');
+      option.value = v.version;
+      const tags = [];
+      if (v.version === latestOf(app).version) tags.push('latest');
+      if (v.changed === false) tags.push('same code');
+      option.textContent = tags.length ? `${v.version} · ${tags.join(' · ')}` : v.version;
+      option.selected = v.version === target.version;
+      picker.appendChild(option);
+    }
+    picker.addEventListener('change', () => void pinVersion(app, picker.value));
+    body.appendChild(picker);
+  }
 
   if (entry) {
     const [text, cls] = statusLabel(entry.status, entry);
@@ -221,14 +304,26 @@ function renderCard(app, entry) {
   } else {
     const dl = document.createElement('a');
     dl.className = 'dl';
-    dl.href = `${DATA_BASE}/${app.download}`;
-    dl.textContent = 'Download .uapp';
-    dl.setAttribute('download', app.file);
+    dl.href = `${DATA_BASE}/${target.download}`;
+    dl.textContent = `Download ${target.version}`;
+    dl.setAttribute('download', target.file);
     body.appendChild(dl);
   }
 
   card.appendChild(body);
   return card;
+}
+
+/** Pin an app to a specific version, or back to newest, and re-plan. */
+async function pinVersion(app, version) {
+  if (version === latestOf(app).version) state.pinned.delete(app.appId);
+  else state.pinned.set(app.appId, version);
+  retarget();
+
+  // The chosen version changes what counts as an update, and its payload hash
+  // has to be compared against the watch again.
+  if (state.mode) await refreshInventory();
+  else renderCatalogue();
 }
 
 function renderCatalogue() {
@@ -266,7 +361,7 @@ function renderCatalogue() {
     const grid = document.createElement('div');
     grid.className = 'grid';
     for (const app of apps.sort((a, b) => a.name.localeCompare(b.name))) {
-      grid.appendChild(renderCard(app, byId.get(app.appId)));
+      grid.appendChild(renderCard(app, targetFor(app.appId), byId.get(app.appId)));
     }
     group.appendChild(grid);
     root.appendChild(group);
@@ -282,7 +377,9 @@ function renderCatalogue() {
     group.appendChild(h3);
     const grid = document.createElement('div');
     grid.className = 'grid';
-    for (const app of rest) grid.appendChild(renderCard(app, byId.get(app.appId)));
+    for (const app of rest) {
+      grid.appendChild(renderCard(app, targetFor(app.appId), byId.get(app.appId)));
+    }
     group.appendChild(grid);
     root.appendChild(group);
   }
@@ -491,7 +588,7 @@ async function verifyFlash() {
   for (const entry of state.plan.entries) {
     const { app, installed } = entry;
     if (!installed) continue;
-    const expected = state.catalog.apps.find((a) => a.appId === app.appId);
+    const expected = targetFor(app.appId);
     if (installed.file !== expected.file) {
       log(`  [stale   ] ${installed.folder}/${installed.file} (expected ${expected.file})`, 'bad');
       bad++;
@@ -674,11 +771,11 @@ async function refreshInventory() {
   if (state.mode === 'write') {
     state.installed = await readInstalledFromHandles(state.appsDir);
   }
-  state.plan = buildPlan(state.catalog, state.installed);
+  state.plan = buildPlan({ apps: state.targets }, state.installed);
 
   // Re-plan once the payload hashes are known, so labels reflect them.
   if (await deepenUpdateCandidates(state.plan)) {
-    state.plan = buildPlan(state.catalog, state.installed);
+    state.plan = buildPlan({ apps: state.targets }, state.installed);
   }
 
   renderPlan();

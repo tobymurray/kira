@@ -1,9 +1,12 @@
 name: Catalogue
 
-# Rebuilds the catalogue from the newest una-apps release and publishes the site
-# to GitHub Pages. Apps are not rebuilt here: the UNA SDK's own CI already
-# builds every app in its ARM toolchain container and publishes the binaries as
-# a release asset, so Kira consumes that.
+# Rebuilds the catalogue from the una-apps releases and publishes the site to
+# GitHub Pages. Apps are not rebuilt here: the UNA SDK's own CI already builds
+# every app in its ARM toolchain container and publishes the binaries as a
+# release asset, so Kira consumes that.
+#
+# Every published apps-v* release is included, not just the newest, because
+# upstream offers no way to fetch a specific older build.
 
 on:
   push:
@@ -14,7 +17,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'apps-v* tag to publish (blank = latest non-prerelease)'
+        description: 'Publish only this apps-v* tag (blank = every published release)'
+        required: false
+        default: ''
+      max_releases:
+        description: 'Cap how many releases to include, newest first (blank = all)'
         required: false
         default: ''
 
@@ -29,7 +36,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.pick.outputs.tag }}
+      releases: ${{ steps.fetch.outputs.count }}
     steps:
       - uses: actions/checkout@v5
 
@@ -40,51 +47,73 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Pick the release to publish
-        id: pick
+      - name: Fetch release list and notes
+        id: fetch
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUESTED: ${{ inputs.tag }}
+          ONLY_TAG: ${{ inputs.tag }}
+          MAX: ${{ inputs.max_releases }}
         run: |
           set -euo pipefail
-          if [ -n "$REQUESTED" ]; then
-            tag="$REQUESTED"
+          # Stream one object per release and slurp: with --paginate, a --jq that
+          # builds an array emits one array PER PAGE, which is not valid JSON.
+          gh api --paginate repos/UNAWatch/una-sdk/releases \
+            --jq '.[]
+                  | select(.prerelease == false)
+                  | select(.tag_name | startswith("apps-v"))
+                  | {tag: .tag_name, publishedAt: .published_at, url: .html_url,
+                     isPrerelease: .prerelease, notes: .body}' \
+            | jq -s 'sort_by(.publishedAt) | reverse' > all-releases.json
+
+          if [ -n "$ONLY_TAG" ]; then
+            jq --arg t "$ONLY_TAG" '[.[] | select(.tag == $t)]' all-releases.json > releases.json
+          elif [ -n "$MAX" ]; then
+            jq --argjson n "$MAX" '.[:$n]' all-releases.json > releases.json
           else
-            # Newest non-prerelease tag beginning apps-v. The release list is
-            # newest-first, so the first match wins.
-            tag=$(gh release list -R UNAWatch/una-sdk --limit 100 \
-                    --json tagName,isPrerelease \
-                    --jq '[.[] | select(.isPrerelease == false)
-                              | select(.tagName | startswith("apps-v"))][0].tagName')
+            cp all-releases.json releases.json
           fi
-          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
-            echo "No apps-v* release found upstream." >&2
+
+          count=$(jq 'length' releases.json)
+          if [ "$count" -eq 0 ]; then
+            echo "No matching apps-v* releases found." >&2
             exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Publishing $tag"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "  \(.tag)\t\(.publishedAt)"' releases.json
 
       - name: Download the app binaries
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.pick.outputs.tag }}
         run: |
           set -euo pipefail
-          mkdir -p release apps
-          gh release download "$TAG" -R UNAWatch/una-sdk -D release --clobber
-          # The release ships a single zip of per-app subfolders.
-          zip=$(find release -name '*.zip' | head -n 1)
-          [ -n "$zip" ] || { echo "No zip asset in $TAG" >&2; exit 1; }
-          unzip -q "$zip" -d apps
-          find apps -name '*.uapp' | sort
+          mkdir -p apps zips
+          for tag in $(jq -r '.[].tag' releases.json); do
+            mkdir -p "zips/$tag" "apps/$tag"
+            gh release download "$tag" -R UNAWatch/una-sdk -D "zips/$tag" --clobber
+            zip=$(find "zips/$tag" -name '*.zip' | head -n 1)
+            if [ -z "$zip" ]; then
+              echo "::warning::$tag has no zip asset, skipping"
+              rmdir "apps/$tag"; continue
+            fi
+            unzip -q "$zip" -d "apps/$tag"
+            # Older releases may not use the per-app subfolder layout. Skip those
+            # rather than letting one odd release fail the whole build; the build
+            # tool stays strict about what it does accept.
+            if [ -z "$(find "apps/$tag" -mindepth 2 -name '*.uapp' -print -quit)" ]; then
+              echo "::warning::$tag has no <Folder>/*.uapp after unzip, skipping"
+              rm -rf "apps/$tag"; continue
+            fi
+            echo "$tag: $(find "apps/$tag" -name '*.uapp' | wc -l | tr -d ' ') apps"
+          done
+          test -n "$(ls -A apps)" || { echo "No usable releases downloaded." >&2; exit 1; }
 
       - name: Build the catalogue
         run: |
           node tools/build-catalog.mjs \
             --src apps \
             --out site \
-            --repo UNAWatch/una-sdk \
-            --tag '${{ steps.pick.outputs.tag }}'
+            --releases releases.json \
+            --repo UNAWatch/una-sdk
 
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -105,5 +134,5 @@ jobs:
 
       - name: Summary
         run: |
-          echo "Published ${{ needs.build.outputs.tag }} to ${{ steps.deploy.outputs.page_url }}" \
+          echo "Published ${{ needs.build.outputs.releases }} release(s) to ${{ steps.deploy.outputs.page_url }}" \
             >> "$GITHUB_STEP_SUMMARY"

@@ -1,25 +1,29 @@
 #!/usr/bin/env node
 /**
- * Build the Kira catalogue from a directory of `.uapp` files.
+ * Build the Kira catalogue (schema 2) from one or more una-apps releases.
  *
- * Input layout is the una-apps release zip's own layout — one subdirectory per
- * app, each holding exactly one .uapp:
+ * Input is the release zips' own layout — one directory per app, each holding
+ * exactly one .uapp — either directly under --src for a single release, or
+ * nested one level under a release tag:
  *
- *   <src>/GlanceHR/Live_HR_1.3.0.uapp
- *   <src>/Alarm/Alarm_1.3.0.uapp
+ *   <src>/apps-v1.3.0/GlanceHR/Live_HR_1.3.0.uapp     (multi-release)
+ *   <src>/GlanceHR/Live_HR_1.3.0.uapp                 (single, tag from --tag)
  *
- * The subdirectory name matters: it is the folder the watch expects under
+ * The app directory name matters: it is the folder the watch expects under
  * Apps\ , and it is NOT derivable from the app's display name (GlanceARHR is
  * named "AVG / R HR", which contains a path separator). Everything else comes
- * out of the .uapp header itself.
+ * out of the .uapp header.
+ *
+ * Release notes and dates come from --releases, a JSON array of
+ * {tag, publishedAt, url, isPrerelease, notes}. This tool does no network I/O:
+ * the workflow fetches that, so builds stay hermetic and testable.
  *
  * Also copies the shared ES modules from src/ into <out>/lib/ so the browser
- * runs the very same parser as this build, with no second implementation to
- * drift.
+ * runs the very same code as this build, with no second implementation.
  *
  * Usage:
  *   node tools/build-catalog.mjs --src <dir> --out site \
- *        [--repo UNAWatch/una-sdk] [--tag apps-v1.3.0]
+ *        [--releases releases.json] [--repo UNAWatch/una-sdk] [--tag apps-v1.3.0]
  */
 
 import { createHash } from 'node:crypto';
@@ -27,14 +31,15 @@ import { copyFile, readdir, readFile, mkdir, writeFile, rm } from 'node:fs/promi
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SHARED_MODULES = ['uapp.js', 'plan.js'];
-const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
-
-import { parseUapp, decodeIcon, isBlankIcon, payloadOf } from '../src/uapp.js';
+import { parseUapp, decodeIcon, isBlankIcon, payloadOf, compareVersions } from '../src/uapp.js';
+import { SCHEMA, sortReleases } from '../src/catalog.js';
 import { encodePng } from '../src/png.js';
 
+const SHARED_MODULES = ['uapp.js', 'plan.js', 'catalog.js'];
+const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+
 function parseArgs(argv) {
-  const args = { src: null, out: 'site', repo: null, tag: null };
+  const args = { src: null, out: 'site', repo: null, tag: null, releases: null };
   for (let i = 2; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     if (!(key in args)) throw new Error(`unknown argument: ${argv[i]}`);
@@ -44,22 +49,75 @@ function parseArgs(argv) {
   return args;
 }
 
-/** Find <src>/<Folder>/<one>.uapp, rejecting ambiguous folders. */
-async function discover(src) {
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+async function subdirs(dir) {
+  return (await readdir(dir, { withFileTypes: true }))
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/** Find <root>/<Folder>/<one>.uapp, rejecting ambiguous folders. */
+async function discoverApps(root) {
   const found = [];
-  for (const entry of await readdir(src, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const dir = join(src, entry.name);
+  for (const folder of await subdirs(root)) {
+    const dir = join(root, folder);
     const uapps = (await readdir(dir)).filter((f) => f.toLowerCase().endsWith('.uapp'));
     if (uapps.length === 0) continue;
     if (uapps.length > 1) {
       // The watch loads the FIRST .uapp it finds in a folder, so shipping two
       // is never right — refuse rather than pick arbitrarily.
-      throw new Error(`${entry.name}: ${uapps.length} .uapp files, expected 1: ${uapps.join(', ')}`);
+      throw new Error(`${folder}: ${uapps.length} .uapp files, expected 1: ${uapps.join(', ')}`);
     }
-    found.push({ folder: entry.name, file: uapps[0], path: join(dir, uapps[0]) });
+    found.push({ folder, file: uapps[0], path: join(dir, uapps[0]) });
   }
-  return found.sort((a, b) => a.folder.localeCompare(b.folder));
+  return found;
+}
+
+/**
+ * Single release directly under --src, or one directory per release tag?
+ * Decided by looking for .uapp files one level down.
+ */
+async function detectLayout(src) {
+  for (const child of await subdirs(src)) {
+    const files = await readdir(join(src, child));
+    if (files.some((f) => f.toLowerCase().endsWith('.uapp'))) return 'single';
+  }
+  return 'multi';
+}
+
+/** Parse every app in one release directory. */
+async function readRelease(tag, dir) {
+  const apps = [];
+  const seen = new Map();
+
+  for (const { folder, file, path } of await discoverApps(dir)) {
+    const bytes = new Uint8Array(await readFile(path));
+    const app = parseUapp(bytes);
+
+    // A CRC failure means the kernel would silently drop this file. Never
+    // publish one: the user would install it and see nothing appear.
+    if (!app.crc.ok) {
+      throw new Error(
+        `${tag}/${folder}/${file}: CRC mismatch (stored 0x${app.crc.stored?.toString(16)}, ` +
+          `computed 0x${app.crc.computed?.toString(16)}) — refusing to publish`,
+      );
+    }
+    // Within one release an AppID must be unique; across releases it repeats by
+    // design, which is how versions are grouped.
+    if (seen.has(app.appId)) {
+      throw new Error(
+        `${tag}: duplicate AppID ${app.appId} in ${folder} and ${seen.get(app.appId)}`,
+      );
+    }
+    seen.set(app.appId, folder);
+
+    apps.push({ tag, folder, file, bytes, app });
+  }
+
+  if (apps.length === 0) throw new Error(`${tag}: no <Folder>/*.uapp found under ${dir}`);
+  return apps;
 }
 
 async function main() {
@@ -68,10 +126,21 @@ async function main() {
   const site = resolve(args.out);
   const out = join(site, 'data');
 
-  const candidates = await discover(src);
-  if (candidates.length === 0) {
-    throw new Error(`no <Folder>/*.uapp found under ${src}`);
+  const layout = await detectLayout(src);
+  const releaseDirs =
+    layout === 'single'
+      ? [{ tag: args.tag ?? 'unversioned', dir: src }]
+      : (await subdirs(src)).map((tag) => ({ tag, dir: join(src, tag) }));
+
+  let meta = [];
+  if (args.releases) {
+    meta = JSON.parse(await readFile(resolve(args.releases), 'utf8'));
+    if (!Array.isArray(meta)) throw new Error('--releases must contain a JSON array');
   }
+  const metaFor = new Map(meta.map((r) => [r.tag, r]));
+
+  // Newest release first, so each app's version list is newest first too.
+  const ordered = sortReleases(releaseDirs.map((r) => ({ ...r, ...metaFor.get(r.tag) })));
 
   await rm(join(out, 'icons'), { recursive: true, force: true });
   await rm(join(out, 'apps'), { recursive: true, force: true });
@@ -83,93 +152,115 @@ async function main() {
     await copyFile(join(SRC_DIR, name), join(site, 'lib', name));
   }
 
-  const apps = [];
-  const seen = new Map();
+  /** appId -> catalogue entry under construction */
+  const apps = new Map();
+  const releases = [];
+  let totalBytes = 0;
 
-  for (const { folder, file, path } of candidates) {
-    const bytes = new Uint8Array(await readFile(path));
-    const app = parseUapp(bytes);
+  for (const release of ordered) {
+    const entries = await readRelease(release.tag, release.dir);
+    console.log(`${release.tag}: ${entries.length} apps`);
 
-    // A CRC failure means the kernel would silently drop this file. Never
-    // publish one: the user would install it and see nothing appear.
-    if (!app.crc.ok) {
-      throw new Error(
-        `${folder}/${file}: CRC mismatch (stored 0x${app.crc.stored?.toString(16)}, ` +
-          `computed 0x${app.crc.computed?.toString(16)}) — refusing to publish`,
-      );
+    for (const { tag, folder, file, bytes, app } of entries) {
+      const download = ['apps', tag, folder, file].join('/');
+      await mkdir(join(out, 'apps', tag, folder), { recursive: true });
+      await writeFile(join(out, download), bytes);
+      totalBytes += bytes.length;
+
+      if (!apps.has(app.appId)) {
+        apps.set(app.appId, {
+          appId: app.appId,
+          name: app.name,
+          type: app.type,
+          folder,
+          versions: [],
+          // Filled from the newest version that actually carries icon pixels.
+          icon: undefined,
+          iconSmall: undefined,
+        });
+      }
+      const entry = apps.get(app.appId);
+
+      // Same version published under two tags: keep the newer release's copy.
+      if (entry.versions.some((v) => v.version === app.version)) continue;
+
+      entry.versions.push({
+        version: app.version,
+        versionPacked: app.appVersion,
+        tag,
+        folder,
+        file,
+        libcVersion: app.libcVersionStr,
+        autostart: app.autostart,
+        size: bytes.length,
+        sha256: sha256(bytes),
+        // Hash of the code alone, with the version stamp and CRC excluded, so
+        // "the code changed" can be told from "the release tag moved".
+        payloadSha256: sha256(payloadOf(bytes)),
+        download,
+      });
+
+      // Icons come from the newest version that has any, since a declared size
+      // does not mean there are pixels: Glance apps built with icons off carry a
+      // zero-filled field of the full size.
+      for (const [key, offset, size, suffix] of [
+        ['icon', app.normalIconOffset, app.normalIconSize, ''],
+        ['iconSmall', app.smallIconOffset, app.smallIconSize, '@30'],
+      ]) {
+        if (entry[key] || !size) continue;
+        const raw = bytes.subarray(offset, offset + size);
+        if (isBlankIcon(raw)) continue;
+        const { width, height, rgba } = decodeIcon(raw);
+        const rel = `icons/${app.appId}${suffix}.png`;
+        await writeFile(join(out, rel), encodePng(rgba, width, height));
+        entry[key] = rel;
+      }
     }
 
-    if (seen.has(app.appId)) {
-      throw new Error(
-        `duplicate AppID ${app.appId}: ${folder} and ${seen.get(app.appId)} — ` +
-          'the catalogue is keyed by AppID and cannot hold both',
-      );
-    }
-    seen.set(app.appId, folder);
-
-    // Icons: 60x60 for the grid, 30x30 kept because that is what the watch
-    // shows in lists and it is free to emit.
-    //
-    // A declared size does not mean there is an image: Glance apps built with
-    // icons off carry a zero-filled field of the full size. Emitting those as
-    // PNGs would put invisible tiles in the grid, so they are skipped and the
-    // UI falls back to a lettered placeholder.
-    const icons = {};
-    for (const [label, offset, size, suffix] of [
-      ['icon', app.normalIconOffset, app.normalIconSize, ''],
-      ['iconSmall', app.smallIconOffset, app.smallIconSize, '@30'],
-    ]) {
-      if (!size) continue;
-      const raw = bytes.subarray(offset, offset + size);
-      if (isBlankIcon(raw)) continue;
-      const { width, height, rgba } = decodeIcon(raw);
-      const rel = join('icons', `${app.appId}${suffix}.png`);
-      await writeFile(join(out, rel), encodePng(rgba, width, height));
-      icons[label] = rel.split('\\').join('/');
-    }
-
-    const download = ['apps', folder, file].join('/');
-    await mkdir(join(out, 'apps', folder), { recursive: true });
-    await writeFile(join(out, download), bytes);
-
-    apps.push({
-      appId: app.appId,
-      name: app.name,
-      folder,
-      file,
-      version: app.version,
-      versionPacked: app.appVersion,
-      libcVersion: app.libcVersionStr,
-      type: app.type,
-      autostart: app.autostart,
-      size: app.size,
-      serviceSize: app.serviceSize,
-      guiSize: app.guiSize,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-      // Hash of the code alone, excluding the version stamp and CRC. Lets the
-      // UI tell a real update apart from a release-tag bump.
-      payloadSha256: createHash('sha256').update(payloadOf(bytes)).digest('hex'),
-      ...icons,
-      download,
+    releases.push({
+      tag: release.tag,
+      publishedAt: release.publishedAt ?? null,
+      url: release.url ?? null,
+      isPrerelease: release.isPrerelease ?? false,
+      // Upstream release bodies, verbatim. Rendered as text by the site, never
+      // as HTML — this is third-party Markdown.
+      notes: typeof release.notes === 'string' ? release.notes.trim() : null,
+      appCount: entries.length,
     });
+  }
 
-    console.log(
-      `${folder.padEnd(16)} ${app.name.padEnd(14)} ${app.version.padEnd(8)} ` +
-        `${app.type.padEnd(9)} ${String(app.size).padStart(7)} B  crc ok`,
-    );
+  // Annotate each version against the next older one: did the code move?
+  for (const entry of apps.values()) {
+    entry.versions.sort((a, b) => compareVersions(b.versionPacked, a.versionPacked));
+    entry.versions.forEach((v, i) => {
+      const older = entry.versions[i + 1];
+      // null, not false: with no predecessor published here, it is unknown.
+      v.changed = older ? v.payloadSha256 !== older.payloadSha256 : null;
+      v.deltaBytes = older ? v.size - older.size : null;
+    });
+    // Present-tense metadata tracks the newest build.
+    const latest = entry.versions[0];
+    entry.folder = latest.folder;
   }
 
   const catalog = {
-    schema: 1,
+    schema: SCHEMA,
     generated: new Date().toISOString(),
-    source: { repo: args.repo, tag: args.tag },
-    apps,
+    source: { repo: args.repo },
+    releases,
+    apps: [...apps.values()].sort((a, b) => a.name.localeCompare(b.name)),
   };
   await writeFile(join(out, 'catalog.json'), `${JSON.stringify(catalog, null, 2)}\n`);
 
-  const total = apps.reduce((n, a) => n + a.size, 0);
+  const versionCount = catalog.apps.reduce((n, a) => n + a.versions.length, 0);
+  const restamps = catalog.apps.reduce(
+    (n, a) => n + a.versions.filter((v) => v.changed === false).length,
+    0,
+  );
   console.log(
-    `\n${apps.length} apps, ${(total / 1024 / 1024).toFixed(2)} MiB of binaries -> ${out}` +
+    `\n${catalog.apps.length} apps · ${versionCount} versions across ${releases.length} release(s)` +
+      `\n${restamps} version(s) are re-stamps with identical code` +
+      `\n${(totalBytes / 1024 / 1024).toFixed(2)} MiB of binaries -> ${out}` +
       `\nshared modules -> ${join(site, 'lib')} (${SHARED_MODULES.join(', ')})`,
   );
 }

@@ -91,8 +91,7 @@ test(
     );
 
     // Sorted plainly on both sides: the planner orders by locale, which puts
-    // GlanceActivity before GlanceARHR, and that ordering is not what is under
-    // test here.
+    // GlanceActivity before GlanceARHR, and that ordering is not under test.
     const restamped = plan.entries
       .filter((e) => e.identicalPayload)
       .map((e) => e.app.folder)
@@ -102,25 +101,36 @@ test(
       .map((e) => e.app.folder)
       .sort();
 
-    // Measured from the published binaries: the six Glance apps are byte
-    // identical between 1.2.0 and 1.3.0; the other seven really changed.
-    assert.deepEqual(restamped, [
-      'GlanceARHR',
-      'GlanceActivity',
-      'GlanceBattery',
-      'GlanceFloors',
-      'GlanceHR',
-      'GlanceSteps',
-    ].sort());
-    assert.deepEqual(changed, [
-      'Alarm',
-      'Cycling',
-      'HRMonitor',
-      'Hiking',
-      'Running',
-      'Treadmill',
-      'Workout',
-    ].sort());
+    // Cross-check against the bytes, computed independently of the planner, so
+    // this holds for whichever two releases the fixtures point at.
+    const oldByFolder = new Map(collect(OLD).map((r) => [r.folder, r]));
+    const expectRestamped = [];
+    const expectChanged = [];
+    for (const { folder, bytes } of collect(NEW)) {
+      const before = oldByFolder.get(folder);
+      if (!before) continue;
+      const identical = sha(payloadOf(bytes)) === sha(payloadOf(before.bytes));
+      (identical ? expectRestamped : expectChanged).push(folder);
+    }
+    assert.deepEqual(restamped, expectRestamped.sort());
+    assert.deepEqual(changed, expectChanged.sort());
+    assert.ok(restamped.length + changed.length > 0, 'fixtures produced no comparisons');
+
+    // Regression pin for the pair this behaviour was designed against: six of
+    // the thirteen apps in apps-v1.3.0 are byte-identical to their 1.2.0 builds.
+    const oldVersion = installed[0].version;
+    const newVersion = catalog.apps[0].version;
+    if (oldVersion === '1.2.0' && newVersion === '1.3.0') {
+      assert.deepEqual(restamped, [
+        'GlanceARHR',
+        'GlanceActivity',
+        'GlanceBattery',
+        'GlanceFloors',
+        'GlanceHR',
+        'GlanceSteps',
+      ].sort());
+      assert.equal(changed.length, 7);
+    }
 
     // The label must say so rather than implying new code.
     const glance = plan.entries.find((e) => e.app.folder === 'GlanceHR');

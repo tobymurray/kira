@@ -2,16 +2,19 @@
 
 **An app store for UNA Watch.** Browse apps, see what's on your watch, and
 install or update over the USB cable — from a static web page, with no backend.
+Every published version of every app is downloadable, with release notes, and
+each version is marked according to whether the app's code actually changed.
 
 > Unofficial. Not affiliated with, endorsed or sponsored by UNA Watch Ltd.
 > See [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ## How it works
 
-There is no server. A GitHub Actions run fetches the newest `apps-v*` release
-from the [UNA SDK](https://github.com/UNAWatch/una-sdk), reads the metadata out
-of each `.uapp` binary, and publishes a catalogue plus the binaries to GitHub
-Pages. The page then talks to the watch directly as a USB mass-storage volume.
+There is no server. A GitHub Actions run fetches every published `apps-v*`
+release from the [UNA SDK](https://github.com/UNAWatch/una-sdk), reads the
+metadata out of each `.uapp` binary, and publishes a catalogue plus the binaries
+to GitHub Pages. The page then talks to the watch directly as a USB mass-storage
+volume.
 
 Apps are never rebuilt here — the SDK's own CI already builds every app in its
 ARM toolchain container, so Kira consumes those artifacts.
@@ -27,6 +30,29 @@ with no second implementation to drift.
 The catalogue is keyed on **AppID**, never on folder or display name. Folder
 names are arbitrary, and display names can contain a path separator — the
 `GlanceARHR` app is really named `AVG / R HR`.
+
+### Versions, and a changelog derived from bytes
+
+App versions are **not per-app semver**. `una-version.sh` stamps every app in a
+release with the `apps-v*` tag, so all thirteen apps in apps-v1.3.0 report
+`1.3.0` whether or not their code changed — comparing the published binaries,
+six of those thirteen are byte-identical to their apps-v1.2.0 builds.
+
+Kira therefore hashes each version's payload (icons, service and GUI images,
+with the version stamp and CRC footer excluded) and compares it with the next
+older version. Each card says *"code changed in 1.3.0 (+17288 B)"* or *"code
+unchanged since 1.2.0"*, and an update that is only a re-stamp is labelled
+*"version stamp only, identical code"* rather than presented as new work. That
+changelog comes from the binaries, not from prose.
+
+Upstream's own release notes are shown too, per `apps-v*` tag, taken verbatim
+from the GitHub release bodies. They are rendered as **text, never as HTML** —
+it is third-party Markdown, and it is not going anywhere near `innerHTML`.
+
+Any published version can be selected per app; the newest is the default.
+Selecting an older one re-targets both the download and the installer, so a
+watch already on the newest build correctly reports `newer-on-watch` rather than
+being silently downgraded.
 
 ### Two capability tiers
 
@@ -69,11 +95,17 @@ list is rebuilt only at boot.
 ## Development
 
 ```sh
-npm test                       # 35 unit tests, no network, no dependencies
+npm test                       # unit tests: no network, no dependencies
 
-# Build the catalogue from a release you already have unzipped:
+# Build from releases you already have unzipped. Either one release directly:
 node tools/build-catalog.mjs --src <dir-of-App/*.uapp> --out site \
     --repo UNAWatch/una-sdk --tag apps-v1.3.0
+
+# ...or several, one directory per tag, with notes from --releases:
+#   <src>/apps-v1.3.0/Alarm/Alarm_1.3.0.uapp
+#   <src>/apps-v1.2.0/Alarm/Alarm_1.2.0.uapp
+node tools/build-catalog.mjs --src <dir-of-tags> --out site \
+    --releases releases.json --repo UNAWatch/una-sdk
 
 npm run serve                  # http://localhost:8099
 ```
@@ -89,8 +121,9 @@ writes the catalogue and copies the shared ES modules into `site/lib/`.
 ```
 src/uapp.js              .uapp parser, CRC-32, ABGR2222 icon decode  (shared)
 src/plan.js              catalogue-vs-watch diff, install script generation (shared)
+src/catalog.js           schema-2 model: version selection, byte-derived history (shared)
 src/png.js               dependency-free RGBA -> PNG encoder (build only)
-tools/build-catalog.mjs  release dir -> site/data/{catalog.json,icons,apps} + site/lib
+tools/build-catalog.mjs  release dirs -> site/data/{catalog.json,icons,apps} + site/lib
 tools/make-icons.sh      assets/kira-mark.png -> site/img/* + site/favicon.ico
 tools/serve.mjs          local static server
 assets/kira-mark.png     source artwork for the icons
@@ -132,5 +165,8 @@ unchanged at a `github.io/kira/` subpath or on a custom domain.
   is a BLE/DIS check in the official mobile app. Kira surfaces the LibC ABI
   version from the header instead; matching it to your firmware is up to you.
 - **A reboot is required** after installing, and it is not automatable.
+- **Release notes are upstream's, not per-app.** A tag's notes cover the whole
+  release, so they may describe apps other than the one you are looking at. The
+  per-app "did the code change" line is the reliable signal.
 - Glance apps are commonly built without icons — their icon fields are present
   but zero-filled — so the catalogue shows a lettered placeholder for them.

@@ -18,19 +18,52 @@ jobs:
           node-version: '22'
       - run: npm test
 
-      # Prove the catalogue builds from a real release, not just that units pass.
-      - name: Build against the latest upstream release
+      # Prove the catalogue builds from real releases, not just that units pass.
+      # Two releases, so the multi-release grouping and the changed/re-stamp
+      # annotation are both exercised rather than just the single-release path.
+      - name: Build against the two newest upstream releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=$(gh release list -R UNAWatch/una-sdk --limit 100 \
-                  --json tagName,isPrerelease \
-                  --jq '[.[] | select(.isPrerelease == false)
-                            | select(.tagName | startswith("apps-v"))][0].tagName')
-          mkdir -p release apps
-          gh release download "$tag" -R UNAWatch/una-sdk -D release --clobber
-          unzip -q "$(find release -name '*.zip' | head -n 1)" -d apps
-          node tools/build-catalog.mjs --src apps --out site --repo UNAWatch/una-sdk --tag "$tag"
+          gh api --paginate repos/UNAWatch/una-sdk/releases \
+            --jq '.[]
+                  | select(.prerelease == false)
+                  | select(.tag_name | startswith("apps-v"))
+                  | {tag: .tag_name, publishedAt: .published_at, url: .html_url,
+                     isPrerelease: .prerelease, notes: .body}' \
+            | jq -s 'sort_by(.publishedAt) | reverse | .[:2]' > releases.json
+
+          mkdir -p apps
+          for tag in $(jq -r '.[].tag' releases.json); do
+            mkdir -p "zips/$tag" "apps/$tag"
+            gh release download "$tag" -R UNAWatch/una-sdk -D "zips/$tag" --clobber
+            unzip -q "$(find "zips/$tag" -name '*.zip' | head -n 1)" -d "apps/$tag"
+          done
+
+          node tools/build-catalog.mjs --src apps --out site \
+            --releases releases.json --repo UNAWatch/una-sdk
+
           test -s site/data/catalog.json
-          test -s site/lib/uapp.js
+          test -s site/lib/catalog.js
+          # The grouping must actually have produced multiple versions per app.
+          node -e '
+            const c = require("./site/data/catalog.json");
+            if (c.schema !== 2) throw new Error("expected schema 2, got " + c.schema);
+            if (c.releases.length !== 2) throw new Error("expected 2 releases");
+            const multi = c.apps.filter((a) => a.versions.length > 1).length;
+            if (multi === 0) throw new Error("no app has more than one version");
+            console.log(`${c.apps.length} apps, ${multi} with history`);
+          '
+
+      # The fixture-backed planner test needs two unzipped releases, which the
+      # step above just produced.
+      - name: Planner check across the two releases
+        env:
+          KIRA_FIXTURE_NEW: apps
+        run: |
+          set -euo pipefail
+          new=$(jq -r '.[0].tag' releases.json)
+          old=$(jq -r '.[1].tag' releases.json)
+          KIRA_FIXTURE_NEW="apps/$new" KIRA_FIXTURE_OLD="apps/$old" \
+            node --test test/release-diff.test.mjs

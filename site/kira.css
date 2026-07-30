@@ -294,6 +294,41 @@ button.ghost:hover:not(:disabled),
   color: var(--ink-soft);
 }
 
+select.version {
+  font-size: 12px;
+  padding: 3px 6px;
+  margin: 0 0 6px;
+  max-width: 100%;
+}
+
+/* Release notes: upstream Markdown shown as text, so it needs to wrap. */
+#release-notes details {
+  border-top: 1px solid var(--line);
+  padding: 8px 0;
+}
+
+#release-notes details:first-child {
+  border-top: 0;
+}
+
+#release-notes summary {
+  cursor: pointer;
+  font-size: 14px;
+}
+
+pre.notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 8px 0;
+}
+
 /* Plan list */
 
 .plan-row {
