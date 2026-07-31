@@ -294,6 +294,17 @@ button.ghost:hover:not(:disabled),
   color: var(--ink-soft);
 }
 
+.meta.superseded {
+  font-size: 11px;
+  color: var(--warn-ink);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  border-radius: 6px;
+  padding: 1px 6px;
+  display: inline-block;
+  margin: 0 0 6px;
+}
+
 .meta.provenance {
   font-size: 11px;
   opacity: 0.75;

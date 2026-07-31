@@ -218,6 +218,10 @@ function statusLabel(entry) {
       // A file failing its CRC is silently ignored by the watch, so the app never
       // appears. Always worth replacing.
       return ['Corrupt — reinstall', 'update'];
+    case 'superseded':
+      // Another app owns this on-device folder, so installing this one could
+      // leave the watch booting whichever .uapp it found first.
+      return ['Superseded — not installable', ''];
     default:
       return [entry.status, ''];
   }
@@ -304,6 +308,18 @@ function renderCard(app, entry) {
     id.textContent = `AppID ${app.appId}`;
     id.title = 'Another entry shares this name under a different AppID';
     body.appendChild(id);
+  }
+
+  // An app whose folder belongs to another cannot be installed beside it. Kept
+  // listed because its binaries are still downloadable.
+  if (app.supersededBy) {
+    const note = document.createElement('div');
+    note.className = 'meta superseded';
+    note.textContent = 'superseded — download only';
+    note.title =
+      `${app.folder} on the watch belongs to AppID ${app.supersededBy}, ` +
+      'which has newer versions. Installing both could leave the watch running the wrong one.';
+    body.appendChild(note);
   }
 
   // Upstream offers no way to fetch a specific build, so every published version

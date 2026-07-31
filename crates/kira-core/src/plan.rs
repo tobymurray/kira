@@ -71,6 +71,13 @@ pub enum Status {
     /// The installed file fails its own CRC, so the watch is silently ignoring
     /// it. Always worth reinstalling.
     Corrupt,
+    /// Another app owns this on-device folder with newer versions, so installing
+    /// this one would collide with it.
+    ///
+    /// Kept visible because its binaries are still downloadable, but never
+    /// offered: the watch loads whichever `.uapp` is first in a folder, so a
+    /// second one there could mean booting the wrong app.
+    Superseded,
 }
 
 /// Which build of a version is on the watch.
@@ -132,9 +139,14 @@ impl Entry {
     #[must_use]
     pub fn describe(&self) -> String {
         let Some(installed) = &self.installed else {
-            return format!("install {}", self.app.version);
+            return if self.status == Status::Superseded {
+                "superseded by another app in the same folder".to_owned()
+            } else {
+                format!("install {}", self.app.version)
+            };
         };
         match self.status {
+            Status::Superseded => "superseded by another app in the same folder".to_owned(),
             Status::Corrupt => format!("{} is corrupt, reinstall", installed.file),
             Status::DifferentBuild => {
                 format!(
@@ -257,7 +269,12 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
             let Some(on_watch) = on_watch else {
                 return Entry {
                     app: target.clone(),
-                    status: Status::Install,
+                    // Not installed, and must not be: another app owns its folder.
+                    status: if target.superseded_by.is_some() {
+                        Status::Superseded
+                    } else {
+                        Status::Install
+                    },
                     installed: None,
                     identical_payload: false,
                     recognised: Recognised::Unhashed,
@@ -332,6 +349,7 @@ fn job_note(entry: &Entry) -> String {
         Status::NewerOnWatch => "newer-on-watch",
         Status::DifferentBuild => "different-build",
         Status::Corrupt => "corrupt, reinstalling",
+        Status::Superseded => "superseded",
     };
     if entry.identical_payload {
         format!("{status}; identical code, version stamp only")
@@ -522,6 +540,7 @@ mod tests {
             tag: format!("apps-v{version}"),
             changed: Some(true),
             is_latest: true,
+            superseded_by: None,
             origin: crate::catalog::Origin::Kira,
             built_from: None,
             upstream_sha256: None,
@@ -744,6 +763,27 @@ mod tests {
         on_watch.crc_valid = Some(true);
         let plan = build(&[target], &[on_watch]);
         assert_eq!(plan.entries[0].status, Status::Update);
+    }
+
+    #[test]
+    fn a_superseded_app_is_never_offered_for_installation() {
+        // Upstream reassigned the ids of three Glances, leaving an old identity
+        // whose newest version is ancient. Installing it would drop a second
+        // .uapp into a folder the watch resolves by taking the first one.
+        let mut app = target("0.1.4");
+        app.superseded_by = Some(AppId::new(0x8899_AABB_CCDD_EEFF));
+
+        let plan = build(&[app], &[]);
+        assert_eq!(plan.entries[0].status, Status::Superseded);
+        assert_eq!(plan.actionable().count(), 0);
+        assert!(plan.entries[0].describe().contains("superseded"));
+    }
+
+    #[test]
+    fn an_app_that_owns_its_folder_is_offered_normally() {
+        let plan = build(&[target("1.3.0")], &[]);
+        assert_eq!(plan.entries[0].status, Status::Install);
+        assert_eq!(plan.actionable().count(), 1);
     }
 
     #[test]

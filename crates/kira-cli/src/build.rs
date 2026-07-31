@@ -478,6 +478,8 @@ fn process_release(
             versions: Vec::new(),
             icon: None,
             icon_small: None,
+            // Decided once every app is known.
+            superseded_by: None,
         });
 
         // Same version published under two tags: keep the newer release's.
@@ -603,6 +605,11 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     for app in &mut apps {
         annotate_history(app);
     }
+    // Two apps cannot share an on-device folder, and upstream's reassigned ids
+    // leave three pairs that do. Decided after history, since it compares the
+    // newest version of each.
+    kira_core::catalog::mark_superseded(&mut apps);
+
     // Case-insensitive, then exact, so the order is stable across machines.
     // JavaScript's localeCompare depends on the host locale, which made the
     // previous implementation's ordering environment-dependent.
@@ -612,13 +619,6 @@ pub(crate) fn run(args: &Args) -> Result<()> {
             .cmp(&b.name.to_lowercase())
             .then_with(|| a.name.cmp(&b.name))
     });
-
-    let version_count: usize = apps.iter().map(|a| a.versions.len()).sum();
-    let restamps: usize = apps
-        .iter()
-        .flat_map(|a| &a.versions)
-        .filter(|v| v.changed == Some(false))
-        .count();
 
     let catalog = Catalog {
         schema: SCHEMA,
@@ -632,6 +632,30 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 
     let json = serde_json::to_string_pretty(&catalog)?;
     fs::write(data.join("catalog.json"), format!("{json}\n"))?;
+    report(&catalog, &counts, &skipped, total_bytes, &data);
+    Ok(())
+}
+
+/// Print what the run produced.
+fn report(
+    catalog: &Catalog,
+    counts: &OriginCounts,
+    skipped: &[String],
+    total_bytes: u64,
+    data: &Path,
+) {
+    let version_count: usize = catalog.apps.iter().map(|a| a.versions.len()).sum();
+    let restamps = catalog
+        .apps
+        .iter()
+        .flat_map(|a| &a.versions)
+        .filter(|v| v.changed == Some(false))
+        .count();
+    let superseded = catalog
+        .apps
+        .iter()
+        .filter(|a| a.superseded_by.is_some())
+        .count();
 
     println!(
         "\n{} apps · {version_count} versions across {} release(s)",
@@ -642,6 +666,10 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         println!("skipped (no usable apps): {}", skipped.join(", "));
     }
     println!("{restamps} version(s) are re-stamps with identical code");
+    if superseded > 0 {
+        // Not installable: another app owns the folder they would be written to.
+        println!("{superseded} app(s) superseded by another owning the same folder");
+    }
     println!(
         "{} version(s) built by Kira, {} republished from upstream",
         counts.kira, counts.upstream
@@ -663,7 +691,6 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     #[allow(clippy::cast_precision_loss)]
     let mib = total_bytes as f64 / 1024.0 / 1024.0;
     println!("{mib:.2} MiB of binaries -> {}", data.display());
-    Ok(())
 }
 
 /// Annotate each version against the next older one: did the code move?

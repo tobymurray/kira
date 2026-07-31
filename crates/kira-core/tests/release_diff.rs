@@ -122,6 +122,7 @@ fn catalog_from(fixtures: &[Fixture], tag: &str) -> Catalog {
                 }],
                 icon: None,
                 icon_small: None,
+                superseded_by: None,
             }
         })
         .collect();

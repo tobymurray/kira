@@ -88,6 +88,16 @@ pub struct App {
     /// Path to the 30x30 icon.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_small: Option<String>,
+    /// Another app that occupies the same on-device folder with newer versions.
+    ///
+    /// Two apps cannot share `Apps/<Folder>/`: the watch loads whichever `.uapp`
+    /// it finds first, so installing both would risk booting the wrong one. This
+    /// happens because upstream reassigned the ids of three Glances, leaving the
+    /// old identity behind with only ancient versions. Such an app stays in the
+    /// catalogue -- its binaries are still downloadable -- but is never offered
+    /// for installation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<AppId>,
 }
 
 /// Who produced the binary Kira serves for a version.
@@ -209,6 +219,8 @@ pub struct Target {
     pub changed: Option<bool>,
     /// Whether this is the newest published version.
     pub is_latest: bool,
+    /// Set when another app owns this on-device folder with newer versions.
+    pub superseded_by: Option<AppId>,
     /// Who produced this binary.
     pub origin: Origin,
     /// How to reproduce it, when Kira built it.
@@ -302,6 +314,34 @@ impl Catalog {
     }
 }
 
+/// Mark apps that lose a fight over an on-device folder.
+///
+/// Within a folder the app with the newest version wins; the rest are superseded
+/// and must not be offered for installation, since writing them would put a
+/// second `.uapp` in a folder the watch resolves by taking the first it finds.
+pub fn mark_superseded(apps: &mut [App]) {
+    let mut best: BTreeMap<String, (Version, AppId)> = BTreeMap::new();
+    for app in apps.iter() {
+        let newest = app.latest().version;
+        let folder = app.folder.clone();
+        // Ties broken by id so the outcome does not depend on iteration order.
+        let candidate = (newest, app.app_id);
+        best.entry(folder)
+            .and_modify(|current| {
+                if candidate > *current {
+                    *current = candidate;
+                }
+            })
+            .or_insert(candidate);
+    }
+
+    for app in apps {
+        if let Some(&(_, winner)) = best.get(&app.folder) {
+            app.superseded_by = (winner != app.app_id).then_some(winner);
+        }
+    }
+}
+
 /// Choose one version per app and flatten to the planner's shape.
 ///
 /// `pinned` maps an app to a specific version; anything unpinned, or pinned to a
@@ -336,6 +376,7 @@ pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, Version>) -> 
                 tag: chosen.tag.clone(),
                 changed: chosen.changed,
                 is_latest: chosen.version == app.latest().version,
+                superseded_by: app.superseded_by,
                 origin: chosen.origin,
                 built_from: chosen.built_from.clone(),
                 upstream_sha256: chosen.upstream_sha256.clone(),
@@ -488,6 +529,7 @@ mod tests {
             versions,
             icon: None,
             icon_small: None,
+            superseded_by: None,
         }
     }
 
@@ -679,6 +721,33 @@ mod tests {
             result.collisions[0].labels,
             ["GlanceActivity", "GlanceStrain"]
         );
+    }
+
+    #[test]
+    fn the_app_with_the_newest_version_keeps_the_folder() {
+        let mut current = app(vec![version_entry("1.3.0"), version_entry("1.2.0")]);
+        current.app_id = AppId::new(0x8899_AABB_CCDD_EEFF);
+        let mut old = app(vec![version_entry("0.1.4")]);
+        old.app_id = AppId::new(0xA1F2_9B8D_4E7C_3A65);
+        // Same on-device folder, which is the whole problem.
+        assert_eq!(current.folder, old.folder);
+
+        let mut apps = vec![old, current];
+        mark_superseded(&mut apps);
+
+        let by_id = |id: u64| apps.iter().find(|a| a.app_id == AppId::new(id)).unwrap();
+        assert_eq!(by_id(0x8899_AABB_CCDD_EEFF).superseded_by, None);
+        assert_eq!(
+            by_id(0xA1F2_9B8D_4E7C_3A65).superseded_by,
+            Some(AppId::new(0x8899_AABB_CCDD_EEFF))
+        );
+    }
+
+    #[test]
+    fn an_app_alone_in_its_folder_is_never_superseded() {
+        let mut apps = vec![app(vec![version_entry("1.3.0")])];
+        mark_superseded(&mut apps);
+        assert_eq!(apps[0].superseded_by, None);
     }
 
     #[test]

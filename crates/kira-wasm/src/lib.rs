@@ -125,6 +125,9 @@ struct AppView<'a> {
     /// True when another catalogue entry shares this display name, so the UI can
     /// disambiguate by id instead of showing identical-looking cards.
     ambiguous_name: bool,
+    /// Set when another app owns this on-device folder with newer versions, in
+    /// which case this one cannot be installed alongside it.
+    superseded_by: Option<AppId>,
 }
 
 /// A plan entry with its label rendered.
@@ -270,6 +273,7 @@ impl Store {
                     .filter(|v| app.find(*v).is_some())
                     .unwrap_or_else(|| app.latest().version),
                 ambiguous_name: self.ambiguous.contains(&app.name),
+                superseded_by: app.superseded_by,
             })
             .collect();
         to_js(&views)
