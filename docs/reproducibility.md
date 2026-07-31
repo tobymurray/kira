@@ -68,15 +68,29 @@ one factor at a time:
 An independent scan confirmed **no build path appears in any output**, which does
 not depend on trusting that the prefix maps covered everything.
 
-All 13 apps of `apps-v1.3.0` build standalone and pass verification, across all
-three shapes: Utility and Activity with a GUI process, Glance without one. The
-same `Alarm` binary — 210,472 bytes, `87217a3a…` — has come out of separate CI
-runs days apart.
+Every app of every published release builds: **169 binaries across 13 releases,
+zero failures**, covering all three shapes — Utility and Activity with a GUI
+process, Glance without one. The same `Alarm` binary — 210,472 bytes, `87217a3a…`
+— has come out of separate CI runs days apart.
+
+The store holds 39 artifacts for version `0.1.9`, because `apps-v0.1.9-rc1`,
+`-rc2` and `-rc3` all stamp that version while being three distinct releases. They
+are separate recipes and therefore separate artifacts, which is the recipe key
+doing its job.
 
 Also checked and clean: no `__DATE__`, `__TIME__` or `__TIMESTAMP__` anywhere in
 `Libs/`, `Examples/` or `ThirdParty/`; no submodules, so an SDK tag pins its
 content; and `file(GLOB_RECURSE)` source lists (22 of them) are safe because CMake
 has ordered glob results lexicographically since 3.6, while the apps require 3.21.
+
+## Why the whole history is built, not just recent releases
+
+Serving Kira's build for new releases while republishing upstream's for old ones
+would make the changed/unchanged annotation useless at the boundary: comparing
+Kira's 1.3.0 against upstream's 1.2.0 says nothing about whether the code changed,
+so the build records `changed: null` rather than a false claim. With every release
+built the comparison is like-for-like again and the analysis returns — the
+re-stamp count over a four-release window goes from 2 back to 8.
 
 ## What has not
 
