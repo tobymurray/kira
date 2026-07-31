@@ -1,0 +1,87 @@
+# Submitting an app
+
+Kira carries apps that are not UNA's. What you submit is **a pointer to source**,
+not a binary: a repository, a commit, and the SDK revision to build against. Kira
+then compiles it itself, in the same digest-pinned toolchain container it uses for
+every other app in the catalogue.
+
+That is not bureaucracy — it is the only thing that makes the catalogue checkable.
+The watch has no code signing, and it silently ignores a `.uapp` whose CRC fails,
+so "trust me, this binary is fine" is not something anyone can verify. A binary
+built from a named commit by a published recipe is.
+
+## What you need first
+
+- **A public repository** with your app's source, under an open licence.
+- **An app that builds against the SDK** — it needs the usual layout, a
+  `Software/<name>-CMake/CMakeLists.txt` declaring `APP_ID`, `APP_TYPE` and
+  `APP_NAME`. If `kira build-app` can build it, Kira can carry it.
+- **An `AppID` nobody else uses.** It is 64 bits and it is the app's whole
+  identity on the watch — the folder name and the display name are not. Generate
+  one at random rather than picking something memorable.
+
+## The manifest
+
+Add one file, `registry/<slug>.toml`:
+
+```toml
+app_id    = "A7C31F0E9B482D65"                          # 16 hex digits
+source    = "https://github.com/someone/una-tide-clock"
+subdir    = "."                                          # optional, defaults to the repo root
+folder    = "TideClock"                                  # where it installs under Apps\
+licence   = "MIT"
+maintainer = "someone"                                   # GitHub handle
+
+[[versions]]
+version = "1.0.0"
+rev     = "3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d"     # full commit sha
+sdk_rev = "apps-v1.3.0"                                  # SDK release to build against
+```
+
+Then open a pull request. Check it locally first — the same checks CI runs:
+
+```sh
+cargo run -p kira-cli -- registry validate --catalog site/data/catalog.json
+cargo run -p kira-cli -- registry plan --toolchain unpinned
+```
+
+## What gets checked, and why
+
+| Rule | Reason |
+| --- | --- |
+| `rev` is a full 40-character commit sha | Tags and branches move. A "pinned" source that can change makes the published recipe a lie. |
+| `app_id` is unused | It is the app's only identity. Two apps sharing one confuses the watch, the phone app and this catalogue at once. |
+| `folder` is unused, and is a name FAT accepts | The watch loads whichever `.uapp` it finds first in a folder, so a collision can silently boot the wrong app. |
+| `source` is a plain `https` URL | It is published in the catalogue and fetched by CI. No credentials, no query string. |
+| `subdir` stays inside the repository | It is a path handed to a build. |
+| `licence` is a recognised open licence | Source-accessible is the premise. If yours is missing from the list, add it in the same pull request. |
+| A published version's `rev` never changes | Somebody's watch may be carrying it. Change anything by publishing a new version. |
+
+CI then fetches exactly that commit, builds it, and checks the result against what
+your own `CMakeLists.txt` declares: `AppID`, type, version, and the `.uapp`'s CRC.
+A build whose binary disagrees with its source fails.
+
+Pull requests run with no secrets and no write access, and **nothing is published
+from a pull request**. Merging to `main` is what publishes.
+
+## Things worth knowing
+
+- **Kira does not review your code**, and says so. What the catalogue offers is
+  provenance and integrity — that a binary was built from a named commit by a
+  published recipe, and that the bytes on your watch match what was published. It
+  cannot tell anyone whether the app is any good or safe. See
+  [SECURITY.md](../SECURITY.md).
+- **Third-party apps are shown separately** from UNA's, with the source repository
+  and commit on the card.
+- **Updating** means a new `[[versions]]` entry with a new commit. Old versions
+  stay: every published version of every app remains downloadable.
+- **Retiring** an app is also a pull request, and it does not delete the manifest —
+  a watch still carrying the app should be recognised rather than reported as
+  something unknown.
+- **Versions are yours to number.** Unlike UNA's apps, which are all stamped with
+  the release tag they shipped in, a submission's version means whatever you
+  intend it to mean.
+
+Questions before you start are welcome in
+[Discussions](https://github.com/tobymurray/kira/discussions/new?category=q-a) —
+better than finding out in review that the app cannot be built.

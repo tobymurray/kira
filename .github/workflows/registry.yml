@@ -1,0 +1,216 @@
+name: Submissions
+
+# Checks a third-party app submission and proves it builds, on the pull request
+# that adds it.
+#
+# `pull_request`, deliberately not `pull_request_target`: this job checks out and
+# compiles code from a contributor's repository, so it must run with no secrets
+# and no write token. Nothing here publishes; a merge to main is what does that.
+on:
+  pull_request:
+    paths:
+      - "registry/**"
+      - ".github/workflows/registry.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned by digest, so a submission builds under the same compiler as
+  # everything else in the catalogue. Keep in step with app-binaries.yml.
+  TOOLCHAIN: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
+
+jobs:
+  check:
+    name: Check the manifests
+    runs-on: ubuntu-latest
+    outputs:
+      # Lets the build job be skipped entirely when a pull request touches the
+      # docs or this workflow rather than a manifest.
+      builds: ${{ steps.plan.outputs.builds }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The base branch as well, to check that nothing already published has been
+      # repointed at different source.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.ref }}
+          path: base
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # The live catalogue is the authoritative list of identities already in use,
+      # and it is not in the repository: site/data is generated.
+      - name: Fetch the published catalogue
+        run: |
+          curl -fsSL --retry 3 -o catalog.json \
+            https://kira.technicallyrural.com/data/catalog.json
+          echo "$(jq '.apps | length' catalog.json) apps already published"
+
+      - name: Validate
+        run: |
+          cargo run --quiet -p kira-cli -- registry validate \
+            --dir registry \
+            --base base/registry \
+            --catalog catalog.json
+
+      - name: Plan what has to be built
+        id: plan
+        run: |
+          cargo run --quiet -p kira-cli -- registry plan \
+            --dir registry --toolchain "${TOOLCHAIN#*@}" --out plan.json
+          jq -r '.[] | "\(.folder) \(.version) \(.appSource)"' plan.json
+          echo "builds=$(jq 'length' plan.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: submission-plan
+          path: plan.json
+          if-no-files-found: error
+
+  build:
+    name: Build every submitted version
+    needs: check
+    if: needs.check.outputs.builds != '0'
+    runs-on: ubuntu-latest
+    container: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
+    steps:
+      - name: Install build dependencies
+        run: |
+          find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -i 's#security\.ubuntu\.com/ubuntu#archive.ubuntu.com/ubuntu#g' {} + || true
+          apt-get update
+          apt-get install -y bash git python3-full python3-pip python-is-python3 cmake curl jq
+
+      - uses: actions/checkout@v7
+        with:
+          path: kira
+
+      - uses: actions/checkout@v7
+        with:
+          repository: UNAWatch/una-sdk
+          # Tags included: each submission names the SDK revision to build with.
+          fetch-depth: 0
+          path: sdk
+
+      - name: Install packer requirements
+        run: python3 -m pip install --break-system-packages -r sdk/Utilities/Scripts/app_packer/requirements.txt
+
+      - name: Build the tool
+        working-directory: kira
+        run: |
+          cargo build --release -p kira-cli
+          install -m 755 target/release/kira /usr/local/bin/kira
+          kira --version
+
+      - name: Prepare the toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The image ships these unexecutable.
+          for tool in make arm-none-eabi-gcc arm-none-eabi-g++ arm-none-eabi-objcopy; do
+            chmod +x "$(find /opt/st/stm32cubeide_* -type f -name "$tool" | head -n 1)" || true
+          done
+          {
+            find /opt/st/stm32cubeide_* -type f -name arm-none-eabi-objcopy | head -n 1 | xargs dirname
+            find /opt/st/stm32cubeide_* -type f -name make | head -n 1 | xargs dirname
+          } >> "$GITHUB_PATH"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: submission-plan
+
+      - name: Build each version from its pinned commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          failed=0
+          jq -c '.[]' plan.json > items.txt
+          while read -r item; do
+            folder=$(jq -r '.folder' <<<"$item")
+            version=$(jq -r '.version' <<<"$item")
+            asset=$(jq -r '.asset' <<<"$item")
+            sdk_rev=$(jq -r '.sdkRev' <<<"$item")
+            app_source=$(jq -r '.appSource' <<<"$item")
+
+            # git:<url>@<40-hex sha>:<subdir>
+            rest=${app_source#git:}
+            url=${rest%@*}
+            rest=${rest##*@}
+            rev=${rest%%:*}
+            subdir=${rest#*:}
+
+            echo "::group::$folder $version from ${rev:0:12}"
+            rm -rf src
+            mkdir src
+            # Fetch exactly the commit named, so a moved branch or tag cannot
+            # change what gets built.
+            git -C src init -q
+            git -C src remote add origin "$url"
+            if ! git -C src fetch -q --depth 1 origin "$rev"; then
+              echo "::error::$folder $version: commit $rev is not in $url"
+              failed=$((failed + 1)); echo "::endgroup::"; continue
+            fi
+            git -C src checkout -q FETCH_HEAD
+
+            # Detached, and cleaned between builds: the tree is reused across
+            # versions that name different SDK revisions.
+            if ! git -C sdk checkout -q --detach "$sdk_rev"; then
+              echo "::error::$folder $version: SDK revision $sdk_rev not found"
+              failed=$((failed + 1)); echo "::endgroup::"; continue
+            fi
+            git -C sdk clean -xdfq
+
+            # build-app verifies the result against what the source declares:
+            # AppID, type, version and the .uapp's own CRC.
+            if kira build-app \
+                 --app "src/$subdir" \
+                 --sdk sdk \
+                 --version "$version" \
+                 --out "artifacts/$asset" \
+                 --toolchain "${TOOLCHAIN#*@}" \
+                 --app-source "$app_source" \
+                 --sdk-rev "$sdk_rev" < /dev/null; then
+              kira inspect "artifacts/$asset"
+            else
+              echo "::error::$folder $version: build or verification failed"
+              failed=$((failed + 1))
+            fi
+            echo "::endgroup::"
+          done < items.txt
+
+          echo "built $(ls artifacts | wc -l) binaries, $failed failed"
+          [ "$failed" -eq 0 ]
+
+      - name: Report what was built
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Submitted binaries"
+            echo
+            echo "Built here for checking only — a pull request never publishes."
+            echo
+            for file in artifacts/*.uapp; do
+              [ -e "$file" ] || continue
+              echo "- \`$(basename "$file")\` — $(stat -c%s "$file") bytes, sha256 $(sha256sum "$file" | cut -c1-16)…"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: submitted-uapps
+          path: artifacts
+          if-no-files-found: error

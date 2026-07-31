@@ -59,11 +59,17 @@ are verified by hand against a real watch.
 
 ## Adding an app
 
-Kira builds every binary it ships from source, so an app has to be buildable and
-its source has to be public — see [docs/reproducibility.md](docs/reproducibility.md)
-for what "reproducible" does and does not mean here. Submissions of third-party
-apps are not open yet; if you have one you want carried,
-[open an idea](https://github.com/tobymurray/kira/discussions/new?category=ideas).
+Kira carries third-party apps, and builds every binary it ships from source — so a
+submission is a manifest naming a repository, a commit and the SDK revision to
+build against, never an uploaded binary. The process, the rules and the reasons
+are in [registry/README.md](registry/README.md); the short version is that you add
+one `registry/<slug>.toml` and open a pull request, and CI fetches that exact
+commit, builds it, and checks the result against what your own `CMakeLists.txt`
+declares.
+
+See [docs/reproducibility.md](docs/reproducibility.md) for what "reproducible"
+does and does not mean here, and [SECURITY.md](SECURITY.md) for what Kira does and
+does not claim about an app it carries.
 
 ## Licence
 

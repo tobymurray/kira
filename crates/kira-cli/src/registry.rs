@@ -1,0 +1,717 @@
+//! Third-party app submissions: one manifest per app, checked before it is built.
+//!
+//! Kira builds every binary it ships, so a submission is a *pointer to source*
+//! rather than an upload: a repository, a commit, and the SDK revision to compile
+//! against. That is the whole trust model — there is nothing to review in a
+//! binary nobody can reproduce, and there is no code signing on the watch.
+//!
+//! Everything here is decided before a build runs, because a build is expensive
+//! and because the interesting failures are not build failures. Two apps sharing
+//! an `AppID` or an on-device folder is the dangerous one: the watch resolves a
+//! folder by loading the first `.uapp` it finds, so a collision can silently boot
+//! the wrong app. See [`crate::build_app`] for the checks that happen after.
+//!
+//! Lives in the CLI, not in `kira-core`: validating submissions is a build-side
+//! concern and the browser has no use for it.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use kira_core::uapp::{AppId, Version};
+use serde::Deserialize;
+
+use crate::build_app::flags_id;
+use crate::recipe::{Recipe, Wanted};
+
+/// Licences a submission may declare.
+///
+/// An allowlist rather than a parser: the point is that the source is genuinely
+/// available to anyone who wants to check the build, and an unrecognised string
+/// cannot be taken as evidence of that. Missing one is a pull request away.
+const LICENCES: &[&str] = &[
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "GPL-2.0-only",
+    "GPL-2.0-or-later",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-or-later",
+    "MIT",
+    "MPL-2.0",
+    "Unlicense",
+    "Zlib",
+];
+
+/// Folder names the watch already uses for something other than an app.
+///
+/// From the SDK's own layout notes; writing an app into one of these would put it
+/// somewhere the launcher does not look, or overwrite shared state.
+const RESERVED_FOLDERS: &[&str] = &["SharedData", "ShareData", "System", "Activity"];
+
+/// Names MS-DOS reserved, which FAT still refuses as a directory name.
+const DOS_DEVICES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "LPT1", "LPT2", "LPT3",
+];
+
+/// One published version of a submitted app.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Entry {
+    /// Version to stamp into the binary.
+    pub version: Version,
+    /// Full commit sha of the source for this version.
+    ///
+    /// A commit, never a tag or branch: those move, and a moving "pinned" source
+    /// would make the recipe a lie.
+    pub rev: String,
+    /// SDK revision to compile against, e.g. `apps-v1.3.0`.
+    pub sdk_rev: String,
+}
+
+/// A submitted app, as declared in `registry/<slug>.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Manifest {
+    /// File stem, filled in from the path rather than the file's contents.
+    #[serde(skip)]
+    pub slug: String,
+    /// The app's identity, which must match what its source declares.
+    pub app_id: AppId,
+    /// Repository holding the source.
+    pub source: String,
+    /// Path within the repository to the app root, the directory holding
+    /// `Software/`. Defaults to the repository root.
+    #[serde(default = "dot")]
+    pub subdir: String,
+    /// Folder to install into under `Apps\` on the watch.
+    pub folder: String,
+    /// SPDX identifier from [`LICENCES`].
+    pub licence: String,
+    /// GitHub handle to reach about the submission.
+    pub maintainer: String,
+    /// Every version to publish, in any order.
+    pub versions: Vec<Entry>,
+}
+
+fn dot() -> String {
+    ".".to_owned()
+}
+
+/// One reason a submission cannot be accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Problem {
+    /// Which manifest it is about.
+    pub slug: String,
+    /// What is wrong, phrased for whoever has to fix it.
+    pub message: String,
+}
+
+impl std::fmt::Display for Problem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.slug, self.message)
+    }
+}
+
+/// Read one manifest.
+///
+/// # Errors
+/// If the file cannot be read, is not TOML, or is missing a required field.
+pub(crate) fn parse(slug: &str, text: &str) -> Result<Manifest> {
+    let mut manifest: Manifest =
+        toml::from_str(text).with_context(|| format!("{slug}.toml is not a valid manifest"))?;
+    slug.clone_into(&mut manifest.slug);
+    Ok(manifest)
+}
+
+/// Read every `registry/*.toml`, in name order.
+///
+/// # Errors
+/// If the directory cannot be listed or any manifest fails to parse.
+pub(crate) fn load_dir(dir: &Path) -> Result<Vec<Manifest>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+        .collect();
+    paths.sort();
+
+    let mut manifests = Vec::new();
+    for path in paths {
+        let slug = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .with_context(|| format!("{} has no usable name", path.display()))?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        manifests.push(parse(slug, &text)?);
+    }
+    Ok(manifests)
+}
+
+/// Whether a string is exactly `len` lowercase hex characters.
+fn is_hex(value: &str, len: usize) -> bool {
+    value.len() == len
+        && value
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+}
+
+/// Check one manifest on its own terms.
+fn check_one(manifest: &Manifest, problems: &mut Vec<Problem>) {
+    let mut say = |message: String| {
+        problems.push(Problem {
+            slug: manifest.slug.clone(),
+            message,
+        });
+    };
+
+    if manifest.slug.len() < 2
+        || manifest.slug.len() > 40
+        || !manifest
+            .slug
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        say(format!(
+            "file name {:?} should be 2-40 characters of a-z, 0-9 and -",
+            manifest.slug
+        ));
+    }
+
+    // Only https, and no credentials or query string: the URL is published in the
+    // catalogue and fetched by CI, so it has to be plain and inspectable.
+    let source = &manifest.source;
+    if !source.starts_with("https://") {
+        say(format!("source {source:?} must be an https URL"));
+    }
+    if source.contains('@') || source.contains('?') || source.contains('#') {
+        say(format!(
+            "source {source:?} must not carry credentials, a query or a fragment"
+        ));
+    }
+    if source.chars().any(char::is_whitespace) {
+        say(format!("source {source:?} contains whitespace"));
+    }
+
+    let subdir = &manifest.subdir;
+    if subdir.starts_with('/')
+        || subdir.contains('\\')
+        || subdir.split('/').any(|part| part == "..")
+        || subdir.is_empty()
+    {
+        say(format!(
+            "subdir {subdir:?} must be a relative path inside the repository"
+        ));
+    }
+
+    check_folder(manifest, &mut say);
+    check_versions(manifest, &mut say);
+}
+
+/// Where on the watch a submission wants to live.
+fn check_folder(manifest: &Manifest, say: &mut impl FnMut(String)) {
+    let folder = &manifest.folder;
+    if folder.is_empty()
+        || folder.len() > 32
+        || !folder
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        say(format!(
+            "folder {folder:?} should be 1-32 characters of A-Z, a-z, 0-9, _ and -"
+        ));
+    }
+    if RESERVED_FOLDERS
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(folder))
+    {
+        say(format!("folder {folder:?} is reserved by the watch"));
+    }
+    if DOS_DEVICES.iter().any(|r| r.eq_ignore_ascii_case(folder)) {
+        say(format!("folder {folder:?} is not a usable name on FAT"));
+    }
+}
+
+/// Licence, maintainer and the versions themselves.
+fn check_versions(manifest: &Manifest, say: &mut impl FnMut(String)) {
+    if !LICENCES.contains(&manifest.licence.as_str()) {
+        say(format!(
+            "licence {:?} is not one Kira recognises; open a pull request to add it if it is a real open licence",
+            manifest.licence
+        ));
+    }
+
+    if manifest.maintainer.is_empty()
+        || !manifest
+            .maintainer
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        say(format!(
+            "maintainer {:?} should be a GitHub handle",
+            manifest.maintainer
+        ));
+    }
+
+    if manifest.versions.is_empty() {
+        say("no versions listed, so there is nothing to build".to_owned());
+    }
+
+    let mut seen: BTreeSet<Version> = BTreeSet::new();
+    for entry in &manifest.versions {
+        if !is_hex(&entry.rev, 40) {
+            say(format!(
+                "version {}: rev {:?} must be a full 40-character commit sha, not a tag or branch",
+                entry.version, entry.rev
+            ));
+        }
+        if !entry.sdk_rev.starts_with("apps-v") {
+            say(format!(
+                "version {}: sdk_rev {:?} should name an SDK release tag, e.g. apps-v1.3.0",
+                entry.version, entry.sdk_rev
+            ));
+        }
+        if !seen.insert(entry.version) {
+            say(format!(
+                "version {} is listed more than once",
+                entry.version
+            ));
+        }
+    }
+}
+
+/// Check a whole registry, plus what is already published.
+///
+/// `taken_ids` and `taken_folders` are the identities the catalogue already uses,
+/// so a submission cannot claim one. Returns every problem rather than the first:
+/// a contributor should get the whole list in one round trip.
+pub(crate) fn validate(
+    manifests: &[Manifest],
+    taken_ids: &BTreeMap<AppId, String>,
+    taken_folders: &BTreeMap<String, String>,
+) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    for manifest in manifests {
+        check_one(manifest, &mut problems);
+    }
+
+    // Two apps in one folder is the failure that reaches hardware: the watch
+    // loads whichever `.uapp` it finds first, so it could boot either.
+    let mut ids: BTreeMap<AppId, &str> = BTreeMap::new();
+    let mut folders: BTreeMap<String, &str> = BTreeMap::new();
+    for manifest in manifests {
+        if let Some(owner) = taken_ids.get(&manifest.app_id) {
+            problems.push(Problem {
+                slug: manifest.slug.clone(),
+                message: format!(
+                    "AppID {} already belongs to {owner}; generate a different one",
+                    manifest.app_id
+                ),
+            });
+        }
+        if let Some(first) = ids.insert(manifest.app_id, &manifest.slug) {
+            problems.push(Problem {
+                slug: manifest.slug.clone(),
+                message: format!("AppID {} is also claimed by {first}", manifest.app_id),
+            });
+        }
+
+        let folder_key = manifest.folder.to_ascii_lowercase();
+        if let Some(owner) = taken_folders.get(&folder_key) {
+            problems.push(Problem {
+                slug: manifest.slug.clone(),
+                message: format!(
+                    "folder {} is already used by {owner}; the watch cannot hold two apps in one folder",
+                    manifest.folder
+                ),
+            });
+        }
+        if let Some(first) = folders.insert(folder_key, &manifest.slug) {
+            problems.push(Problem {
+                slug: manifest.slug.clone(),
+                message: format!("folder {} is also claimed by {first}", manifest.folder),
+            });
+        }
+    }
+    problems
+}
+
+/// Check that nothing already published has been rewritten.
+///
+/// A version's source is fixed once it ships: changing the commit under a version
+/// already on someone's watch would make the published hash describe bytes nobody
+/// can rebuild. New versions are the way to change anything.
+pub(crate) fn check_unchanged(before: &[Manifest], after: &[Manifest]) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    let index: BTreeMap<&str, &Manifest> = after.iter().map(|m| (m.slug.as_str(), m)).collect();
+
+    for old in before {
+        let Some(new) = index.get(old.slug.as_str()) else {
+            problems.push(Problem {
+                slug: old.slug.clone(),
+                message: "manifest was removed; retire an app by adding versions, not by \
+                          deleting it, so a watch carrying it is still recognised"
+                    .to_owned(),
+            });
+            continue;
+        };
+
+        if new.app_id != old.app_id {
+            problems.push(Problem {
+                slug: old.slug.clone(),
+                message: format!(
+                    "AppID changed from {} to {}, which makes this a different app",
+                    old.app_id, new.app_id
+                ),
+            });
+        }
+        if new.source != old.source {
+            problems.push(Problem {
+                slug: old.slug.clone(),
+                message: format!("source changed from {} to {}", old.source, new.source),
+            });
+        }
+
+        for entry in &old.versions {
+            match new.versions.iter().find(|e| e.version == entry.version) {
+                None => problems.push(Problem {
+                    slug: old.slug.clone(),
+                    message: format!("published version {} was removed", entry.version),
+                }),
+                Some(now) if now.rev != entry.rev || now.sdk_rev != entry.sdk_rev => {
+                    problems.push(Problem {
+                        slug: old.slug.clone(),
+                        message: format!(
+                            "version {} was already published from {}; publish a new version \
+                             instead of repointing this one",
+                            entry.version, entry.rev
+                        ),
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    problems
+}
+
+/// Everything a submission needs built, newest version first.
+pub(crate) fn wanted(manifests: &[Manifest], toolchain: &str) -> Vec<Wanted> {
+    let mut wanted = Vec::new();
+    for manifest in manifests {
+        let mut versions = manifest.versions.clone();
+        versions.sort_by_key(|entry| std::cmp::Reverse(entry.version));
+        for entry in versions {
+            wanted.push(Wanted {
+                app_id: manifest.app_id,
+                folder: manifest.folder.clone(),
+                recipe: Recipe {
+                    app_source: app_source(&manifest.source, &entry.rev, &manifest.subdir),
+                    sdk_rev: entry.sdk_rev.clone(),
+                    toolchain: toolchain.to_owned(),
+                    build_version: entry.version,
+                    flags: flags_id(),
+                },
+            });
+        }
+    }
+    wanted
+}
+
+/// Canonical identity of a submitted app's source, for the recipe.
+pub(crate) fn app_source(source: &str, rev: &str, subdir: &str) -> String {
+    format!("git:{source}@{rev}:{subdir}")
+}
+
+/// Render problems as a report, or say there were none.
+pub(crate) fn report(problems: &[Problem]) -> String {
+    if problems.is_empty() {
+        return "no problems found\n".to_owned();
+    }
+    let mut out = format!(
+        "{} problem{}:\n",
+        problems.len(),
+        if problems.len() == 1 { "" } else { "s" }
+    );
+    for problem in problems {
+        let _ = writeln!(out, "  {problem}");
+    }
+    out
+}
+
+/// Identities a published catalogue already occupies.
+///
+/// # Errors
+/// If the catalogue cannot be read or parsed.
+pub(crate) fn taken_from_catalog(
+    path: &Path,
+) -> Result<(BTreeMap<AppId, String>, BTreeMap<String, String>)> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let catalog: kira_core::catalog::Catalog =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    if catalog.schema != kira_core::catalog::SCHEMA {
+        bail!(
+            "{} is schema {}, expected {}",
+            path.display(),
+            catalog.schema,
+            kira_core::catalog::SCHEMA
+        );
+    }
+
+    let mut ids = BTreeMap::new();
+    let mut folders = BTreeMap::new();
+    for app in &catalog.apps {
+        ids.insert(app.app_id, app.name.clone());
+        folders.insert(app.folder.to_ascii_lowercase(), app.name.clone());
+    }
+    Ok((ids, folders))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GOOD: &str = r#"
+app_id = "A7C31F0E9B482D65"
+source = "https://github.com/someone/una-tide-clock"
+subdir = "."
+folder = "TideClock"
+licence = "MIT"
+maintainer = "someone"
+
+[[versions]]
+version = "1.0.0"
+rev = "3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d"
+sdk_rev = "apps-v1.3.0"
+"#;
+
+    fn good() -> Manifest {
+        parse("tide-clock", GOOD).unwrap()
+    }
+
+    fn checked(manifest: &Manifest) -> Vec<String> {
+        let mut problems = Vec::new();
+        check_one(manifest, &mut problems);
+        problems.into_iter().map(|p| p.message).collect()
+    }
+
+    #[test]
+    fn a_well_formed_manifest_is_accepted() {
+        let manifest = good();
+        assert_eq!(manifest.slug, "tide-clock");
+        assert_eq!(manifest.app_id.to_string(), "A7C31F0E9B482D65");
+        assert_eq!(manifest.versions[0].version, Version::new(1, 0, 0));
+        assert!(checked(&manifest).is_empty(), "{:?}", checked(&manifest));
+        assert!(validate(&[manifest], &BTreeMap::new(), &BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn subdir_defaults_to_the_repository_root() {
+        let text = GOOD.replace("subdir = \".\"\n", "");
+        assert_eq!(parse("tide-clock", &text).unwrap().subdir, ".");
+    }
+
+    #[test]
+    fn an_unknown_field_is_refused_rather_than_ignored() {
+        // A typo in a field name must not silently mean "default".
+        let text = format!("{GOOD}\nsandbox = false\n");
+        assert!(parse("tide-clock", &text).is_err());
+    }
+
+    #[test]
+    fn a_moving_reference_is_not_a_pinned_source() {
+        for rev in [
+            "v1.0.0",
+            "main",
+            "3f9a1c8",
+            "3F9A1C8E5D2B7046AF13C9E8B25D704A6F1C8E3D",
+        ] {
+            let text = GOOD.replace("3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d", rev);
+            let manifest = parse("tide-clock", &text).unwrap();
+            let problems = checked(&manifest);
+            assert!(
+                problems.iter().any(|p| p.contains("commit sha")),
+                "{rev} should be refused, got {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_source_url_must_be_plain_https() {
+        for source in [
+            "http://github.com/someone/app",
+            "git@github.com:someone/app.git",
+            "https://user:pw@github.com/someone/app",
+            "https://github.com/someone/app?ref=main",
+        ] {
+            let text = GOOD.replace("https://github.com/someone/una-tide-clock", source);
+            let manifest = parse("tide-clock", &text).unwrap();
+            assert!(!checked(&manifest).is_empty(), "{source} should be refused");
+        }
+    }
+
+    #[test]
+    fn a_subdir_cannot_escape_the_repository() {
+        for subdir in ["../elsewhere", "/etc", "apps\\one", "a/../../b"] {
+            let text = GOOD.replace("subdir = \".\"", &format!("subdir = {subdir:?}"));
+            let manifest = parse("tide-clock", &text).unwrap();
+            assert!(
+                checked(&manifest).iter().any(|p| p.contains("subdir")),
+                "{subdir} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_folder_must_be_usable_on_the_watch() {
+        for folder in ["", "SharedData", "System", "NUL", "has space", "with/slash"] {
+            let text = GOOD.replace("folder = \"TideClock\"", &format!("folder = {folder:?}"));
+            let manifest = parse("tide-clock", &text).unwrap();
+            assert!(
+                checked(&manifest).iter().any(|p| p.contains("folder")),
+                "{folder:?} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_licence_must_be_one_kira_recognises() {
+        let text = GOOD.replace("licence = \"MIT\"", "licence = \"All rights reserved\"");
+        let manifest = parse("tide-clock", &text).unwrap();
+        assert!(checked(&manifest).iter().any(|p| p.contains("licence")));
+    }
+
+    #[test]
+    fn an_identity_the_catalogue_already_uses_is_refused() {
+        let manifest = good();
+        let taken_id = BTreeMap::from([(manifest.app_id, "Live HR".to_owned())]);
+        let problems = validate(std::slice::from_ref(&manifest), &taken_id, &BTreeMap::new());
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("already belongs"))
+        );
+
+        let taken_folder = BTreeMap::from([("tideclock".to_owned(), "Alarm".to_owned())]);
+        let problems = validate(&[manifest], &BTreeMap::new(), &taken_folder);
+        assert!(problems.iter().any(|p| p.message.contains("already used")));
+    }
+
+    #[test]
+    fn two_submissions_cannot_share_an_identity() {
+        let first = good();
+        let mut second = good();
+        second.slug = "other".into();
+        // Same AppID and same folder as the first.
+        let problems = validate(
+            &[first.clone(), second.clone()],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert!(problems.iter().any(|p| p.message.contains("also claimed")));
+        assert_eq!(
+            problems.len(),
+            2,
+            "both the id and the folder collide: {problems:?}"
+        );
+
+        // Distinct identities are fine.
+        second.app_id = AppId::new(0x1234_5678_9ABC_DEF0);
+        second.folder = "Other".into();
+        assert!(validate(&[first, second], &BTreeMap::new(), &BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn a_published_version_cannot_be_repointed() {
+        let before = vec![good()];
+        let mut after = good();
+        after.versions[0].rev = "0".repeat(40);
+        let problems = check_unchanged(&before, &[after]);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].message.contains("publish a new version"));
+    }
+
+    #[test]
+    fn adding_a_version_is_allowed_and_removing_one_is_not() {
+        let before = vec![good()];
+        let mut after = good();
+        after.versions.push(Entry {
+            version: Version::new(1, 1, 0),
+            rev: "a".repeat(40),
+            sdk_rev: "apps-v1.3.0".into(),
+        });
+        assert!(check_unchanged(&before, &[after]).is_empty());
+
+        let mut emptied = good();
+        emptied.versions.clear();
+        let problems = check_unchanged(&before, &[emptied]);
+        assert!(problems.iter().any(|p| p.message.contains("was removed")));
+    }
+
+    #[test]
+    fn a_manifest_cannot_be_deleted_or_have_its_identity_swapped() {
+        let before = vec![good()];
+        assert!(
+            check_unchanged(&before, &[])[0]
+                .message
+                .contains("was removed")
+        );
+
+        let mut after = good();
+        after.app_id = AppId::new(0xDEAD_BEEF_DEAD_BEEF);
+        assert!(
+            check_unchanged(&before, &[after])
+                .iter()
+                .any(|p| p.message.contains("different app"))
+        );
+    }
+
+    #[test]
+    fn a_recipe_records_the_exact_commit() {
+        let items = wanted(&[good()], "sha256:abc");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].recipe.app_source,
+            "git:https://github.com/someone/una-tide-clock\
+             @3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d:."
+        );
+        assert_eq!(items[0].recipe.sdk_rev, "apps-v1.3.0");
+        assert_eq!(items[0].folder, "TideClock");
+        // Two versions of one app are two different artifacts.
+        let mut two = good();
+        two.versions.push(Entry {
+            version: Version::new(1, 1, 0),
+            rev: "b".repeat(40),
+            sdk_rev: "apps-v1.3.0".into(),
+        });
+        let items = wanted(&[two], "sha256:abc");
+        assert_ne!(items[0].recipe.key(), items[1].recipe.key());
+        // Newest first.
+        assert_eq!(items[0].recipe.build_version, Version::new(1, 1, 0));
+    }
+
+    #[test]
+    fn the_report_lists_every_problem_at_once() {
+        let mut manifest = good();
+        manifest.licence = "nope".into();
+        manifest.folder = "System".into();
+        let problems = validate(&[manifest], &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!(problems.len(), 2);
+        let text = report(&problems);
+        assert!(text.starts_with("2 problems:"));
+        assert!(text.contains("tide-clock: "));
+        assert_eq!(report(&[]), "no problems found\n");
+    }
+}

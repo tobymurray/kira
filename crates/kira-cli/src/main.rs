@@ -4,6 +4,7 @@ mod build;
 mod build_app;
 mod icons;
 mod recipe;
+mod registry;
 mod serve;
 
 use std::fmt::Write as _;
@@ -163,6 +164,16 @@ enum Command {
         out: Option<PathBuf>,
     },
 
+    /// Check or plan third-party app submissions in `registry/`.
+    ///
+    /// A submission is a manifest naming a repository, a commit and the SDK
+    /// revision to build against — never an uploaded binary. See
+    /// registry/README.md.
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommand,
+    },
+
     /// Regenerate the favicons and link-preview card from the source artwork.
     Icons {
         /// Source artwork.
@@ -172,6 +183,57 @@ enum Command {
         #[arg(long, default_value = "site")]
         out: PathBuf,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum RegistryCommand {
+    /// Check every manifest, and refuse anything already published.
+    ///
+    /// Exits non-zero with the whole list of problems, so a contributor gets one
+    /// round trip rather than one problem at a time.
+    Validate {
+        /// Directory of manifests.
+        #[arg(long, default_value = "registry")]
+        dir: PathBuf,
+        /// The same directory as it exists on the base branch, to check that
+        /// nothing already published has been rewritten.
+        #[arg(long)]
+        base: Option<PathBuf>,
+        /// A published catalog.json, so a submission cannot claim an identity
+        /// the catalogue already uses.
+        #[arg(long)]
+        catalog: Option<PathBuf>,
+    },
+
+    /// Emit what the submissions need built, in the same shape as `cache-plan`.
+    Plan {
+        /// Directory of manifests.
+        #[arg(long, default_value = "registry")]
+        dir: PathBuf,
+        /// Toolchain identity, normally a container digest.
+        #[arg(long)]
+        toolchain: String,
+        /// File of asset names already cached, one per line.
+        #[arg(long)]
+        available: Option<PathBuf>,
+        /// Where to write the plan. Defaults to stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+}
+
+/// Read a file of asset names, one per line.
+fn read_available(path: Option<&PathBuf>) -> Result<std::collections::BTreeSet<String>> {
+    let Some(path) = path else {
+        return Ok(std::collections::BTreeSet::new());
+    };
+    Ok(std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 /// Say so when a recipe input is missing, rather than minting a key that
@@ -192,6 +254,69 @@ fn warn_if_unpinned(toolchain: &str, app_source: &str, sdk_rev: &str) {
              do not cache the result",
             unpinned.join(", ")
         );
+    }
+}
+
+/// Run a `registry` subcommand.
+///
+/// Split out of `main` so the dispatch there stays a list of one-liners.
+fn run_registry(command: RegistryCommand) -> Result<()> {
+    match command {
+        RegistryCommand::Validate { dir, base, catalog } => {
+            let manifests = registry::load_dir(&dir)?;
+            let (ids, folders) = match &catalog {
+                Some(path) => registry::taken_from_catalog(path)?,
+                None => Default::default(),
+            };
+            let mut problems = registry::validate(&manifests, &ids, &folders);
+            if let Some(base) = &base {
+                problems.extend(registry::check_unchanged(
+                    &registry::load_dir(base)?,
+                    &manifests,
+                ));
+            }
+
+            eprintln!(
+                "{} submission(s) in {}{}",
+                manifests.len(),
+                dir.display(),
+                if catalog.is_some() {
+                    ", checked against the published catalogue"
+                } else {
+                    ""
+                }
+            );
+            print!("{}", registry::report(&problems));
+            if problems.is_empty() {
+                Ok(())
+            } else {
+                // A non-zero exit is what fails the pull request check.
+                std::process::exit(1);
+            }
+        }
+        RegistryCommand::Plan {
+            dir,
+            toolchain,
+            available,
+            out,
+        } => {
+            let wanted = registry::wanted(&registry::load_dir(&dir)?, &toolchain);
+            let planned = recipe::plan(&wanted, &read_available(available.as_ref())?);
+            let items = recipe::plan_items(&planned);
+            let to_build = items.iter().filter(|i| i.action == "build").count();
+            eprintln!(
+                "{} submitted build(s): {} to build, {} already cached",
+                items.len(),
+                to_build,
+                items.len() - to_build
+            );
+            let json = serde_json::to_string_pretty(&items)?;
+            match out {
+                Some(path) => std::fs::write(path, format!("{json}\n"))?,
+                None => println!("{json}"),
+            }
+            Ok(())
+        }
     }
 }
 
@@ -285,17 +410,7 @@ fn main() -> Result<()> {
                 .parse()
                 .map_err(|e| anyhow::anyhow!("--version: {e}"))?;
             let wanted = recipe::wanted_from_sdk(&sdk, &sdk_rev, &toolchain, version)?;
-            let available = match available {
-                Some(path) => std::fs::read_to_string(&path)
-                    .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect(),
-                None => std::collections::BTreeSet::new(),
-            };
-            let planned = recipe::plan(&wanted, &available);
+            let planned = recipe::plan(&wanted, &read_available(available.as_ref())?);
             let items = recipe::plan_items(&planned);
             let to_build = items.iter().filter(|i| i.action == "build").count();
             eprintln!(
@@ -311,6 +426,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::Registry { command } => run_registry(command),
         Command::Inspect { file } => inspect(&file),
         Command::Serve { root, port } => serve::run(&root, port),
         Command::Icons { src, out } => icons::run(&src, &out),

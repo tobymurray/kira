@@ -229,6 +229,13 @@ pub(crate) struct PlanItem {
     pub asset: String,
     /// `"fetch"` or `"build"`, for a workflow to branch on.
     pub action: &'static str,
+    /// Canonical source identity, e.g. `git:https://host/repo@<sha>:<subdir>`.
+    ///
+    /// Emitted because a builder needs to fetch it and the recipe key is a
+    /// digest, not a description: nothing can be recovered from it.
+    pub app_source: String,
+    /// SDK revision to compile against.
+    pub sdk_rev: String,
 }
 
 /// Render a plan as JSON for a workflow to consume.
@@ -246,6 +253,8 @@ pub(crate) fn plan_items(planned: &[(Wanted, Action)]) -> Vec<PlanItem> {
                 Action::Fetch(_) => "fetch",
                 Action::Build(_) => "build",
             },
+            app_source: wanted.recipe.app_source.clone(),
+            sdk_rev: wanted.recipe.sdk_rev.clone(),
         })
         .collect()
 }
