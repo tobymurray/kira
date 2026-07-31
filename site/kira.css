@@ -44,20 +44,24 @@ body {
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Wide enough to use a large monitor, capped so it never becomes a full-width
+   sprawl. The 92vw term is what fills a 4K screen; the 2400px term stops an
+   ultrawide from turning the catalogue into one endless row. Line length inside
+   is constrained separately, in ch, because how wide text should be is a
+   property of the text and not of the window. */
 .wrap {
-  max-width: 1180px;
+  max-width: min(2400px, 92vw);
   margin: 0 auto;
   padding: 0 20px;
 }
 
 /* Two panels side by side once there is room for both, one column below that.
-   auto-fit rather than a fixed pair so a hidden panel -- "Pending changes"
-   before a watch is connected -- leaves no empty column behind. */
+   Exactly two tracks rather than auto-fill: with a minimum track width, a wide
+   screen would lay out four tracks for two panels and leave half the row empty,
+   and a phone narrower than that minimum would overflow sideways. */
 .split {
   display: grid;
-  /* min() so a track can never be wider than the viewport: a bare 420px
-     minimum overflows a phone and takes the whole page sideways with it. */
-  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+  grid-template-columns: 1fr;
   gap: 18px;
   align-items: start;
 }
@@ -68,13 +72,42 @@ body {
 
 /* Once the tracks are side by side, the grid gap owns the spacing. */
 @media (min-width: 880px) {
+  .split {
+    grid-template-columns: repeat(2, 1fr);
+    margin-bottom: 18px;
+  }
+
   .split > .panel {
     margin-bottom: 0;
   }
+}
 
-  .split {
-    margin-bottom: 18px;
+/* Large displays: the page gets wider, so the text gets slightly bigger rather
+   than staying small in the middle of a lot of space. */
+@media (min-width: 1600px) {
+  body {
+    font-size: 16px;
   }
+
+  .panel {
+    padding: 20px 22px;
+  }
+}
+
+/* Readable line length, independent of the container: a panel can be half a 4K
+   screen wide without its paragraphs running the whole way across. */
+.panel > p,
+.panel > .note,
+.type-blurb,
+.links li,
+ul.changes li,
+.plan-row .what {
+  max-width: 78ch;
+}
+
+#release-notes,
+#plan-list {
+  max-width: 110ch;
 }
 
 .topbar {
@@ -276,12 +309,21 @@ button.ghost:hover:not(:disabled),
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  /* auto-fit collapses leftover tracks, so a row grows to use the width rather
+     than stopping a quarter of the way across a wide screen. A fixed track
+     maximum was tried instead and cost more than it gave: the repetition count
+     is worked out from the maximum, so 360px tracks left a 1280px window showing
+     two cards where 1fr shows four. The cap moved to the card itself. */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
 }
 
 .card {
   display: flex;
+  /* Stops the one app in a single-app section from becoming a card the width of
+     the page. On a wide screen the tracks land near this anyway, so cards end up
+     much the same size in every section. */
+  max-width: 400px;
   gap: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
