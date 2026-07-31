@@ -73,6 +73,15 @@ pub(crate) struct Entry {
     pub rev: String,
     /// SDK revision to compile against, e.g. `apps-v1.3.0`.
     pub sdk_rev: String,
+    /// Where the app sits in the repository *for this version*, when it has
+    /// moved.
+    ///
+    /// Exists because the path is part of the recipe: with one path for the whole
+    /// manifest, rearranging a repository would silently change the recipe of
+    /// versions already published, and their artifacts would no longer be the ones
+    /// the catalogue describes. Overriding per version lets a monorepo be
+    /// reorganised without rewriting history.
+    pub subdir: Option<String>,
 }
 
 /// A submitted app, as declared in `registry/<slug>.toml`.
@@ -98,6 +107,13 @@ pub(crate) struct Manifest {
     pub maintainer: String,
     /// Every version to publish, in any order.
     pub versions: Vec<Entry>,
+}
+
+impl Manifest {
+    /// Where a given version's source sits in the repository.
+    pub(crate) fn subdir_for<'a>(&'a self, entry: &'a Entry) -> &'a str {
+        entry.subdir.as_deref().unwrap_or(&self.subdir)
+    }
 }
 
 fn dot() -> String {
@@ -204,15 +220,18 @@ fn check_one(manifest: &Manifest, problems: &mut Vec<Problem>) {
         say(format!("source {source:?} contains whitespace"));
     }
 
-    let subdir = &manifest.subdir;
-    if subdir.starts_with('/')
-        || subdir.contains('\\')
-        || subdir.split('/').any(|part| part == "..")
-        || subdir.is_empty()
+    for subdir in std::iter::once(&manifest.subdir)
+        .chain(manifest.versions.iter().filter_map(|e| e.subdir.as_ref()))
     {
-        say(format!(
-            "subdir {subdir:?} must be a relative path inside the repository"
-        ));
+        if subdir.starts_with('/')
+            || subdir.contains('\\')
+            || subdir.split('/').any(|part| part == "..")
+            || subdir.is_empty()
+        {
+            say(format!(
+                "subdir {subdir:?} must be a relative path inside the repository"
+            ));
+        }
     }
 
     check_folder(manifest, &mut say);
@@ -389,13 +408,20 @@ pub(crate) fn check_unchanged(before: &[Manifest], after: &[Manifest]) -> Vec<Pr
                     slug: old.slug.clone(),
                     message: format!("published version {} was removed", entry.version),
                 }),
-                Some(now) if now.rev != entry.rev || now.sdk_rev != entry.sdk_rev => {
+                Some(now)
+                    if now.rev != entry.rev
+                        || now.sdk_rev != entry.sdk_rev
+                        || new.subdir_for(now) != old.subdir_for(entry) =>
+                {
                     problems.push(Problem {
                         slug: old.slug.clone(),
                         message: format!(
-                            "version {} was already published from {}; publish a new version \
-                             instead of repointing this one",
-                            entry.version, entry.rev
+                            "version {} was already published from {} at {}; publish a new \
+                             version instead of repointing this one — if the app moved, set \
+                             subdir on the new version and leave this one alone",
+                            entry.version,
+                            entry.rev,
+                            old.subdir_for(entry)
                         ),
                     });
                 }
@@ -417,7 +443,11 @@ pub(crate) fn wanted(manifests: &[Manifest], toolchain: &str) -> Vec<Wanted> {
                 app_id: manifest.app_id,
                 folder: manifest.folder.clone(),
                 recipe: Recipe {
-                    app_source: app_source(&manifest.source, &entry.rev, &manifest.subdir),
+                    app_source: app_source(
+                        &manifest.source,
+                        &entry.rev,
+                        manifest.subdir_for(&entry),
+                    ),
                     sdk_rev: entry.sdk_rev.clone(),
                     toolchain: toolchain.to_owned(),
                     build_version: entry.version,
@@ -651,6 +681,7 @@ sdk_rev = "apps-v1.3.0"
             version: Version::new(1, 1, 0),
             rev: "a".repeat(40),
             sdk_rev: "apps-v1.3.0".into(),
+            subdir: None,
         });
         assert!(check_unchanged(&before, &[after]).is_empty());
 
@@ -679,6 +710,42 @@ sdk_rev = "apps-v1.3.0"
     }
 
     #[test]
+    fn moving_an_app_within_a_repository_needs_a_new_version() {
+        // The path is part of the recipe, so changing it for a published version
+        // would leave the catalogue describing an artifact nobody can rebuild.
+        let before = vec![good()];
+        let mut moved = good();
+        moved.subdir = "apps/tide-clock".into();
+        let problems = check_unchanged(&before, &[moved]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].message.contains("if the app moved"));
+
+        // The way through is a per-version override, leaving history alone.
+        let mut after = good();
+        after.subdir = "apps/tide-clock".into();
+        after.versions[0].subdir = Some(".".into());
+        after.versions.push(Entry {
+            version: Version::new(1, 1, 0),
+            rev: "c".repeat(40),
+            sdk_rev: "apps-v1.3.0".into(),
+            subdir: None,
+        });
+        assert!(check_unchanged(&before, &[after.clone()]).is_empty());
+
+        // And each version builds from where it actually lived.
+        let items = wanted(&[after], "sha256:abc");
+        assert!(items[0].recipe.app_source.ends_with(":apps/tide-clock"));
+        assert!(items[1].recipe.app_source.ends_with(":."));
+    }
+
+    #[test]
+    fn a_per_version_path_cannot_escape_the_repository_either() {
+        let mut manifest = good();
+        manifest.versions[0].subdir = Some("../elsewhere".into());
+        assert!(checked(&manifest).iter().any(|p| p.contains("subdir")));
+    }
+
+    #[test]
     fn a_recipe_records_the_exact_commit() {
         let items = wanted(&[good()], "sha256:abc");
         assert_eq!(items.len(), 1);
@@ -695,6 +762,7 @@ sdk_rev = "apps-v1.3.0"
             version: Version::new(1, 1, 0),
             rev: "b".repeat(40),
             sdk_rev: "apps-v1.3.0".into(),
+            subdir: None,
         });
         let items = wanted(&[two], "sha256:abc");
         assert_ne!(items[0].recipe.key(), items[1].recipe.key());

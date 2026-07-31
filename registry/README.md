@@ -36,6 +36,7 @@ maintainer = "someone"                                   # GitHub handle
 version = "1.0.0"
 rev     = "3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d"     # full commit sha
 sdk_rev = "apps-v1.3.0"                                  # SDK release to build against
+# subdir = "old/path"                                    # optional, if this version lived elsewhere
 ```
 
 Then open a pull request. Check it locally first — the same checks CI runs:
@@ -44,6 +45,35 @@ Then open a pull request. Check it locally first — the same checks CI runs:
 cargo run -p kira-cli -- registry validate --catalog site/data/catalog.json
 cargo run -p kira-cli -- registry plan --toolchain unpinned
 ```
+
+## One repository or several?
+
+**One repository holding all your apps is the better default.** `subdir` exists for
+exactly this: one manifest per app, each pointing at the same `source` with a
+different path. Versions stay independent — a manifest is only rebuilt when its own
+entries change — so a monorepo does not force your apps into lockstep, and shared
+helpers are just a directory rather than a submodule.
+
+```
+una-apps/                      registry/tide-clock.toml  → subdir = "tide-clock"
+├── shared/                    registry/tide-glance.toml → subdir = "tide-glance"
+├── tide-clock/
+│   └── Software/TideClock-CMake/CMakeLists.txt
+└── tide-glance/
+    └── Software/App/TideGlance-CMake/CMakeLists.txt
+```
+
+The one hard constraint: **each app directory must contain exactly one
+`*-CMake` project** under `Software/`. Kira refuses to guess between two, so apps
+cannot share a `Software/` tree.
+
+Reach for separate repositories when an app has a different licence, a different
+set of maintainers, or an audience that should not have to clone the rest.
+
+If you later rearrange the repository, do not edit `subdir` on versions already
+published — the path is part of the recipe, so that would change what those
+versions claim to be built from. Set `subdir` on the new version instead, and pin
+the old ones to where they actually lived.
 
 ## What gets checked, and why
 
@@ -54,6 +84,7 @@ cargo run -p kira-cli -- registry plan --toolchain unpinned
 | `folder` is unused, and is a name FAT accepts | The watch loads whichever `.uapp` it finds first in a folder, so a collision can silently boot the wrong app. |
 | `source` is a plain `https` URL | It is published in the catalogue and fetched by CI. No credentials, no query string. |
 | `subdir` stays inside the repository | It is a path handed to a build. |
+| A published version's `subdir` never changes | The path is part of the recipe. Moving an app is fine; rewriting where an old version came from is not. |
 | `licence` is a recognised open licence | Source-accessible is the premise. If yours is missing from the list, add it in the same pull request. |
 | A published version's `rev` never changes | Somebody's watch may be carrying it. Change anything by publishing a new version. |
 
