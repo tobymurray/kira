@@ -8,6 +8,14 @@ each version is marked according to whether the app's code actually changed.
 > Unofficial. Not affiliated with, endorsed or sponsored by UNA Watch Ltd.
 > See [THIRD-PARTY.md](THIRD-PARTY.md).
 
+**Questions, ideas and bugs:** ask in
+[Discussions](https://github.com/tobymurray/kira/discussions), file Kira's own
+bugs as [issues](https://github.com/tobymurray/kira/issues/new/choose), and report
+security problems [privately](https://github.com/tobymurray/kira/security/advisories/new).
+Anything about the watch or an app's own behaviour belongs with
+[UNA Watch](https://github.com/UNAWatch/una-sdk/issues) instead. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## How it works
 
 There is no server. A GitHub Actions run fetches every published `apps-v*`
@@ -16,8 +24,12 @@ metadata out of each `.uapp` binary, and publishes a catalogue plus the binaries
 to GitHub Pages. The page then talks to the watch directly as a USB mass-storage
 volume.
 
-Apps are never rebuilt here — the SDK's own CI already builds every app in its
-ARM toolchain container, so Kira consumes those artifacts.
+Kira builds the binaries it ships rather than trusting upstream's: a second
+workflow compiles each app from its tagged source in a digest-pinned ARM
+toolchain container and republishes the result, recording what it was built from.
+Where a release predates the SDK's reproducibility fix, or where the rebuild does
+not match, the upstream artifact is used instead and the card says so. See
+[docs/reproducibility.md](docs/reproducibility.md).
 
 ### One implementation, two runtimes
 
@@ -252,8 +264,9 @@ issued the certificate.
   See [Module size](#module-size) before trying to shrink it further.
 - **No signing.** Integrity is SHA-256 (against this catalogue) plus the `.uapp`
   CRC-32. That protects against corruption and truncation, not against a
-  malicious publisher. Kira republishes upstream binaries verbatim and claims no
-  review of them.
+  malicious publisher — the hashes live in the same repository as the artifacts
+  they describe. Kira offers provenance and integrity, not authenticity, and
+  claims no review of the apps themselves.
 - **The kernel version cannot be checked over USB.** An app's `minKernelVersion`
   is a BLE/DIS check in the official mobile app. Kira surfaces the LibC ABI
   version from the header instead; matching it to your firmware is up to you.
