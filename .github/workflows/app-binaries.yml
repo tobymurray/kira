@@ -72,9 +72,53 @@ jobs:
           path: target/x86_64-unknown-linux-musl/release/kira
           retention-days: 1
 
+  plan:
+    name: Decide what to build
+    runs-on: ubuntu-latest
+    steps:
+      # gh is preinstalled here but absent from the toolchain image, so the two
+      # questions that need it -- which releases exist, and what the store already
+      # holds -- are answered before entering the container.
+      - name: Resolve releases and the current store
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANTED: ${{ inputs.sdk_ref || 'all' }}
+        run: |
+          set -euo pipefail
+          command -v gh > /dev/null || { echo "gh is required" >&2; exit 1; }
+
+          if [ "$WANTED" != "all" ] && [ -n "$WANTED" ]; then
+            echo "$WANTED" > tags.txt
+          else
+            gh api --paginate repos/UNAWatch/una-sdk/releases \
+              --jq '.[] | select(.prerelease == false)
+                        | select(.tag_name | startswith("apps-v"))
+                        | .tag_name' > tags.txt
+          fi
+          echo "$(wc -l < tags.txt) release(s) to consider:"
+          sed 's/^/  /' tags.txt
+
+          # An absent release means an empty store. Any other failure would also
+          # land here and cause a full rebuild -- wasteful, never wrong.
+          if gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" --json assets \
+               --jq '.assets[].name' > available.txt 2>/dev/null; then
+            echo "store holds $(wc -l < available.txt) artifact(s)"
+          else
+            : > available.txt
+            echo "no $BINARIES_TAG release yet; treating the store as empty"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plan-inputs
+          path: |
+            tags.txt
+            available.txt
+          retention-days: 1
+
   build:
     name: Build apps from source
-    needs: tool
+    needs: [tool, plan]
     runs-on: ubuntu-latest
     container: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
     steps:
@@ -116,38 +160,9 @@ jobs:
             find /opt/st/stm32cubeide_* -type f -name make | head -n 1 | xargs dirname
           } >> "$GITHUB_PATH"
 
-      - name: Decide which releases to build
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WANTED: ${{ inputs.sdk_ref || 'all' }}
-        run: |
-          set -euo pipefail
-          if [ "$WANTED" != "all" ] && [ -n "$WANTED" ]; then
-            echo "$WANTED" > tags.txt
-          else
-            gh api --paginate repos/UNAWatch/una-sdk/releases \
-              --jq '.[] | select(.prerelease == false)
-                        | select(.tag_name | startswith("apps-v"))
-                        | .tag_name' > tags.txt
-          fi
-          echo "$(wc -l < tags.txt) release(s) to consider:"
-          sed 's/^/  /' tags.txt
-
-      - name: List what the cache already holds
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # A missing release simply means an empty cache.
-          if gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" --json assets \
-               --jq '.assets[].name' > available.txt 2>/dev/null; then
-            echo "store holds $(wc -l < available.txt) artifact(s)"
-          else
-            : > available.txt
-            echo "no app-binaries release yet; treating the store as empty"
-          fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: plan-inputs
 
       - name: Build every release
         shell: bash
