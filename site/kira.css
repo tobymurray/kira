@@ -240,6 +240,8 @@ button.ghost:hover:not(:disabled),
   border-radius: var(--radius);
   padding: 12px;
   align-items: flex-start;
+  /* Breathing room when a plan row jumps to this card. */
+  scroll-margin-top: 16px;
 }
 
 .card img {
@@ -391,6 +393,30 @@ pre.notes {
   color: var(--ink-soft);
   font-size: 13px;
 }
+
+/* Links to the app's card, where the version picker and history live. */
+.plan-row .plan-name {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.plan-row .plan-name:hover {
+  text-decoration: underline;
+}
+
+.plan-right {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.plan-right .dl {
+  font-size: 13px;
+  color: var(--accent);
+}
+
 
 .script {
   background: var(--bg);

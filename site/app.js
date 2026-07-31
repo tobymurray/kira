@@ -268,6 +268,7 @@ function renderCard(app, entry) {
 
   const card = document.createElement('div');
   card.className = 'card';
+  card.id = cardAnchor(app.appId);
 
   if (app.icon) {
     const img = document.createElement('img');
@@ -368,14 +369,18 @@ function renderCard(app, entry) {
     badge.className = `badge ${cls}`;
     badge.textContent = text;
     body.appendChild(badge);
-  } else {
-    const dl = document.createElement('a');
-    dl.className = 'dl';
-    dl.href = `${DATA_BASE}/${selected.download}`;
-    dl.textContent = `Download ${selected.version}`;
-    dl.setAttribute('download', selected.file);
-    body.appendChild(dl);
   }
+
+  // Offered whether or not a watch is connected: connecting used to replace this
+  // with a status badge, which left a plan row pointing at a card with nothing to
+  // act on.
+  const dl = document.createElement('a');
+  dl.className = 'dl';
+  dl.href = `${DATA_BASE}/${selected.download}`;
+  dl.textContent = `Download ${selected.version}`;
+  dl.setAttribute('download', selected.file);
+  dl.title = `${selected.file} → Apps/${app.folder}/`;
+  body.appendChild(dl);
 
   card.appendChild(body);
   return card;
@@ -669,7 +674,7 @@ async function installOne(entry) {
 }
 
 async function installAll() {
-  const jobs = state.plan.entries.filter((e) => e.status === 'install' || e.status === 'update');
+  const jobs = actionableJobs();
   if (jobs.length === 0) return;
 
   clearLog();
@@ -740,6 +745,28 @@ async function verifyFlash() {
 
 // ----------------------------------------------------------------- plan render
 
+/**
+ * Entries that would be written, in the catalogue's own grouping order so the two
+ * lists read consistently.
+ *
+ * `isActionable` comes from the planner rather than being re-derived from the
+ * status here: a corrupt install is actionable, and inferring the set from
+ * `install`/`update` alone silently dropped those.
+ */
+function actionableJobs() {
+  const order = new Map(TYPE_SECTIONS.map((s, i) => [s.type, i]));
+  return (state.plan?.entries ?? [])
+    .filter((e) => e.isActionable)
+    .sort(
+      (a, b) =>
+        (order.get(a.app.type) ?? 99) - (order.get(b.app.type) ?? 99) ||
+        a.app.name.localeCompare(b.app.name),
+    );
+}
+
+/** Anchor for an app's card, so a plan row can point at it. */
+const cardAnchor = (appId) => `app-${appId}`;
+
 function renderPlan() {
   const panel = el('plan-section');
   const list = el('plan-list');
@@ -756,24 +783,21 @@ function renderPlan() {
   const plan = state.plan;
   el('plan-summary').textContent =
     `${plan.install} to install · ${plan.update} to update · ${plan.current} up to date` +
+    (plan.corrupt > 0 ? ` · ${plan.corrupt} corrupt` : '') +
     (plan.restamps > 0 ? ` · ${plan.restamps} version-only` : '');
 
-  // Same grouping order as the catalogue, so the two lists read consistently.
-  const order = new Map(TYPE_SECTIONS.map((s, i) => [s.type, i]));
-  const jobs = plan.entries
-    .filter((e) => e.status === 'install' || e.status === 'update')
-    .sort(
-      (a, b) =>
-        (order.get(a.app.type) ?? 99) - (order.get(b.app.type) ?? 99) ||
-        a.app.name.localeCompare(b.app.name),
-    );
+  const jobs = actionableJobs();
 
   for (const entry of jobs) {
     const row = document.createElement('div');
     row.className = 'plan-row';
 
     const left = document.createElement('div');
-    const name = document.createElement('strong');
+    // Links to the card, which is where the version picker, the release history
+    // and the provenance for this app live.
+    const name = document.createElement('a');
+    name.className = 'plan-name';
+    name.href = `#${cardAnchor(entry.app.appId)}`;
     name.textContent = `${entry.app.name} (${entry.app.type})`;
     left.appendChild(name);
     const what = document.createElement('div');
@@ -783,10 +807,22 @@ function renderPlan() {
     left.appendChild(what);
     row.appendChild(left);
 
-    const size = document.createElement('div');
+    const right = document.createElement('div');
+    right.className = 'plan-right';
+    const size = document.createElement('span');
     size.className = 'muted';
     size.textContent = fmtSize(entry.app.size);
-    row.appendChild(size);
+    right.appendChild(size);
+    // The exact binary this row plans to write, so the row is useful even where
+    // the page cannot do the writing itself.
+    const dl = document.createElement('a');
+    dl.className = 'dl';
+    dl.href = `${DATA_BASE}/${entry.app.download}`;
+    dl.setAttribute('download', entry.app.file);
+    dl.textContent = 'Download';
+    dl.title = `${entry.app.file} → Apps/${where}/`;
+    right.appendChild(dl);
+    row.appendChild(right);
 
     list.appendChild(row);
   }
@@ -831,9 +867,29 @@ function renderPlan() {
     actions.appendChild(go);
     el('script-details').hidden = true;
   } else {
+    // This tier cannot write to the drive, so the script *is* the install-all
+    // action. Promote it out of the collapsed preview, which read as an
+    // afterthought next to a list with nothing to click.
+    const go = document.createElement('button');
+    go.className = 'primary';
+    go.type = 'button';
+    go.textContent = `Download installer for ${jobs.length} app${jobs.length === 1 ? '' : 's'}`;
+    go.addEventListener('click', downloadScript);
+    actions.appendChild(go);
+
+    const why = document.createElement('p');
+    why.className = 'muted';
+    why.textContent =
+      'Run it and it performs exactly these writes, checking each binary before it ' +
+      'touches the watch. Individual binaries can be downloaded per app above, and ' +
+      'each row shows the folder it belongs in.';
+    // Into the list, which is cleared each render; a sibling of `actions` would
+    // accumulate one copy per refresh.
+    list.prepend(why);
+
     renderScript();
     el('script-details').hidden = false;
-    el('script-details').open = true;
+    el('script-details').open = false;
   }
 }
 
@@ -844,6 +900,16 @@ function currentScript() {
 
 function renderScript() {
   el('script-body').textContent = currentScript();
+}
+
+function downloadScript() {
+  const ps = el('script-kind').value === 'ps1';
+  const blob = new Blob([currentScript()], { type: 'text/plain' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = ps ? 'kira-install.ps1' : 'kira-install.sh';
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 
 // ------------------------------------------------------------------ connecting
@@ -1057,15 +1123,7 @@ function wireUp() {
       el('script-copy').textContent = 'Copy';
     }, 1200);
   });
-  el('script-download').addEventListener('click', () => {
-    const ps = el('script-kind').value === 'ps1';
-    const blob = new Blob([currentScript()], { type: 'text/plain' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = ps ? 'kira-install.ps1' : 'kira-install.sh';
-    link.click();
-    URL.revokeObjectURL(link.href);
-  });
+  el('script-download').addEventListener('click', downloadScript);
 }
 
 async function main() {

@@ -142,6 +142,11 @@ struct EntryView<'a> {
     recognised: plan::Recognised,
     /// Why this entry is in the plan, e.g. "1.2.0 → 1.3.0".
     describe: String,
+    /// Whether acting on this entry would write to the watch.
+    ///
+    /// Exposed rather than left for the page to infer from `status`, which had
+    /// the UI silently dropping corrupt installs that the planner does offer.
+    is_actionable: bool,
 }
 
 /// A whole plan, with the counts a UI would otherwise recompute.
@@ -155,6 +160,11 @@ struct PlanView<'a> {
     install: usize,
     update: usize,
     current: usize,
+    /// Installs the watch is ignoring because they fail their own CRC.
+    ///
+    /// Counted separately because they are in none of the three above, and a
+    /// summary built from those alone under-reports the work.
+    corrupt: usize,
 }
 
 impl<'a> PlanView<'a> {
@@ -172,6 +182,7 @@ impl<'a> PlanView<'a> {
                     identical_payload: entry.identical_payload,
                     recognised: entry.recognised,
                     describe: entry.describe(),
+                    is_actionable: entry.is_actionable(),
                 })
                 .collect(),
             foreign: &plan.foreign,
@@ -180,6 +191,7 @@ impl<'a> PlanView<'a> {
             install: count(Status::Install),
             update: count(Status::Update),
             current: count(Status::Current),
+            corrupt: count(Status::Corrupt),
         }
     }
 }
