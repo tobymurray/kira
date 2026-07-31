@@ -74,6 +74,17 @@ enum Command {
         toolchain: Option<String>,
     },
 
+    /// Print what a .uapp says about itself, as JSON.
+    ///
+    /// Useful on its own for a downloaded binary, and used by the build pipeline:
+    /// the version stamped into a release's binaries is not always the one in its
+    /// tag -- apps-v0.1.9-rc1 contains binaries stamped 0.1.4 -- and the version
+    /// is part of the recipe, so it has to be read rather than assumed.
+    Inspect {
+        /// The .uapp to read.
+        file: PathBuf,
+    },
+
     /// Serve the site locally over HTTP.
     ///
     /// The File System Access API needs a secure context, and <http://localhost>
@@ -184,6 +195,35 @@ fn warn_if_unpinned(toolchain: &str, app_source: &str, sdk_rev: &str) {
     }
 }
 
+/// Print what a `.uapp` says about itself.
+///
+/// # Errors
+/// If the file cannot be read or is not a parseable `.uapp`.
+fn inspect(file: &std::path::Path) -> Result<()> {
+    let bytes =
+        std::fs::read(file).map_err(|e| anyhow::anyhow!("reading {}: {e}", file.display()))?;
+    let uapp = kira_core::uapp::Uapp::parse(&bytes)?;
+    let header = uapp.header();
+    let crc = uapp.verify_crc();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "appId": header.app_id.to_string(),
+            "name": header.name,
+            "version": header.version.to_string(),
+            "libcVersion": header.libc_version.to_string(),
+            "type": header.app_type().to_string(),
+            "autostart": header.autostart(),
+            "size": bytes.len(),
+            "serviceLen": header.service_len,
+            "guiLen": uapp.gui_len(),
+            "crcValid": crc.is_valid(),
+            "sha256": sha256_hex(&bytes),
+        }))?
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Build {
@@ -271,6 +311,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::Inspect { file } => inspect(&file),
         Command::Serve { root, port } => serve::run(&root, port),
         Command::Icons { src, out } => icons::run(&src, &out),
     }

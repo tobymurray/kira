@@ -74,8 +74,15 @@ jobs:
 
   plan:
     name: Decide what to build
+    needs: tool
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: kira-bin
+          path: /usr/local/bin
+      - run: chmod +x /usr/local/bin/kira && kira --version
+
       # gh is preinstalled here but absent from the toolchain image, so the two
       # questions that need it -- which releases exist, and what the store already
       # holds -- are answered before entering the container.
@@ -98,6 +105,28 @@ jobs:
           echo "$(wc -l < tags.txt) release(s) to consider:"
           sed 's/^/  /' tags.txt
 
+          # The version stamped into a release is not reliably the one in its tag:
+          # apps-v0.1.9-rc1 ships binaries stamped 0.1.4. Since the version is part
+          # of the recipe, guessing it from the tag produces artifacts the
+          # catalogue build then cannot find. Read it from upstream's own binary.
+          : > releases.tsv
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            rm -rf zip && mkdir -p zip/x
+            if ! gh release download "$tag" -R UNAWatch/una-sdk -D zip --clobber 2>/dev/null; then
+              echo "::warning::$tag has no downloadable assets, skipping"
+              continue
+            fi
+            asset=$(find zip -name '*.zip' | head -n 1)
+            [ -n "$asset" ] || { echo "::warning::$tag has no zip, skipping"; continue; }
+            unzip -q -o "$asset" -d zip/x
+            sample=$(find zip/x -name '*.uapp' | head -n 1)
+            [ -n "$sample" ] || { echo "::warning::$tag has no .uapp, skipping"; continue; }
+            version=$(kira inspect "$sample" | jq -r .version)
+            printf '%s\t%s\n' "$tag" "$version" >> releases.tsv
+            echo "  $tag stamps $version"
+          done < tags.txt
+
           # An absent release means an empty store. Any other failure would also
           # land here and cause a full rebuild -- wasteful, never wrong.
           if gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" --json assets \
@@ -112,7 +141,7 @@ jobs:
         with:
           name: plan-inputs
           path: |
-            tags.txt
+            releases.tsv
             available.txt
           retention-days: 1
 
@@ -172,13 +201,8 @@ jobs:
           : > failures.txt
           : > built.txt
 
-          while read -r tag; do
+          while IFS=$'\t' read -r tag version; do
             [ -n "$tag" ] || continue
-            # The version stamped into a release's binaries is the one in its tag;
-            # apps-v0.1.9-rc3 stamps 0.1.9. It has to match, because the version is
-            # part of the recipe and therefore of the artifact name.
-            version=$(printf '%s' "$tag" | sed -E 's/^apps-v//; s/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
-
             echo "::group::$tag (stamping $version)"
             # Untracked build directories from the previous tag would otherwise
             # accumulate and feed cmake stale cached paths.
@@ -213,7 +237,7 @@ jobs:
               fi
             done
             echo "::endgroup::"
-          done < tags.txt
+          done < releases.tsv
 
           echo "built $(wc -l < built.txt) binaries, $(wc -l < failures.txt) failed"
 
@@ -232,7 +256,7 @@ jobs:
           {
             echo "### App binaries"
             echo
-            echo "Built **$(wc -l < built.txt)** binaries across $(wc -l < tags.txt) release(s)."
+            echo "Built **$(wc -l < built.txt)** binaries across $(wc -l < releases.tsv) release(s)."
             if [ -s failures.txt ]; then
               echo
               echo "#### Failed to build"
