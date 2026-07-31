@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::sha256_hex;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, bail};
 use kira_core::catalog::{
     App, BuiltFrom, Catalog, Origin, Release, ReleaseOrder, SCHEMA, Source, VersionEntry,
     partition_unique, sort_newest_first,
@@ -192,9 +192,14 @@ struct OriginCounts {
     kira: usize,
     upstream: usize,
     diverged: usize,
+    rejected: usize,
 }
 
 impl OriginCounts {
+    fn record_rejection(&mut self) {
+        self.rejected += 1;
+    }
+
     fn record(&mut self, origin: Origin, matches_upstream: bool) {
         match origin {
             Origin::Kira => {
@@ -213,6 +218,8 @@ struct Chosen {
     bytes: Vec<u8>,
     payload_sha256: String,
     origin: Origin,
+    /// A Kira build existed but was refused, rather than none being found.
+    rejected: bool,
     /// Hash of what upstream published for the same app and version.
     upstream_sha256: String,
     /// Whether the served bytes are upstream's bytes.
@@ -247,29 +254,51 @@ fn choose_binary(
             upstream_sha256,
             bytes: upstream.bytes.clone(),
             built_from: None,
+            rejected: false,
         });
     };
 
     let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let parsed = Uapp::parse(&bytes).with_context(|| format!("parsing {}", path.display()))?;
-    ensure!(
-        parsed.verify_crc().is_valid(),
-        "{}: CRC mismatch in a binary from the store",
-        path.display()
-    );
-    ensure!(
-        parsed.header().app_id == upstream.app_id_hint,
-        "{}: built AppID {} does not match upstream's {} for the same app",
-        path.display(),
-        parsed.header().app_id,
-        upstream.app_id_hint
-    );
-    ensure!(
-        parsed.header().version == version,
-        "{}: built version {} does not match {version}",
-        path.display(),
-        parsed.header().version
-    );
+
+    // A build that disagrees with upstream's binary is not necessarily our bug.
+    // apps-v0.1.9-rc1 publishes a GlanceFloors with AppID A1C6E4F8A7D92B30 while
+    // the source at that tag declares 99AABBCCDDEEFF00, so upstream's binaries
+    // there were not built from the source the tag points at. Publishing ours
+    // under that version would misattribute it, and aborting would let one old
+    // inconsistency block the whole catalogue. Fall back and say so.
+    let rejection = if !parsed.verify_crc().is_valid() {
+        Some("fails its own CRC".to_owned())
+    } else if parsed.header().app_id != upstream.app_id_hint {
+        Some(format!(
+            "AppID {} but upstream published {} for this app",
+            parsed.header().app_id,
+            upstream.app_id_hint
+        ))
+    } else if parsed.header().version != version {
+        Some(format!(
+            "version {} but {version} was requested",
+            parsed.header().version
+        ))
+    } else {
+        None
+    };
+
+    if let Some(reason) = rejection {
+        eprintln!(
+            "  ! {}/{}: not using Kira's build -- {reason}",
+            release.tag, upstream.folder
+        );
+        return Ok(Chosen {
+            payload_sha256: upstream_payload,
+            origin: Origin::Upstream,
+            matches_upstream: true,
+            upstream_sha256,
+            bytes: upstream.bytes.clone(),
+            built_from: None,
+            rejected: true,
+        });
+    }
 
     let matches_upstream = bytes == upstream.bytes;
     Ok(Chosen {
@@ -278,6 +307,7 @@ fn choose_binary(
         matches_upstream,
         upstream_sha256,
         bytes,
+        rejected: false,
         built_from: Some(BuiltFrom {
             app_source: recipe.app_source.clone(),
             sdk_rev: recipe.sdk_rev.clone(),
@@ -429,6 +459,9 @@ fn process_release(
         // says which it is rather than papering over the difference.
         let chosen = choose_binary(built, release, &binary, header.version)?;
         counts.record(chosen.origin, chosen.matches_upstream);
+        if chosen.rejected {
+            counts.record_rejection();
+        }
 
         let download = format!("apps/{}/{}/{}", release.tag, binary.folder, binary.file);
         let target = data.join(&download);
@@ -613,6 +646,12 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         "{} version(s) built by Kira, {} republished from upstream",
         counts.kira, counts.upstream
     );
+    if counts.rejected > 0 {
+        println!(
+            "{} of Kira's builds were refused as not matching upstream's app",
+            counts.rejected
+        );
+    }
     if counts.diverged > 0 {
         // Expected until the SDK carries the path-independence fix: Kira's build
         // is byte-for-byte different from upstream's for the same source.
