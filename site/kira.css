@@ -406,6 +406,21 @@ pre.notes {
   margin: 10px 0;
 }
 
+.links {
+  margin: 10px 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.links li {
+  margin: 5px 0;
+}
+
+.links a {
+  color: var(--accent);
+}
+
 footer {
   color: var(--ink-soft);
   font-size: 12px;

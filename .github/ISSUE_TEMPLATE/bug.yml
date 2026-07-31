@@ -1,0 +1,68 @@
+name: Something in Kira is broken
+description: The catalogue, an install, or the site itself misbehaved.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        For questions use
+        [Discussions](https://github.com/tobymurray/kira/discussions/new?category=q-a),
+        and for anything about the watch or an app's own behaviour use
+        [UNA Watch](https://github.com/UNAWatch/una-sdk/issues) — Kira only
+        distributes apps. **Security problems should be reported
+        [privately](https://github.com/tobymurray/kira/security/advisories/new)**,
+        not here.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Before reporting
+      options:
+        - label: This is about Kira itself, not about the watch or how an app behaves once installed.
+          required: true
+        - label: This is not a security problem. (Those go through private reporting.)
+          required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+      placeholder: |
+        I picked the watch volume, and ...
+    validations:
+      required: true
+
+  - type: input
+    id: app
+    attributes:
+      label: Which app and version
+      description: If it involves a specific app. The card shows its version.
+      placeholder: Live HR 1.3.0
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and operating system
+      description: >-
+        Installing needs a Chromium desktop browser; Firefox and Safari get the
+        script fallback instead, which is expected rather than a bug.
+      placeholder: Chrome 141 on macOS 15
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Watch firmware version
+      description: If you know it. It is not something Kira can read over USB.
+      placeholder: "1.2.0"
+
+  - type: textarea
+    id: log
+    attributes:
+      label: What Kira reported
+      description: >-
+        The text from the status area, if there was any, and anything from the
+        browser console. Please do not paste anything you would not want public.
+      render: text

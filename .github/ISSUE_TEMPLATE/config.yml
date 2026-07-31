@@ -1,0 +1,18 @@
+# Questions and ideas go to Discussions; bugs use the form. Anything about the
+# watch itself belongs upstream, not here.
+blank_issues_enabled: false
+contact_links:
+  - name: Question about using Kira
+    url: https://github.com/tobymurray/kira/discussions/new?category=q-a
+    about: Ask in Discussions. Answers there help the next person with the same question.
+  - name: Idea or suggestion
+    url: https://github.com/tobymurray/kira/discussions/new?category=ideas
+    about: Propose a change or a feature.
+  - name: Problem with the watch, or with an app itself
+    url: https://github.com/UNAWatch/una-sdk/issues
+    about: >-
+      Kira is unofficial and only distributes apps. Anything about the watch, its
+      firmware, or how an app behaves once installed belongs with UNA Watch.
+  - name: Security problem
+    url: https://github.com/tobymurray/kira/security/advisories/new
+    about: Report privately. Kira writes binaries to hardware, so please do not open a public issue.
