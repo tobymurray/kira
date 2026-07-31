@@ -161,7 +161,11 @@ impl<'a> ReleaseView<'a> {
             is_prerelease: release.is_prerelease,
             app_count: release.app_count,
             notes: release.notes.as_deref(),
-            changes: release.notes.as_deref().map(notes::parse).unwrap_or_default(),
+            changes: release
+                .notes
+                .as_deref()
+                .map(notes::parse)
+                .unwrap_or_default(),
             effect: catalog::changed_in(apps, &release.tag),
         }
     }
