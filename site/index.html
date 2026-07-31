@@ -90,9 +90,12 @@
           <div class="row script-row">
             <button id="script-copy" class="ghost" type="button">Copy</button>
             <button id="script-download" class="ghost" type="button">Download</button>
+            <!-- The shell script is first because it is also what an
+                 unrecognised platform falls back to; app.js preselects
+                 whichever one matches and labels it. -->
             <select id="script-kind">
-              <option value="ps1">Windows — PowerShell</option>
               <option value="sh">macOS / Linux — sh</option>
+              <option value="ps1">Windows — PowerShell</option>
             </select>
           </div>
           <pre id="script-body" class="script"></pre>

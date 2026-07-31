@@ -35,6 +35,22 @@ const NON_APP_DIRS = new Set(['sharedata', 'shareddata', 'system', '.trashes', '
 
 const el = (id) => document.getElementById(id);
 
+/**
+ * Which installer this visitor most likely wants.
+ *
+ * The script tier is exactly the browsers that cannot write to the drive, i.e.
+ * Firefox and Safari, and neither implements `userAgentData` -- so the deprecated
+ * `navigator.platform` is the signal that actually answers here, with the UA
+ * string behind it. Anything unrecognised gets the shell script, which is the
+ * safer wrong guess: it refuses to run rather than touching a drive.
+ */
+function detectScriptKind() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || '';
+  if (/^win/i.test(platform)) return 'ps1';
+  if (platform) return 'sh';
+  return /windows/i.test(navigator.userAgent) ? 'ps1' : 'sh';
+}
+
 const state = {
   /** Rust-side catalogue and version pins. */
   store: null,
@@ -977,7 +993,12 @@ function wireUp() {
   });
   el('forget').addEventListener('click', disconnect);
 
-  el('script-kind').addEventListener('change', renderScript);
+  const kindSelect = el('script-kind');
+  kindSelect.value = detectScriptKind();
+  for (const option of kindSelect.options) {
+    if (option.value === kindSelect.value) option.textContent += ' — detected';
+  }
+  kindSelect.addEventListener('change', renderScript);
   el('script-copy').addEventListener('click', async () => {
     await navigator.clipboard.writeText(currentScript());
     el('script-copy').textContent = 'Copied';

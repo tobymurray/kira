@@ -105,7 +105,9 @@ Writing to a removable drive needs the File System Access API, which only
 Chromium desktop implements. Reading uses `<input webkitdirectory>`, which is
 supported nearly everywhere — so Firefox and Safari still get the full inventory
 and version diff, then a ready-to-run PowerShell or `sh` script that performs
-exactly the writes the page planned.
+exactly the writes the page planned. Which of the two is offered follows the
+visitor's platform, and either one locates the watch by its volume label rather
+than by a path, since where a USB drive appears is stable on no platform.
 
 ### Installing safely
 

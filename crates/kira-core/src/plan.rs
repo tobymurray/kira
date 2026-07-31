@@ -317,18 +317,18 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
 pub struct ScriptConfig {
     /// Base URL of the published `data/` directory.
     pub base_url: String,
-    /// Windows volume label to match.
-    pub windows_label: String,
-    /// Unix mount point to default to.
-    pub unix_mount: String,
+    /// Volume label the watch presents.
+    ///
+    /// Both scripts locate the drive from this rather than from a path, because
+    /// where it appears is neither stable nor the same on any two platforms.
+    pub volume_label: String,
 }
 
 impl Default for ScriptConfig {
     fn default() -> Self {
         Self {
             base_url: String::new(),
-            windows_label: "UNA WATCH".into(),
-            unix_mount: "/Volumes/UNA WATCH".into(),
+            volume_label: "UNA WATCH".into(),
         }
     }
 }
@@ -368,7 +368,7 @@ fn job_note(entry: &Entry) -> String {
 #[must_use]
 pub fn powershell(plan: &Plan, config: &ScriptConfig) -> String {
     let mut out = String::new();
-    let label = ps_quote(&config.windows_label);
+    let label = ps_quote(&config.volume_label);
     let base = ps_quote(&config.base_url);
 
     let _ = write!(
@@ -458,10 +458,32 @@ pub fn shell(plan: &Plan, config: &ScriptConfig) -> String {
          # Unofficial; not affiliated with UNA Watch Ltd.\n\
          set -eu\n\
          \n\
-         MOUNT=\"${{1:-{mount}}}\"\n\
+         LABEL={label}\n\
          BASE_URL={base}\n\
+         \n\
+         # Where a USB volume appears differs by platform and by desktop: macOS\n\
+         # uses /Volumes, Linux uses /media or /run/media, under either the\n\
+         # user's name or the label alone. So look, rather than assume.\n\
+         MOUNT=\"${{1:-}}\"\n\
+         if [ -z \"$MOUNT\" ]; then\n\
+         \x20 WHO=$(id -un)\n\
+         \x20 for candidate in \\\n\
+         \x20   \"/Volumes/$LABEL\" \\\n\
+         \x20   \"/media/$WHO/$LABEL\" \\\n\
+         \x20   \"/run/media/$WHO/$LABEL\" \\\n\
+         \x20   \"/media/$LABEL\" \\\n\
+         \x20   \"/mnt/$LABEL\"\n\
+         \x20 do\n\
+         \x20   if [ -d \"$candidate/Apps\" ]; then MOUNT=\"$candidate\"; break; fi\n\
+         \x20 done\n\
+         fi\n\
+         if [ -z \"$MOUNT\" ]; then\n\
+         \x20 echo \"Could not find a mounted volume named '$LABEL' with an Apps folder.\" >&2\n\
+         \x20 echo \"Connect the watch, or pass its mount point: sh $0 '/media/you/$LABEL'\" >&2\n\
+         \x20 exit 1\n\
+         fi\n\
          APPS=\"$MOUNT/Apps\"\n\
-         [ -d \"$APPS\" ] || {{ echo \"No Apps folder at $APPS. Pass the mount point as the first argument.\" >&2; exit 1; }}\n\
+         [ -d \"$APPS\" ] || {{ echo \"No Apps folder at $APPS.\" >&2; exit 1; }}\n\
          echo \"Watch apps folder: $APPS\"\n\
          \n\
          TMP=$(mktemp -d)\n\
@@ -471,7 +493,7 @@ pub fn shell(plan: &Plan, config: &ScriptConfig) -> String {
          \x20 if command -v shasum >/dev/null 2>&1; then shasum -a 256 \"$1\" | cut -d\" \" -f1\n\
          \x20 else sha256sum \"$1\" | cut -d\" \" -f1; fi\n\
          }}\n",
-        mount = config.unix_mount,
+        label = sh_quote(&config.volume_label),
         base = sh_quote(&config.base_url),
     );
 
@@ -813,6 +835,26 @@ mod tests {
         assert!(copy > check, "hash check must precede the copy");
         assert!(script.starts_with("#!/bin/sh"));
         assert!(script.contains("set -eu"));
+    }
+
+    #[test]
+    fn the_shell_script_looks_for_the_watch_on_linux_as_well_as_macos() {
+        // It used to default to /Volumes, so a Linux user had to know to pass a
+        // mount point. Both scripts now find the drive by label.
+        let plan = build(&[target("1.3.0")], &[]);
+        let script = shell(&plan, &config());
+        for place in [
+            "/Volumes/$LABEL",
+            "/media/$WHO/$LABEL",
+            "/run/media/$WHO/$LABEL",
+        ] {
+            assert!(script.contains(place), "no {place} in\n{script}");
+        }
+        // An explicit mount point still wins, and a failure to find one says so
+        // rather than proceeding against an empty path.
+        assert!(script.contains("MOUNT=\"${1:-}\""));
+        assert!(script.contains("Could not find a mounted volume"));
+        assert!(powershell(&plan, &config()).contains("FileSystemLabel -eq $Label"));
     }
 
     #[test]
