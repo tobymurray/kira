@@ -84,9 +84,21 @@ since 1.2.0"*, and an update that is only a re-stamp is labelled *"version stamp
 only, identical code"* rather than presented as new work. That changelog comes
 from the binaries, not from prose.
 
-Upstream's own release notes are shown too, per `apps-v*` tag, taken verbatim
-from the GitHub release bodies. They are rendered as **text, never as HTML** —
-it is third-party Markdown, and it is not going anywhere near `innerHTML`.
+Upstream's own release notes are shown too, per `apps-v*` tag, but not as a wall
+of text. A release body is GitHub's generated "What's Changed" list, and most of
+it — documentation, the desktop simulator, build tooling — cannot reach a watch.
+So each bullet is parsed for its Conventional Commit type and scope and split in
+two: changes that ship, and repository churn, collapsed. Each release leads with
+what its *binaries* did, which is the part that is not a judgement call.
+
+Nothing is dropped. The split is biased towards "this ships", because wrongly
+demoting a real app fix is the harmful error; an unrecognised line is kept as-is,
+and the original body stays one click away. The one heuristic that reads a
+description rather than its scope catches simulator work the SDK files under an
+app's name, e.g. `fix(hrmonitor): make the GCC/Linux simulator build`.
+
+Every string is rendered as **text, never as HTML** — it is third-party Markdown,
+and it is not going anywhere near `innerHTML`.
 
 Any published version can be selected per app; the newest is the default.
 Selecting an older one re-targets both the download and the installer, so a watch

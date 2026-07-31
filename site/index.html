@@ -50,68 +50,70 @@
     </header>
 
     <main class="wrap">
-      <section id="connect" class="panel">
-        <div class="panel-head">
-          <h2>Your watch</h2>
-          <span id="source" class="muted"></span>
-        </div>
-
-        <div id="connect-body">
-          <p id="connect-blurb" class="muted">
-            Connect the watch by USB and wait for it to appear as a drive, then pick it below.
-          </p>
-
-          <div class="row">
-            <button id="pick" class="primary" type="button" hidden>Connect watch</button>
-
-            <!-- Shown only when a stored handle exists whose permission has
-                 lapsed: one click re-grants it, instead of picking the folder
-                 again. app.js fills in the folder name. -->
-            <button id="reconnect" class="primary" type="button" hidden></button>
-
-            <label id="pick-fallback" class="button" hidden>
-              <input id="pick-input" type="file" webkitdirectory multiple hidden />
-              Choose the watch’s <code>Apps</code> folder
-            </label>
-
-            <button id="verify" class="ghost" type="button" hidden>Verify flash</button>
-            <button id="forget" class="ghost" type="button" hidden>Disconnect</button>
+      <div class="split">
+        <section id="connect" class="panel">
+          <div class="panel-head">
+            <h2>Your watch</h2>
+            <span id="source" class="muted"></span>
           </div>
 
-          <p id="readonly-note" class="note" hidden>
-            This browser can read the watch but cannot write to it — only Chromium-based desktop
-            browsers (Chrome, Edge, Opera) implement the directory-write API. You will get a
-            ready-to-run install script instead. For the same reason this browser cannot remember
-            the folder, so it has to be picked each visit.
-          </p>
+          <div id="connect-body">
+            <p id="connect-blurb" class="muted">
+              Connect the watch by USB and wait for it to appear as a drive, then pick it below.
+            </p>
 
-          <div id="status" class="status" hidden></div>
-        </div>
-      </section>
+            <div class="row">
+              <button id="pick" class="primary" type="button" hidden>Connect watch</button>
 
-      <section id="plan-section" class="panel" hidden>
-        <div class="panel-head">
-          <h2>Pending changes</h2>
-          <span id="plan-summary" class="muted"></span>
-        </div>
-        <div id="plan-actions" class="row"></div>
-        <div id="plan-list"></div>
-        <details id="script-details" hidden>
-          <summary>Install script</summary>
-          <div class="row script-row">
-            <button id="script-copy" class="ghost" type="button">Copy</button>
-            <button id="script-download" class="ghost" type="button">Download</button>
-            <!-- The shell script is first because it is also what an
-                 unrecognised platform falls back to; app.js preselects
-                 whichever one matches and labels it. -->
-            <select id="script-kind">
-              <option value="sh">macOS / Linux — sh</option>
-              <option value="ps1">Windows — PowerShell</option>
-            </select>
+              <!-- Shown only when a stored handle exists whose permission has
+                   lapsed: one click re-grants it, instead of picking the folder
+                   again. app.js fills in the folder name. -->
+              <button id="reconnect" class="primary" type="button" hidden></button>
+
+              <label id="pick-fallback" class="button" hidden>
+                <input id="pick-input" type="file" webkitdirectory multiple hidden />
+                Choose the watch’s <code>Apps</code> folder
+              </label>
+
+              <button id="verify" class="ghost" type="button" hidden>Verify flash</button>
+              <button id="forget" class="ghost" type="button" hidden>Disconnect</button>
+            </div>
+
+            <p id="readonly-note" class="note" hidden>
+              This browser can read the watch but cannot write to it — only Chromium-based desktop
+              browsers (Chrome, Edge, Opera) implement the directory-write API. You will get a
+              ready-to-run install script instead. For the same reason this browser cannot remember
+              the folder, so it has to be picked each visit.
+            </p>
+
+            <div id="status" class="status" hidden></div>
           </div>
-          <pre id="script-body" class="script"></pre>
-        </details>
-      </section>
+        </section>
+
+        <section id="plan-section" class="panel" hidden>
+          <div class="panel-head">
+            <h2>Pending changes</h2>
+            <span id="plan-summary" class="muted"></span>
+          </div>
+          <div id="plan-actions" class="row"></div>
+          <div id="plan-list"></div>
+          <details id="script-details" hidden>
+            <summary>Install script</summary>
+            <div class="row script-row">
+              <button id="script-copy" class="ghost" type="button">Copy</button>
+              <button id="script-download" class="ghost" type="button">Download</button>
+              <!-- The shell script is first because it is also what an
+                   unrecognised platform falls back to; app.js preselects
+                   whichever one matches and labels it. -->
+              <select id="script-kind">
+                <option value="sh">macOS / Linux — sh</option>
+                <option value="ps1">Windows — PowerShell</option>
+              </select>
+            </div>
+            <pre id="script-body" class="script"></pre>
+          </details>
+        </section>
+      </div>
 
       <section class="panel">
         <div class="panel-head">
@@ -123,59 +125,61 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Release notes</h2>
-          <span class="muted">from the upstream SDK releases</span>
-        </div>
-        <p class="muted">
-          Upstream publishes no per-app changelog, so these are the release notes for each
-          <code>apps-v*</code> tag. Whether a given app’s code actually changed in a release is
-          shown on its card, derived from the binary rather than the prose.
-        </p>
-        <div id="release-notes"></div>
-      </section>
+      <div class="split">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Release notes</h2>
+            <span class="muted">from the upstream SDK releases</span>
+          </div>
+          <p class="muted">
+            Upstream publishes no per-app changelog, so these are the release notes for each
+            <code>apps-v*</code> tag. Whether a given app’s code actually changed in a release is
+            shown on its card, derived from the binary rather than the prose.
+          </p>
+          <div id="release-notes"></div>
+        </section>
 
-      <section class="panel" id="feedback">
-        <div class="panel-head">
-          <h2>Questions and problems</h2>
-          <span class="muted">on GitHub</span>
-        </div>
-        <p class="muted">
-          Kira is unofficial, and <strong>not a support channel for UNA&nbsp;Watch</strong>. Anything
-          about the watch itself, or how an app behaves once installed, belongs with
-          <a href="https://github.com/UNAWatch/una-sdk/issues" rel="noopener noreferrer" target="_blank"
-            >UNA&nbsp;Watch</a>. Everything below is about Kira: this catalogue, and installing from it.
-        </p>
-        <ul class="links">
-          <li>
-            <a href="https://github.com/tobymurray/kira/discussions/new?category=q-a"
-              rel="noopener noreferrer" target="_blank">Ask a question</a>
-            — answers stay searchable for whoever asks next.
-          </li>
-          <li>
+        <section class="panel" id="feedback">
+          <div class="panel-head">
+            <h2>Questions and problems</h2>
+            <span class="muted">on GitHub</span>
+          </div>
+          <p class="muted">
+            Kira is unofficial, and <strong>not a support channel for UNA&nbsp;Watch</strong>. Anything
+            about the watch itself, or how an app behaves once installed, belongs with
+            <a href="https://github.com/UNAWatch/una-sdk/issues" rel="noopener noreferrer" target="_blank"
+              >UNA&nbsp;Watch</a>. Everything below is about Kira: this catalogue, and installing from it.
+          </p>
+          <ul class="links">
+            <li>
+              <a href="https://github.com/tobymurray/kira/discussions/new?category=q-a"
+                rel="noopener noreferrer" target="_blank">Ask a question</a>
+              — answers stay searchable for whoever asks next.
+            </li>
+            <li>
+              <a href="https://github.com/tobymurray/kira/discussions/new?category=ideas"
+                rel="noopener noreferrer" target="_blank">Suggest something</a>
+              — a change, or an app worth carrying.
+            </li>
+            <li>
+              <a href="https://github.com/tobymurray/kira/issues/new/choose"
+                rel="noopener noreferrer" target="_blank">Report a bug</a>
+              — the catalogue, an install, or the site misbehaving.
+            </li>
+            <li>
+              <a href="https://github.com/tobymurray/kira/blob/main/SECURITY.md"
+                rel="noopener noreferrer" target="_blank">Report a security problem privately</a>
+              — Kira writes binaries to your watch, so please don’t post those publicly.
+            </li>
+          </ul>
+          <p class="muted">
+            All of these need a GitHub account. If that’s a barrier for you, say so in a
             <a href="https://github.com/tobymurray/kira/discussions/new?category=ideas"
-              rel="noopener noreferrer" target="_blank">Suggest something</a>
-            — a change, or an app worth carrying.
-          </li>
-          <li>
-            <a href="https://github.com/tobymurray/kira/issues/new/choose"
-              rel="noopener noreferrer" target="_blank">Report a bug</a>
-            — the catalogue, an install, or the site misbehaving.
-          </li>
-          <li>
-            <a href="https://github.com/tobymurray/kira/blob/main/SECURITY.md"
-              rel="noopener noreferrer" target="_blank">Report a security problem privately</a>
-            — Kira writes binaries to your watch, so please don’t post those publicly.
-          </li>
-        </ul>
-        <p class="muted">
-          All of these need a GitHub account. If that’s a barrier for you, say so in a
-          <a href="https://github.com/tobymurray/kira/discussions/new?category=ideas"
-            rel="noopener noreferrer" target="_blank">suggestion</a>
-          — or ask someone who has one to raise it — and another route can be added.
-        </p>
-      </section>
+              rel="noopener noreferrer" target="_blank">suggestion</a>
+            — or ask someone who has one to raise it — and another route can be added.
+          </p>
+        </section>
+      </div>
     </main>
 
     <footer class="wrap">

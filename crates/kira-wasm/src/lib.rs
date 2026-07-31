@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 
 use kira_core::catalog::{self, Catalog, Release, Target};
+use kira_core::notes;
 use kira_core::plan::{self, Installed, Plan, ScriptConfig};
 use kira_core::uapp::{AppId, AppType, CRC_LEN, HEADER_LEN, Header, Uapp, Version};
 use serde::Serialize;
@@ -128,6 +129,42 @@ struct AppView<'a> {
     /// Set when another app owns this on-device folder with newer versions, in
     /// which case this one cannot be installed alongside it.
     superseded_by: Option<AppId>,
+}
+
+/// A release, with its prose sorted and its effect on the apps worked out.
+///
+/// Both are done here rather than in the page: which lines can reach a watch is a
+/// judgement, and which apps a release actually changed comes from comparing
+/// binaries. Neither belongs in DOM code.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReleaseView<'a> {
+    tag: &'a str,
+    published_at: Option<&'a str>,
+    url: Option<&'a str>,
+    is_prerelease: bool,
+    app_count: usize,
+    /// The body verbatim, so the page can still offer the original.
+    notes: Option<&'a str>,
+    /// The body split by what it can affect.
+    changes: notes::Notes,
+    /// What the release did to the apps, from the binaries.
+    effect: catalog::ReleaseEffect,
+}
+
+impl<'a> ReleaseView<'a> {
+    fn of(release: &'a Release, apps: &[catalog::App]) -> Self {
+        Self {
+            tag: &release.tag,
+            published_at: release.published_at.as_deref(),
+            url: release.url.as_deref(),
+            is_prerelease: release.is_prerelease,
+            app_count: release.app_count,
+            notes: release.notes.as_deref(),
+            changes: release.notes.as_deref().map(notes::parse).unwrap_or_default(),
+            effect: catalog::changed_in(apps, &release.tag),
+        }
+    }
 }
 
 /// A plan entry with its label rendered.
@@ -298,8 +335,13 @@ impl Store {
     /// # Errors
     /// If the values cannot be handed to JavaScript.
     pub fn releases(&self) -> Result<JsValue, JsError> {
-        let releases: &[Release] = &self.catalog.releases;
-        to_js(&releases)
+        let views: Vec<ReleaseView<'_>> = self
+            .catalog
+            .releases
+            .iter()
+            .map(|release| ReleaseView::of(release, &self.catalog.apps))
+            .collect();
+        to_js(&views)
     }
 
     /// Select a version for an app, or pass nothing to follow the newest.

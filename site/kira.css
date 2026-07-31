@@ -45,9 +45,36 @@ body {
 }
 
 .wrap {
-  max-width: 940px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 0 20px;
+}
+
+/* Two panels side by side once there is room for both, one column below that.
+   auto-fit rather than a fixed pair so a hidden panel -- "Pending changes"
+   before a watch is connected -- leaves no empty column behind. */
+.split {
+  display: grid;
+  /* min() so a track can never be wider than the viewport: a bare 420px
+     minimum overflows a phone and takes the whole page sideways with it. */
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.split > .panel {
+  margin-bottom: 18px;
+}
+
+/* Once the tracks are side by side, the grid gap owns the spacing. */
+@media (min-width: 880px) {
+  .split > .panel {
+    margin-bottom: 0;
+  }
+
+  .split {
+    margin-bottom: 18px;
+  }
 }
 
 .topbar {
@@ -92,6 +119,20 @@ main {
   padding: 22px 20px 8px;
 }
 
+@media (max-width: 560px) {
+  .wrap {
+    padding: 0 14px;
+  }
+
+  main {
+    padding: 16px 14px 8px;
+  }
+
+  .panel {
+    padding: 14px;
+  }
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -116,6 +157,12 @@ main {
 .muted {
   color: var(--ink-soft);
   font-size: 13px;
+}
+
+/* Anything not given its own colour: the browser default is unreadable blue on
+   the dark theme. More specific rules below still win. */
+.panel a {
+  color: var(--accent);
 }
 
 .row {
@@ -229,7 +276,7 @@ button.ghost:hover:not(:disabled),
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
 }
 
@@ -292,8 +339,14 @@ button.ghost:hover:not(:disabled),
 }
 
 .card a.dl {
+  display: block;
   font-size: 12px;
   color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.card a.dl:hover {
+  color: var(--accent);
 }
 
 details.archive {
@@ -340,25 +393,111 @@ details.archive .card {
 }
 
 select.version {
+  display: block;
   font-size: 12px;
   padding: 3px 6px;
   margin: 0 0 6px;
   max-width: 100%;
 }
 
-/* Release notes: upstream Markdown shown as text, so it needs to wrap. */
-#release-notes details {
+/* Release notes: parsed into changes, but every string is still third-party
+   text, so nothing here assumes Markdown. */
+
+details.release {
   border-top: 1px solid var(--line);
-  padding: 8px 0;
+  padding: 10px 0;
 }
 
-#release-notes details:first-child {
+details.release:first-of-type {
   border-top: 0;
 }
 
-#release-notes summary {
+details.release > summary {
   cursor: pointer;
   font-size: 14px;
+  line-height: 1.4;
+}
+
+details.release > summary .muted {
+  font-size: 13px;
+}
+
+.changes-head {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+ul.changes {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+ul.changes li {
+  margin: 4px 0;
+}
+
+/* The scope is the useful part of a conventional-commit prefix: it names what
+   the change touched. The type is not shown -- the section it lands in says it. */
+ul.changes .scope {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 5px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+ul.changes .breaking {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warn-ink);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  border-radius: 5px;
+  padding: 0 5px;
+  margin-right: 6px;
+}
+
+ul.changes .pr {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+ul.changes .pr:hover {
+  color: var(--accent);
+}
+
+details.other {
+  margin: 6px 0;
+}
+
+details.other > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.release-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.release-foot summary {
+  cursor: pointer;
+  color: var(--ink-soft);
 }
 
 pre.notes {

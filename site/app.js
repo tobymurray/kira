@@ -171,30 +171,147 @@ async function loadCatalog() {
   renderReleaseNotes();
 }
 
+/** A list of parsed change lines, each linked to its pull request. */
+function renderChanges(changes) {
+  const list = document.createElement('ul');
+  list.className = 'changes';
+  for (const change of changes) {
+    const item = document.createElement('li');
+
+    if (change.breaking) {
+      const flag = document.createElement('span');
+      flag.className = 'breaking';
+      flag.textContent = 'breaking';
+      item.appendChild(flag);
+    }
+    if (change.scopes.length > 0) {
+      const scope = document.createElement('span');
+      scope.className = 'scope';
+      scope.textContent = change.scopes.join(', ');
+      item.appendChild(scope);
+    }
+
+    // textContent, never innerHTML: this is prose from another project.
+    item.appendChild(document.createTextNode(change.subject));
+
+    if (change.url) {
+      const link = document.createElement('a');
+      link.className = 'pr';
+      link.href = change.url;
+      link.rel = 'noopener noreferrer';
+      link.target = '_blank';
+      link.textContent = change.pr ? `#${change.pr}` : 'PR';
+      if (change.author) link.title = `by @${change.author}`;
+      item.appendChild(link);
+    }
+    list.appendChild(item);
+  }
+  return list;
+}
+
+/** What a release did to the apps, in words, from the binary comparison. */
+function describeEffect(effect) {
+  const parts = [];
+  if (effect.changed.length > 0) {
+    // Naming every app is unreadable when a library change relinks all of them.
+    const shown = effect.changed.slice(0, 4).join(', ');
+    const rest = effect.changed.length - 4;
+    parts.push(
+      `code changed in ${effect.changed.length} app${effect.changed.length === 1 ? '' : 's'}: ` +
+        (rest > 0 ? `${shown} and ${rest} more` : shown),
+    );
+  }
+  if (effect.unchanged > 0) parts.push(`${effect.unchanged} unchanged`);
+  if (effect.unknown > 0) parts.push(`${effect.unknown} not comparable`);
+  if (effect.firstSeen > 0) parts.push(`${effect.firstSeen} first published here`);
+  return parts.length > 0 ? parts.join(' · ') : 'no apps in this release';
+}
+
 /**
- * Upstream release bodies, rendered as text.
+ * Upstream release bodies, sorted by what they can actually affect.
  *
- * Deliberately not parsed as Markdown or injected as HTML: this is third-party
- * content from another project's releases.
+ * Every release stamps every app, and most of what a release body describes is
+ * documentation, the simulator or build tooling — none of which reaches a watch.
+ * So each release leads with what its binaries did, then the changes that could
+ * have caused that, with the repository churn collapsed beneath. Nothing is
+ * dropped: the original body stays available verbatim.
+ *
+ * Rendered as text throughout, never as HTML or parsed Markdown: it is
+ * third-party content from another project's releases.
  */
 function renderReleaseNotes() {
   const root = el('release-notes');
   root.textContent = '';
 
-  for (const release of state.store.releases()) {
+  const releases = state.store.releases();
+  releases.forEach((release, index) => {
     const box = document.createElement('details');
+    box.className = 'release';
+    // The newest release is the one anybody is deciding about; the rest are
+    // history and stay folded.
+    box.open = index === 0;
+
     const summary = document.createElement('summary');
+    const tag = document.createElement('strong');
+    tag.textContent = release.tag;
+    summary.appendChild(tag);
+    const when = document.createElement('span');
+    when.className = 'muted';
     const date = release.publishedAt
-      ? new Date(release.publishedAt).toLocaleDateString()
+      ? new Date(release.publishedAt).toLocaleDateString(undefined, {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        })
       : 'date unknown';
-    summary.textContent = `${release.tag} · ${date} · ${release.appCount} apps`;
+    when.textContent =
+      ` ${date}${release.isPrerelease ? ' · pre-release' : ''} · ${describeEffect(release.effect)}`;
+    summary.appendChild(when);
     box.appendChild(summary);
 
-    const body = document.createElement('pre');
-    body.className = 'notes';
-    body.textContent = release.notes || 'No release notes published upstream.';
-    box.appendChild(body);
+    const { changes } = release;
+    if (changes.shipped.length > 0) {
+      box.appendChild(heading('Changes that reach the watch'));
+      box.appendChild(renderChanges(changes.shipped));
+    }
 
+    if (changes.other.length > 0) {
+      const rest = document.createElement('details');
+      rest.className = 'other';
+      const restSummary = document.createElement('summary');
+      restSummary.textContent = `Docs, simulator and tooling (${changes.other.length})`;
+      rest.appendChild(restSummary);
+      rest.appendChild(renderChanges(changes.other));
+      box.appendChild(rest);
+    }
+
+    if (changes.prose.length > 0) {
+      const extra = document.createElement('p');
+      extra.className = 'muted';
+      extra.textContent = changes.prose.join(' ');
+      box.appendChild(extra);
+    }
+
+    if (changes.shipped.length === 0 && changes.other.length === 0) {
+      const none = document.createElement('p');
+      none.className = 'muted';
+      none.textContent = 'No release notes published upstream.';
+      box.appendChild(none);
+    }
+
+    const footer = document.createElement('div');
+    footer.className = 'release-foot';
+    if (release.notes) {
+      const verbatim = document.createElement('details');
+      const vs = document.createElement('summary');
+      vs.textContent = 'Upstream notes, verbatim';
+      verbatim.appendChild(vs);
+      const body = document.createElement('pre');
+      body.className = 'notes';
+      body.textContent = release.notes;
+      verbatim.appendChild(body);
+      footer.appendChild(verbatim);
+    }
     if (release.url) {
       const link = document.createElement('a');
       link.className = 'dl';
@@ -202,10 +319,19 @@ function renderReleaseNotes() {
       link.rel = 'noopener noreferrer';
       link.target = '_blank';
       link.textContent = 'Upstream release →';
-      box.appendChild(link);
+      footer.appendChild(link);
     }
+    box.appendChild(footer);
+
     root.appendChild(box);
-  }
+  });
+}
+
+function heading(text) {
+  const head = document.createElement('h4');
+  head.className = 'changes-head';
+  head.textContent = text;
+  return head;
 }
 
 function statusLabel(entry) {

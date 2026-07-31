@@ -317,6 +317,48 @@ impl Catalog {
     }
 }
 
+/// What a release did to the apps in it, decided by comparing binaries.
+///
+/// The prose in a release body describes the whole repository; this describes the
+/// watch. `unknown` counts apps whose build is not comparable with the previous
+/// one — different builders produced them, so a byte difference says nothing —
+/// which is honestly distinct from "unchanged".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseEffect {
+    /// Display names of apps whose code changed, in catalogue order.
+    pub changed: Vec<String>,
+    /// How many apps in the release carried the same code as before.
+    pub unchanged: usize,
+    /// How many could not be compared.
+    pub unknown: usize,
+    /// How many apps had no earlier release to compare against.
+    pub first_seen: usize,
+}
+
+/// Summarise one release's effect on the apps.
+#[must_use]
+pub fn changed_in(apps: &[App], tag: &str) -> ReleaseEffect {
+    let mut effect = ReleaseEffect::default();
+    for app in apps {
+        // Versions are newest first, so the position gives the older neighbour.
+        let Some(index) = app.versions.iter().position(|v| v.tag == tag) else {
+            continue;
+        };
+        let version = &app.versions[index];
+        if app.versions.len() == index + 1 {
+            effect.first_seen += 1;
+            continue;
+        }
+        match version.changed {
+            Some(true) => effect.changed.push(app.name.clone()),
+            Some(false) => effect.unchanged += 1,
+            None => effect.unknown += 1,
+        }
+    }
+    effect
+}
+
 /// Mark apps that lose a fight over an on-device folder.
 ///
 /// Within a folder the app with the newest version wins; the rest are superseded
@@ -534,6 +576,42 @@ mod tests {
             icon_small: None,
             superseded_by: None,
         }
+    }
+
+    #[test]
+    fn a_releases_effect_on_the_apps_comes_from_the_binaries() {
+        let changed = version_entry("1.3.0");
+        let mut same = version_entry("1.3.0");
+        same.changed = Some(false);
+        let mut incomparable = version_entry("1.3.0");
+        incomparable.changed = None;
+
+        let mut second = app(vec![same, version_entry("1.2.0")]);
+        second.name = "Steps".into();
+        let mut third = app(vec![incomparable, version_entry("1.2.0")]);
+        third.name = "Floors".into();
+        // Only one release published, so there is nothing to compare against.
+        let mut fourth = app(vec![version_entry("1.3.0")]);
+        fourth.name = "New App".into();
+
+        let apps = vec![
+            app(vec![changed, version_entry("1.2.0")]),
+            second,
+            third,
+            fourth,
+        ];
+
+        let effect = changed_in(&apps, "apps-v1.3.0");
+        assert_eq!(effect.changed, ["Live HR"]);
+        assert_eq!(effect.unchanged, 1);
+        assert_eq!(effect.unknown, 1);
+        assert_eq!(effect.first_seen, 1);
+
+        // An app absent from a release is not counted at all.
+        let older = changed_in(&apps, "apps-v1.2.0");
+        assert!(older.changed.is_empty());
+        assert_eq!(older.first_seen, 3, "1.2.0 is the oldest published here");
+        assert_eq!(changed_in(&apps, "apps-v9.9.9"), ReleaseEffect::default());
     }
 
     fn catalog(apps: Vec<App>) -> Catalog {
