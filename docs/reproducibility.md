@@ -73,10 +73,17 @@ zero failures**, covering all three shapes — Utility and Activity with a GUI
 process, Glance without one. The same `Alarm` binary — 210,472 bytes, `87217a3a…`
 — has come out of separate CI runs days apart.
 
-The store holds 39 artifacts for version `0.1.9`, because `apps-v0.1.9-rc1`,
-`-rc2` and `-rc3` all stamp that version while being three distinct releases. They
-are separate recipes and therefore separate artifacts, which is the recipe key
-doing its job.
+The store holds several artifacts per version where releases overlap:
+`apps-v0.1.9-rc2` and `-rc3` both stamp `0.1.9` while being distinct releases, so
+they are distinct recipes and distinct artifacts. That is the recipe key doing its
+job.
+
+**A release's tag does not reliably give its version.** `apps-v0.1.9-rc1` ships
+binaries stamped `0.1.4`. Since the version is compiled in and therefore part of
+the recipe, the build reads it out of upstream's own binary with `kira inspect`
+rather than parsing the tag — the stamp is what the catalogue looks up, so it is
+the only authority. Deriving it from the tag left ten versions unmatched and
+falling back to upstream binaries.
 
 Also checked and clean: no `__DATE__`, `__TIME__` or `__TIMESTAMP__` anywhere in
 `Libs/`, `Examples/` or `ThirdParty/`; no submodules, so an SDK tag pins its
