@@ -294,6 +294,25 @@ button.ghost:hover:not(:disabled),
   color: var(--ink-soft);
 }
 
+details.archive {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+details.archive > summary {
+  cursor: pointer;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+/* Muted, so an archived card never competes with an installable one. */
+details.archive .card {
+  opacity: 0.75;
+}
+
 .meta.superseded {
   font-size: 11px;
   color: var(--warn-ink);

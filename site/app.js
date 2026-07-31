@@ -302,11 +302,13 @@ function renderCard(app, entry) {
   // Upstream reassigned AppIDs: three Glances carry one id up to apps-v0.1.9-rc1
   // and a different one after. Those are separate identities to the watch and the
   // phone, so they stay separate entries — but say which is which.
-  if (app.ambiguousName) {
+  if (app.ambiguousName || app.supersededBy) {
     const id = document.createElement('div');
     id.className = 'meta appid';
     id.textContent = `AppID ${app.appId}`;
-    id.title = 'Another entry shares this name under a different AppID';
+    id.title = app.supersededBy
+      ? `Replaced by AppID ${app.supersededBy}`
+      : 'Another entry shares this name under a different AppID';
     body.appendChild(id);
   }
 
@@ -315,7 +317,7 @@ function renderCard(app, entry) {
   if (app.supersededBy) {
     const note = document.createElement('div');
     note.className = 'meta superseded';
-    note.textContent = 'superseded — download only';
+    note.textContent = 'download only';
     note.title =
       `${app.folder} on the watch belongs to AppID ${app.supersededBy}, ` +
       'which has newer versions. Installing both could leave the watch running the wrong one.';
@@ -368,7 +370,11 @@ function renderCatalogue() {
   root.removeAttribute('aria-busy');
   root.textContent = '';
 
-  const apps = state.store.apps();
+  const all = state.store.apps();
+  // Superseded identities are listed separately: they cannot be installed, and
+  // leaving them in the grids invites a misclick on an app that upstream replaced.
+  const apps = all.filter((a) => !a.supersededBy);
+  const archived = all.filter((a) => a.supersededBy);
   const byId = new Map((state.plan?.entries ?? []).map((e) => [e.app.appId, e]));
   const seen = new Set();
 
@@ -410,6 +416,41 @@ function renderCatalogue() {
   // Anything with a type this build does not know about still gets shown.
   const rest = apps.filter((a) => !seen.has(a.appId));
   if (rest.length > 0) section('Other', '', rest);
+
+  if (archived.length > 0) renderArchive(root, archived, byId);
+}
+
+/**
+ * Apps whose identity upstream replaced.
+ *
+ * Collapsed by default and kept out of the grids above: they are not installable,
+ * because another app owns the folder they would be written to, and the versions
+ * they carry are ancient. Still listed so the reassignment is visible and the
+ * binaries remain downloadable.
+ */
+function renderArchive(root, archived, byId) {
+  const box = document.createElement('details');
+  box.className = 'archive';
+
+  const summary = document.createElement('summary');
+  summary.textContent = `Archived — ${archived.length} replaced identit${
+    archived.length === 1 ? 'y' : 'ies'
+  }`;
+  box.appendChild(summary);
+
+  const note = document.createElement('p');
+  note.className = 'type-blurb';
+  note.textContent =
+    'Upstream reassigned these apps to new AppIDs. The current versions are listed ' +
+    'above under the same names; these entries keep the old identity and cannot be ' +
+    'installed, since the newer app owns the same folder on the watch.';
+  box.appendChild(note);
+
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  for (const app of archived) grid.appendChild(renderCard(app, byId.get(app.appId)));
+  box.appendChild(grid);
+  root.appendChild(box);
 }
 
 /** Pin an app to a version, or back to newest, and re-plan. */

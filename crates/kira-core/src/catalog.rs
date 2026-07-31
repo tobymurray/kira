@@ -300,10 +300,13 @@ impl Catalog {
 
     /// Display names shared by more than one [`AppId`], so a UI can say which is
     /// which instead of showing identical-looking entries.
+    ///
+    /// Superseded apps are excluded: they belong in an archive of their own, so
+    /// their name no longer collides with anything a reader is choosing between.
     #[must_use]
     pub fn ambiguous_names(&self) -> Vec<String> {
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-        for app in &self.apps {
+        for app in self.apps.iter().filter(|a| a.superseded_by.is_none()) {
             *counts.entry(app.name.as_str()).or_default() += 1;
         }
         counts
@@ -756,5 +759,16 @@ mod tests {
         second.app_id = AppId::new(0xDEAD_BEEF);
         let c = catalog(vec![app(vec![version_entry("1.3.0")]), second]);
         assert_eq!(c.ambiguous_names(), ["Live HR"]);
+    }
+
+    #[test]
+    fn a_superseded_twin_does_not_make_a_name_ambiguous() {
+        // Once the old identity is archived, nothing in the main listing shares
+        // the name, so cards there need no disambiguation.
+        let mut archived = app(vec![version_entry("0.1.4")]);
+        archived.app_id = AppId::new(0xDEAD_BEEF);
+        archived.superseded_by = Some(AppId::new(0xA135_8F7C_2E9D_4BA6));
+        let c = catalog(vec![app(vec![version_entry("1.3.0")]), archived]);
+        assert!(c.ambiguous_names().is_empty());
     }
 }
