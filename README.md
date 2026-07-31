@@ -95,11 +95,12 @@ silently downgraded.
 
 ### Two capability tiers
 
-|                          | Chrome / Edge / Opera | Firefox / Safari |
-| ------------------------ | --------------------- | ---------------- |
-| Browse the catalogue     | yes                   | yes              |
-| Read what's on the watch | yes                   | yes              |
-| Install and update       | yes, in-page          | generated script |
+|                            | Chrome / Edge / Opera | Firefox / Safari |
+| -------------------------- | --------------------- | ---------------- |
+| Browse the catalogue       | yes                   | yes              |
+| Read what's on the watch   | yes                   | yes              |
+| Install and update         | yes, in-page          | generated script |
+| Remember the chosen folder | yes                   | no               |
 
 Writing to a removable drive needs the File System Access API, which only
 Chromium desktop implements. Reading uses `<input webkitdirectory>`, which is
@@ -108,6 +109,16 @@ and version diff, then a ready-to-run PowerShell or `sh` script that performs
 exactly the writes the page planned. Which of the two is offered follows the
 visitor's platform, and either one locates the watch by its volume label rather
 than by a path, since where a USB drive appears is stable on no platform.
+
+The chosen directory handle is kept in IndexedDB, so a reload does not mean
+picking the watch again. The *permission* to use that handle is a separate thing
+and Chromium drops it once every tab on the origin closes, so a lapsed one becomes
+a one-click **Reconnect** button — re-granting needs a user gesture, and page load
+is not one. Installing Kira (the manifest exists for this reason, not for looks)
+lets Chromium offer to keep the permission across visits, which removes the click
+too. Firefox and Safari read the drive through `<input webkitdirectory>`, which
+yields files rather than a handle, so there is nothing to persist and the folder
+has to be picked each visit.
 
 ### Installing safely
 

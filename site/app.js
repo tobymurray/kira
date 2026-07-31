@@ -849,7 +849,7 @@ function renderScript() {
 // ------------------------------------------------------------------ connecting
 
 function setBusy(busy) {
-  for (const id of ['pick', 'verify', 'forget']) {
+  for (const id of ['pick', 'reconnect', 'verify', 'forget']) {
     const node = el(id);
     if (!node.hidden) node.disabled = busy;
   }
@@ -902,6 +902,8 @@ async function useRoot(root) {
   el('source').textContent = `${root.name} · read/write`;
   el('verify').hidden = false;
   el('forget').hidden = false;
+  el('reconnect').hidden = true;
+  el('pick').classList.replace('ghost', 'primary');
   el('pick').textContent = 'Re-scan watch';
 
   await refreshInventory();
@@ -919,19 +921,66 @@ async function connectWithPicker() {
   await useRoot(root);
 }
 
-/** Try to reuse a previously granted handle, so Verify survives a reconnect. */
+/**
+ * Reuse a previously granted handle, so a reload does not mean picking the
+ * folder again.
+ *
+ * The handle survives in IndexedDB, but the *permission* to use it may not:
+ * Chromium drops it once every tab on the origin has closed, unless the site is
+ * installed, in which case the user can grant it for every visit. Asking again
+ * requires a user gesture, and page load is not one — so a still-granted handle
+ * is reopened silently, and a lapsed one becomes a single button rather than a
+ * failure or a full directory picker.
+ */
 async function tryRestore() {
   if (!CAN_WRITE) return;
   const root = await idbGet('watch').catch(() => null);
   if (!root) return;
+
+  let permission;
   try {
-    let permission = await root.queryPermission({ mode: 'readwrite' });
-    if (permission === 'prompt') permission = await root.requestPermission({ mode: 'readwrite' });
-    if (permission !== 'granted') return;
-    await useRoot(root);
-  } catch (err) {
-    log(`Could not reopen the last watch (${err.message}). Pick it again.`);
+    permission = await root.queryPermission({ mode: 'readwrite' });
+  } catch {
+    // Not a usable handle any more; do not keep offering it.
+    void idbDelete('watch');
+    return;
   }
+
+  if (permission === 'granted') {
+    try {
+      await useRoot(root);
+      return;
+    } catch (err) {
+      log(`Could not reopen ${root.name} (${err.message}). Is the watch connected?`);
+      return;
+    }
+  }
+  offerReconnect(root);
+}
+
+/** Offer a one-click reconnect, which supplies the gesture the prompt needs. */
+function offerReconnect(root) {
+  const button = el('reconnect');
+  button.textContent = `Reconnect ${root.name}`;
+  button.hidden = false;
+  // Reconnecting is the recommended action while the offer stands; picking a
+  // different folder stays available, just not as the emphasised one.
+  el('pick').classList.replace('primary', 'ghost');
+  button.onclick = () => {
+    setBusy(true);
+    reconnect(root)
+      .catch((err) => log(err.message, 'bad'))
+      .finally(() => setBusy(false));
+  };
+}
+
+async function reconnect(root) {
+  const permission = await root.requestPermission({ mode: 'readwrite' });
+  if (permission !== 'granted') {
+    log('Permission declined. Use Connect watch to pick the drive instead.');
+    return;
+  }
+  await useRoot(root);
 }
 
 async function connectWithInput(files) {
@@ -958,6 +1007,8 @@ function disconnect() {
   el('source').textContent = '';
   el('verify').hidden = true;
   el('forget').hidden = true;
+  el('reconnect').hidden = true;
+  el('pick').classList.replace('ghost', 'primary');
   el('pick').textContent = 'Connect watch';
   el('pick-input').value = '';
   clearLog();

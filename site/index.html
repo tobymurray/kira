@@ -15,6 +15,11 @@
     <link rel="icon" type="image/png" sizes="32x32" href="img/mark-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="img/mark-16.png" />
     <link rel="apple-touch-icon" href="img/mark-180.png" />
+
+    <!-- Installability is not cosmetic here: Chromium only offers to remember a
+         directory permission across visits for an installed app, which is what
+         saves picking the watch again on every reload. -->
+    <link rel="manifest" href="manifest.webmanifest" />
     <meta name="theme-color" content="#080808" />
 
     <meta property="og:type" content="website" />
@@ -59,6 +64,11 @@
           <div class="row">
             <button id="pick" class="primary" type="button" hidden>Connect watch</button>
 
+            <!-- Shown only when a stored handle exists whose permission has
+                 lapsed: one click re-grants it, instead of picking the folder
+                 again. app.js fills in the folder name. -->
+            <button id="reconnect" class="primary" type="button" hidden></button>
+
             <label id="pick-fallback" class="button" hidden>
               <input id="pick-input" type="file" webkitdirectory multiple hidden />
               Choose the watch’s <code>Apps</code> folder
@@ -71,7 +81,8 @@
           <p id="readonly-note" class="note" hidden>
             This browser can read the watch but cannot write to it — only Chromium-based desktop
             browsers (Chrome, Edge, Opera) implement the directory-write API. You will get a
-            ready-to-run install script instead.
+            ready-to-run install script instead. For the same reason this browser cannot remember
+            the folder, so it has to be picked each visit.
           </p>
 
           <div id="status" class="status" hidden></div>
