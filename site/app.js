@@ -23,6 +23,7 @@ import init, {
   crc_is_valid as crcIsValid,
   payload_bounds as payloadBounds,
   read_header as readHeader,
+  source_ref as sourceRef,
 } from './lib/kira_wasm.js';
 
 const CAN_WRITE = typeof window.showDirectoryPicker === 'function';
@@ -364,6 +365,10 @@ function statusLabel(entry) {
       // Another app owns this on-device folder, so installing this one could
       // leave the watch booting whichever .uapp it found first.
       return ['Superseded — not installable', ''];
+    case 'retired':
+      // Withdrawn by whoever publishes it. The reason is on the card; here it
+      // matters most that a watch already carrying it is named, not nagged.
+      return [entry.installed ? 'Withdrawn — installed' : 'Withdrawn', ''];
     default:
       return [entry.status, ''];
   }
@@ -388,6 +393,59 @@ const TYPE_SECTIONS = [
   },
   { type: 'Clockface', heading: 'Clockfaces', blurb: 'Watch faces.' },
 ];
+
+/**
+ * Where the binary on offer came from.
+ *
+ * The recipe hangs off the title, since that plus the published inputs is what
+ * makes a Kira build reproducible rather than merely asserted. A submitted app
+ * names its repository and the commit that was compiled; the commit is not a
+ * link, because the repository URL is whatever the manifest gave and building a
+ * commit URL from it would be a guess about the host.
+ *
+ * This line is the whole difference between a submitted app and one of UNA's —
+ * there is no badge and no separate section, because where a binary came from is
+ * information, not a ranking.
+ */
+function renderProvenance(app, selected) {
+  const provenance = document.createElement('div');
+  provenance.className = 'meta provenance';
+  const built = selected.builtFrom;
+
+  if (selected.origin !== 'kira') {
+    provenance.textContent = "the vendor's own build";
+    return provenance;
+  }
+
+  provenance.append('built by Kira from ');
+  if (app.publisher) {
+    const repo = document.createElement('a');
+    // Manifests are re-validated at every catalogue build, so this is https.
+    repo.href = app.publisher.repo;
+    repo.rel = 'noopener noreferrer';
+    repo.target = '_blank';
+    repo.textContent = app.publisher.repo.replace(/^https:\/\//, '').replace(/\.git$/, '');
+    provenance.appendChild(repo);
+
+    const source = built ? sourceRef(built.appSource) : undefined;
+    if (source) {
+      const rev = document.createElement('span');
+      rev.className = 'rev';
+      rev.textContent = ` at ${source.rev.slice(0, 12)}`;
+      rev.title = source.rev;
+      provenance.appendChild(rev);
+    }
+  } else {
+    provenance.append('source');
+  }
+
+  if (built) {
+    provenance.title =
+      `recipe ${built.recipe}\nsource ${built.appSource}\ntoolchain ${built.toolchain}` +
+      (app.publisher ? `\nmaintained by @${app.publisher.maintainer}` : '');
+  }
+  return provenance;
+}
 
 function renderCard(app, entry) {
   const selected = app.versions.find((v) => v.version === app.selected) ?? app.versions[0];
@@ -426,21 +484,21 @@ function renderCard(app, entry) {
     `${fmtSize(selected.size)}${selected.autostart ? ' · autostarts' : ''} · ${app.history}`;
   body.appendChild(meta);
 
-  // Who built the binary on offer. For a Kira build the recipe is shown on hover,
-  // since that plus the published inputs is what makes it reproducible.
-  const provenance = document.createElement('div');
-  provenance.className = 'meta provenance';
-  if (selected.origin === 'kira') {
-    provenance.textContent = 'built by Kira from source';
-    const built = selected.builtFrom;
-    if (built) {
-      provenance.title =
-        `recipe ${built.recipe}\nsource ${built.appSource}\ntoolchain ${built.toolchain}`;
-    }
-  } else {
-    provenance.textContent = "the vendor's own build";
+  body.appendChild(renderProvenance(app, selected));
+
+  // Withdrawn by whoever publishes it. The reason is shown rather than hidden
+  // behind a flag: it is the only part of a withdrawal that helps anyone whose
+  // watch is already carrying the app.
+  const withdrawn = app.retired ?? selected.retired;
+  if (withdrawn) {
+    const note = document.createElement('div');
+    note.className = 'meta superseded';
+    note.textContent = `withdrawn — ${withdrawn}`;
+    note.title = app.retired
+      ? 'This app is no longer offered for installation.'
+      : `Version ${selected.version} is no longer offered for installation.`;
+    body.appendChild(note);
   }
-  body.appendChild(provenance);
 
   // Upstream reassigned AppIDs: three Glances carry one id up to apps-v0.1.9-rc1
   // and a different one after. Those are separate identities to the watch and the
@@ -479,6 +537,9 @@ function renderCard(app, entry) {
       const tags = [];
       if (version.version === app.versions[0].version) tags.push('latest');
       if (version.changed === false) tags.push('same code');
+      // Still selectable and still downloadable — a watch carrying it has to be
+      // able to find out what it has — but never offered for installation.
+      if (version.retired) tags.push('withdrawn');
       option.textContent = tags.length
         ? `${version.version} · ${tags.join(' · ')}`
         : version.version;
@@ -518,10 +579,12 @@ function renderCatalogue() {
   root.textContent = '';
 
   const all = state.store.apps();
-  // Superseded identities are listed separately: they cannot be installed, and
-  // leaving them in the grids invites a misclick on an app that upstream replaced.
-  const apps = all.filter((a) => !a.supersededBy);
-  const archived = all.filter((a) => a.supersededBy);
+  // Apps that cannot be installed are listed separately, whether that is because
+  // upstream replaced the identity or because whoever published it withdrew it.
+  // Leaving them in the grids invites a misclick on something not on offer.
+  const isArchived = (a) => Boolean(a.supersededBy || a.retired);
+  const apps = all.filter((a) => !isArchived(a));
+  const archived = all.filter(isArchived);
   const byId = new Map((state.plan?.entries ?? []).map((e) => [e.app.appId, e]));
   const seen = new Set();
 
@@ -568,29 +631,49 @@ function renderCatalogue() {
 }
 
 /**
- * Apps whose identity upstream replaced.
+ * Apps that are no longer on offer, for either of the two reasons there are.
  *
- * Collapsed by default and kept out of the grids above: they are not installable,
- * because another app owns the folder they would be written to, and the versions
- * they carry are ancient. Still listed so the reassignment is visible and the
- * binaries remain downloadable.
+ * Collapsed by default and kept out of the grids above. Still listed, and their
+ * binaries still downloadable, so that a watch carrying one can be recognised and
+ * its owner told why — which is more use than reporting it as something unknown.
  */
 function renderArchive(root, archived, byId) {
   const box = document.createElement('details');
   box.className = 'archive';
 
+  const withdrawn = archived.filter((a) => a.retired).length;
+  const replaced = archived.length - withdrawn;
+  const parts = [];
+  if (withdrawn > 0) parts.push(`${withdrawn} withdrawn`);
+  if (replaced > 0) {
+    parts.push(`${replaced} replaced identit${replaced === 1 ? 'y' : 'ies'}`);
+  }
+
   const summary = document.createElement('summary');
-  summary.textContent = `Archived — ${archived.length} replaced identit${
-    archived.length === 1 ? 'y' : 'ies'
-  }`;
+  summary.textContent = `Archived — ${parts.join(', ')}`;
   box.appendChild(summary);
+
+  const both = withdrawn > 0 && replaced > 0;
+  const reasons = [];
+  if (withdrawn > 0) {
+    reasons.push(
+      `${both ? 'Some' : 'These'} were withdrawn by whoever publishes them, with the ` +
+        'reason on the card.',
+    );
+  }
+  if (replaced > 0) {
+    reasons.push(
+      `Upstream reassigned ${both ? 'others' : 'these apps'} to new AppIDs; the current ` +
+        'versions are listed above under the same names, and these entries keep the old ' +
+        'identity.',
+    );
+  }
 
   const note = document.createElement('p');
   note.className = 'type-blurb';
   note.textContent =
-    'Upstream reassigned these apps to new AppIDs. The current versions are listed ' +
-    'above under the same names; these entries keep the old identity and cannot be ' +
-    'installed, since the newer app owns the same folder on the watch.';
+    `${reasons.join(' ')} None of them can be installed — the binaries stay here so a ` +
+    'watch already carrying one can be identified.';
   box.appendChild(note);
 
   const grid = document.createElement('div');

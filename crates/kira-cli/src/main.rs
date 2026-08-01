@@ -73,6 +73,11 @@ enum Command {
         /// Toolchain identity the store was built with. Required with --built.
         #[arg(long)]
         toolchain: Option<String>,
+        /// Directory of third-party submission manifests to publish beside the
+        /// SDK's apps. Requires --built: a submission has no vendor binary to
+        /// fall back on, so a version with nothing in the store is left out.
+        #[arg(long)]
+        registry: Option<PathBuf>,
     },
 
     /// Print what a .uapp says about itself, as JSON.
@@ -360,6 +365,7 @@ fn main() -> Result<()> {
             tag,
             built,
             toolchain,
+            registry,
         } => build::run(&build::Args {
             src,
             out,
@@ -368,6 +374,7 @@ fn main() -> Result<()> {
             tag,
             built,
             toolchain,
+            registry,
         }),
         Command::BuildApp {
             app,

@@ -12,8 +12,9 @@ on:
       - "registry/**"
       - ".github/workflows/registry.yml"
   # And again after merge: the pull-request run gates a contributor's code, this
-  # one keeps main honest, and it is where publishing will hang once submitted
-  # apps reach the catalogue.
+  # one keeps main honest, and it is where publishing happens. A run on main
+  # uploads what it built to the app-binaries store, which is where the catalogue
+  # build then finds it.
   push:
     branches: [main]
     paths:
@@ -30,14 +31,16 @@ env:
   # Pinned by digest, so a submission builds under the same compiler as
   # everything else in the catalogue. Keep in step with app-binaries.yml.
   TOOLCHAIN: ghcr.io/tobymurray/kira-toolchain@sha256:4d75a70b33b4c4fb8799bed5af2ebb03c9b6eb161ffed3049e316ad996461127
+  BINARIES_TAG: app-binaries
 
 jobs:
   check:
     name: Check the manifests
     runs-on: ubuntu-latest
     outputs:
-      # Lets the build job be skipped entirely when a pull request touches the
-      # docs or this workflow rather than a manifest.
+      # Lets the build job be skipped entirely when a run touches the docs or
+      # this workflow rather than a manifest, and when every wanted artifact is
+      # already in the store.
       builds: ${{ steps.plan.outputs.builds }}
     steps:
       - uses: actions/checkout@v7
@@ -91,13 +94,34 @@ jobs:
             --base base/registry \
             --catalog catalog.json
 
+      # Artifacts are named by recipe, so anything already stored is by
+      # construction the binary that recipe produces. Re-running is then cheap,
+      # and a re-merge does not rebuild the whole registry.
+      - name: Read what the store already holds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # An absent release means an empty store. Any other failure lands here
+          # too and causes a rebuild -- wasteful, never wrong.
+          if gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" --json assets \
+               --jq '.assets[].name' > available.txt 2>/dev/null; then
+            echo "store holds $(wc -l < available.txt) artifact(s)"
+          else
+            : > available.txt
+            echo "no $BINARIES_TAG release yet; treating the store as empty"
+          fi
+
       - name: Plan what has to be built
         id: plan
         run: |
+          set -euo pipefail
           "$KIRA" registry plan \
-            --dir registry --toolchain "${TOOLCHAIN#*@}" --out plan.json
-          jq -r '.[] | "\(.folder) \(.version) \(.appSource)"' plan.json
-          echo "builds=$(jq 'length' plan.json)" >> "$GITHUB_OUTPUT"
+            --dir registry --toolchain "$TOOLCHAIN" \
+            --available available.txt --out plan.json
+          jq -r '.[] | "\(.action)\t\(.folder) \(.version) \(.appSource)"' plan.json
+          echo "builds=$(jq '[.[] | select(.action == "build")] | length' plan.json)" \
+            >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -170,7 +194,9 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           failed=0
-          jq -c '.[]' plan.json > items.txt
+          # Only what the plan says is missing: anything already in the store was
+          # built from this exact recipe, so rebuilding it would prove nothing.
+          jq -c '.[] | select(.action == "build")' plan.json > items.txt
           while read -r item; do
             folder=$(jq -r '.folder' <<<"$item")
             version=$(jq -r '.version' <<<"$item")
@@ -213,7 +239,7 @@ jobs:
                  --sdk sdk \
                  --version "$version" \
                  --out "artifacts/$asset" \
-                 --toolchain "${TOOLCHAIN#*@}" \
+                 --toolchain "$TOOLCHAIN" \
                  --app-source "$app_source" \
                  --sdk-rev "$sdk_rev" < /dev/null; then
               kira inspect "artifacts/$asset"
@@ -234,7 +260,11 @@ jobs:
           {
             echo "### Submitted binaries"
             echo
-            echo "Built here for checking only — a pull request never publishes."
+            if [ "${{ github.event_name }}" = "push" ]; then
+              echo "Uploaded to the \`app-binaries\` store, where the catalogue build picks them up."
+            else
+              echo "Built here for checking only — a pull request never publishes."
+            fi
             echo
             for file in artifacts/*.uapp; do
               [ -e "$file" ] || continue
@@ -247,3 +277,48 @@ jobs:
           name: submitted-uapps
           path: artifacts
           if-no-files-found: error
+
+  publish:
+    name: Upload to the app-binaries store
+    needs: [check, build]
+    # Merging to main is what publishes; a pull request builds and stops. The
+    # store is content-addressed, so this only ever adds.
+    if: github.event_name == 'push' && needs.check.outputs.builds != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: submitted-uapps
+          path: artifacts
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          built=(artifacts/*.uapp)
+          if [ ${#built[@]} -eq 0 ]; then
+            echo "nothing to upload"
+            exit 0
+          fi
+
+          # Artifacts are named by recipe, so an upload never replaces anything
+          # meaningful and the same name always denotes the same bytes.
+          if ! gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" \
+              --title "App binaries" \
+              --notes "Binaries Kira built from source, named by recipe key. A store for the build pipeline, not a user-facing release." \
+              --latest=false
+          fi
+          gh release upload "$BINARIES_TAG" "${built[@]}" -R "$GITHUB_REPOSITORY" --clobber
+
+          {
+            echo "### Published"
+            echo
+            for file in "${built[@]}"; do
+              echo "- \`$(basename "$file")\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

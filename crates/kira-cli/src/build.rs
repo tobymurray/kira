@@ -5,16 +5,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::sha256_hex;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use kira_core::catalog::{
-    App, BuiltFrom, Catalog, Origin, Release, ReleaseOrder, SCHEMA, Source, VersionEntry,
-    partition_unique, sort_newest_first,
+    App, BuiltFrom, Catalog, Origin, Publisher, Release, ReleaseOrder, SCHEMA, Source,
+    VersionEntry, partition_unique, sort_newest_first,
 };
 use kira_core::icon;
-use kira_core::uapp::{AppId, Uapp, Version};
+use kira_core::uapp::{AppId, Header, Uapp, Version};
 
 use crate::build_app::flags_id;
 use crate::recipe::Recipe;
+use crate::registry::{self, Manifest};
 use serde::Deserialize;
 
 /// Command-line inputs for a build.
@@ -38,6 +39,9 @@ pub(crate) struct Args {
     /// Toolchain identity the store was built with. Required with `--built`,
     /// since the recipe -- and therefore the artifact name -- depends on it.
     pub toolchain: Option<String>,
+    /// Directory of third-party submission manifests, to publish beside the SDK's
+    /// apps. Needs `--built`: a submission has no vendor binary to fall back on.
+    pub registry: Option<PathBuf>,
 }
 
 /// Release metadata as fetched from the GitHub API by the workflow.
@@ -480,6 +484,10 @@ fn process_release(
             icon_small: None,
             // Decided once every app is known.
             superseded_by: None,
+            // An SDK app's publisher is the catalogue's own source, and upstream
+            // withdraws an app by dropping it from a release rather than saying so.
+            publisher: None,
+            retired: None,
         });
 
         // Same version published under two tags: keep the newer release's.
@@ -508,23 +516,10 @@ fn process_release(
             upstream_sha256: Some(chosen.upstream_sha256),
             matches_upstream: Some(chosen.matches_upstream),
             built_from: chosen.built_from,
+            retired: None,
         });
 
-        // Icons come from the newest version that has any. A declared length
-        // does not mean there are pixels: Glance apps built with icons off
-        // carry a zero-filled field of the full size.
-        for (slot, field, suffix) in [
-            (&mut entry.icon, &normal_icon, ""),
-            (&mut entry.icon_small, &small_icon, "@30"),
-        ] {
-            if slot.is_some() || field.is_empty() || icon::is_blank(field) {
-                continue;
-            }
-            let decoded = icon::decode(field)?;
-            let rel = format!("icons/{}{suffix}.png", header.app_id);
-            write_png(&data.join(&rel), &decoded)?;
-            *slot = Some(rel);
-        }
+        record_icons(entry, data, header.app_id, &normal_icon, &small_icon)?;
     }
 
     Ok(Processed::Included(Release {
@@ -541,6 +536,282 @@ fn process_release(
             .map(|n| n.trim().to_owned()),
         app_count: kept,
     }))
+}
+
+/// Extract an app's icons, taking them from the newest version that has any.
+///
+/// A declared length does not mean there are pixels: Glance apps built with icons
+/// off carry a zero-filled field of the full size.
+fn record_icons(
+    app: &mut App,
+    data: &Path,
+    app_id: AppId,
+    normal: &[u8],
+    small: &[u8],
+) -> Result<()> {
+    for (slot, field, suffix) in [
+        (&mut app.icon, normal, ""),
+        (&mut app.icon_small, small, "@30"),
+    ] {
+        if slot.is_some() || field.is_empty() || icon::is_blank(field) {
+            continue;
+        }
+        let decoded = icon::decode(field)?;
+        let rel = format!("icons/{app_id}{suffix}.png");
+        write_png(&data.join(&rel), &decoded)?;
+        *slot = Some(rel);
+    }
+    Ok(())
+}
+
+/// Re-run the submission checks against the catalogue as it stands now.
+///
+/// The same rules the pull request ran, deliberately run again here. A manifest
+/// is only ever checked against the catalogue it was accepted into, and both
+/// sides move afterwards: upstream can ship a colliding `AppID` or on-device
+/// folder in any later release, and nothing would notice. Both collisions reach
+/// hardware -- the id is the app's whole identity to the watch and the phone, and
+/// the watch loads whichever `.uapp` it finds first in a folder, so sharing one
+/// can mean silently booting the wrong app.
+///
+/// It also means nothing malformed is ever published, whatever route a manifest
+/// took onto `main`. The page links a submission's `source`, so "https and
+/// nothing else" has to hold at the point of publication, not only at review.
+fn refuse_bad_submissions(manifests: &[Manifest], upstream: &BTreeMap<AppId, App>) -> Result<()> {
+    let ids = upstream
+        .iter()
+        .map(|(id, app)| (*id, app.name.clone()))
+        .collect();
+    let folders = upstream
+        .values()
+        .map(|app| (app.folder.to_ascii_lowercase(), app.name.clone()))
+        .collect();
+
+    let problems = registry::validate(manifests, &ids, &folders);
+    ensure!(
+        problems.is_empty(),
+        "the registry cannot be published as it stands.\n{}\
+         An identity an SDK app already holds risks the watch running the wrong \
+         app, so nothing here is published until it is resolved: retire the \
+         submission, or give it an identity of its own in a new version.",
+        registry::report(&problems)
+    );
+    Ok(())
+}
+
+/// The name a submitted binary is written under on the watch.
+///
+/// Nothing in the store carries one: artifacts there are named by recipe, which
+/// is a digest. The name is not semantic to the watch, which loads whichever
+/// `.uapp` is in the folder, so this follows the convention upstream's own
+/// binaries use and keeps it path-safe -- a display name is not, `AVG / R HR`
+/// being a real one.
+fn device_file_name(name: &str, version: Version) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let stem = cleaned.trim_matches('_');
+    let stem = if stem.is_empty() { "app" } else { stem };
+    format!("{stem}_{version}.uapp")
+}
+
+/// Fold the submitted apps into the catalogue, beside the SDK's own.
+///
+/// Deliberately not a section of its own: who published an app is provenance,
+/// which the card states, and a listing that put one source above the other would
+/// be ranking something Kira has no way to judge. See `registry/README.md`.
+///
+/// A version with no artifact in the store is left out rather than described:
+/// there is no vendor binary to fall back on, so publishing an entry for it would
+/// name a download that does not exist.
+fn fold_registry(
+    dir: &Path,
+    data: &Path,
+    apps: &mut BTreeMap<AppId, App>,
+    total_bytes: &mut u64,
+    built: &BuiltStore,
+) -> Result<RegistryCounts> {
+    let manifests = registry::load_dir(dir)?;
+    refuse_bad_submissions(&manifests, apps)?;
+
+    let mut counts = RegistryCounts {
+        manifests: manifests.len(),
+        ..RegistryCounts::default()
+    };
+
+    for manifest in &manifests {
+        for entry in manifest.newest_first() {
+            let recipe = manifest.recipe_for(&entry, &built.toolchain);
+            let path = built.dir.join(recipe.artifact_name(&manifest.folder));
+            if !path.is_file() {
+                // The window between a manifest landing on main and its build
+                // reaching the store, or a build that failed. Either way there
+                // are no bytes to describe.
+                eprintln!(
+                    "  ! {} {}: no stored artifact, so this version is not published",
+                    manifest.slug, entry.version
+                );
+                counts.missing += 1;
+                continue;
+            }
+
+            let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+            let uapp =
+                Uapp::parse(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+            let header = uapp.header().clone();
+
+            // Kira built this itself from a pinned recipe and verified it then, so
+            // a disagreement now is a broken store rather than history to work
+            // around. Refuse, instead of publishing something mislabelled.
+            let crc = uapp.verify_crc();
+            ensure!(
+                crc.is_valid(),
+                "{}: CRC mismatch (stored {:#010x}, computed {:#010x})",
+                path.display(),
+                crc.stored,
+                crc.computed
+            );
+            ensure!(
+                header.app_id == manifest.app_id,
+                "{}: AppID {} but {} declares {}",
+                path.display(),
+                header.app_id,
+                manifest.slug,
+                manifest.app_id
+            );
+            ensure!(
+                header.version == entry.version,
+                "{}: version {} but {} was requested",
+                path.display(),
+                header.version,
+                entry.version
+            );
+
+            let file = device_file_name(&header.name, header.version);
+            let download = format!("apps/registry/{}/{}/{file}", manifest.slug, manifest.folder);
+            let target = data.join(&download);
+            fs::create_dir_all(target.parent().expect("download path has a parent"))?;
+            fs::write(&target, &bytes).with_context(|| format!("writing {}", target.display()))?;
+            *total_bytes += bytes.len() as u64;
+
+            let app = apps.entry(manifest.app_id).or_insert_with(|| App {
+                app_id: manifest.app_id,
+                name: header.name.clone(),
+                app_type: header.app_type(),
+                folder: manifest.folder.clone(),
+                versions: Vec::new(),
+                icon: None,
+                icon_small: None,
+                superseded_by: None,
+                publisher: Some(Publisher {
+                    repo: manifest.source.clone(),
+                    maintainer: manifest.maintainer.clone(),
+                }),
+                retired: manifest.retired.clone(),
+            });
+
+            app.versions.push(submitted_version(SubmittedBuild {
+                header: &header,
+                entry: &entry,
+                recipe: &recipe,
+                manifest,
+                size: bytes.len(),
+                sha256: sha256_hex(&bytes),
+                payload_sha256: sha256_hex(uapp.payload()),
+                file,
+                download,
+            }));
+            counts.versions += 1;
+            if manifest.retired_for(&entry).is_some() {
+                counts.retired += 1;
+            }
+
+            record_icons(
+                app,
+                data,
+                manifest.app_id,
+                uapp.normal_icon(),
+                uapp.small_icon(),
+            )?;
+        }
+    }
+
+    Ok(counts)
+}
+
+/// One stored submission artifact, ready to become a catalogue version.
+struct SubmittedBuild<'a> {
+    header: &'a Header,
+    entry: &'a registry::Entry,
+    recipe: &'a Recipe,
+    manifest: &'a Manifest,
+    size: usize,
+    sha256: String,
+    payload_sha256: String,
+    file: String,
+    download: String,
+}
+
+/// One stored submission artifact, as a catalogue version.
+fn submitted_version(built: SubmittedBuild<'_>) -> VersionEntry {
+    let SubmittedBuild {
+        header,
+        entry,
+        recipe,
+        manifest,
+        size,
+        sha256,
+        payload_sha256,
+        file,
+        download,
+    } = built;
+    VersionEntry {
+        version: header.version,
+        version_packed: header.version.packed(),
+        // A submission ships on its own schedule, so there is no upstream release
+        // it came from; its own manifest is what published it.
+        tag: manifest.slug.clone(),
+        folder: manifest.folder.clone(),
+        file,
+        libc_version: header.libc_version,
+        autostart: header.autostart(),
+        size,
+        sha256,
+        payload_sha256,
+        download,
+        // Filled once every version is known.
+        changed: None,
+        delta_bytes: None,
+        origin: Origin::Kira,
+        built_from: Some(BuiltFrom {
+            app_source: recipe.app_source.clone(),
+            sdk_rev: recipe.sdk_rev.clone(),
+            toolchain: recipe.toolchain.clone(),
+            recipe: recipe.key(),
+        }),
+        // There is no vendor binary for a submission, so there is nothing to
+        // compare against -- unknown, rather than a claim either way.
+        upstream_sha256: None,
+        matches_upstream: None,
+        // The app's own withdrawal is recorded on the app; this is per-version.
+        retired: entry.retired.clone(),
+    }
+}
+
+/// What the submissions contributed, for the run summary.
+#[derive(Debug, Default)]
+struct RegistryCounts {
+    manifests: usize,
+    versions: usize,
+    missing: usize,
+    retired: usize,
 }
 
 /// Build the catalogue and write it, plus the binaries and icons, under `out`.
@@ -601,6 +872,22 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         bail!("no usable releases: nothing to publish");
     }
 
+    // After the releases, so the collision check sees every upstream identity.
+    let submissions = match &args.registry {
+        Some(dir) => Some(fold_registry(
+            dir,
+            &data,
+            &mut apps,
+            &mut total_bytes,
+            // A submission has no vendor binary to fall back on, so without the
+            // store there is nothing to publish and nothing to say about it.
+            built
+                .as_ref()
+                .context("--registry requires --built and --toolchain")?,
+        )?),
+        None => None,
+    };
+
     let mut apps: Vec<App> = apps.into_values().collect();
     for app in &mut apps {
         annotate_history(app);
@@ -632,7 +919,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 
     let json = serde_json::to_string_pretty(&catalog)?;
     fs::write(data.join("catalog.json"), format!("{json}\n"))?;
-    report(&catalog, &counts, &skipped, total_bytes, &data);
+    report(
+        &catalog,
+        &counts,
+        submissions.as_ref(),
+        &skipped,
+        total_bytes,
+        &data,
+    );
     Ok(())
 }
 
@@ -640,6 +934,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 fn report(
     catalog: &Catalog,
     counts: &OriginCounts,
+    submissions: Option<&RegistryCounts>,
     skipped: &[String],
     total_bytes: u64,
     data: &Path,
@@ -679,6 +974,18 @@ fn report(
             "{} of Kira's builds were refused as not matching upstream's app",
             counts.rejected
         );
+    }
+    if let Some(registry) = submissions {
+        println!(
+            "{} submitted app(s): {} version(s) published, {} with no stored artifact",
+            registry.manifests, registry.versions, registry.missing
+        );
+        if registry.retired > 0 {
+            println!(
+                "{} submitted version(s) withdrawn, listed but never offered",
+                registry.retired
+            );
+        }
     }
     if counts.diverged > 0 {
         // Expected until the SDK carries the path-independence fix: Kira's build
@@ -754,4 +1061,308 @@ fn now_rfc3339_millis() -> String {
         &now.to_zoned(jiff::tz::TimeZone::UTC),
     )
     .unwrap_or_else(|_| now.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kira_core::uapp::{CRC_LEN, HEADER_LEN, NORMAL_ICON_LEN, SMALL_ICON_LEN};
+
+    const TOOLCHAIN: &str = "sha256:0000test";
+    const TIDE_CLOCK: AppId = AppId::new(0xA7C3_1F0E_9B48_2D65);
+    const ALARM: AppId = AppId::new(0xA19C_2A7E_4F8B_6D31);
+
+    /// A valid `.uapp`, so these tests need no vendor binaries.
+    ///
+    /// Icons are left zero-filled, which real Glance builds do too, so nothing
+    /// here depends on the PNG encoder.
+    fn uapp(app_id: AppId, name: &str, version: Version, filler: u8) -> Vec<u8> {
+        const SERVICE: usize = 64;
+        let total = HEADER_LEN + NORMAL_ICON_LEN + SMALL_ICON_LEN + SERVICE + CRC_LEN;
+        let mut bytes = vec![0u8; total];
+        bytes[..8].copy_from_slice(&app_id.get().to_le_bytes());
+        bytes[8..12].copy_from_slice(&version.packed().to_le_bytes());
+        bytes[12..16].copy_from_slice(&Version::new(0, 0, 3).packed().to_le_bytes());
+        bytes[16..20].copy_from_slice(&(SERVICE as u32).to_le_bytes());
+        // Bits 0-1 are the type; 1 is Utility.
+        bytes[20..24].copy_from_slice(&1u32.to_le_bytes());
+        let name = name.as_bytes();
+        let len = name.len().min(15);
+        bytes[24..24 + len].copy_from_slice(&name[..len]);
+        bytes[40..44].copy_from_slice(&(NORMAL_ICON_LEN as u32).to_le_bytes());
+        bytes[44..48].copy_from_slice(&(SMALL_ICON_LEN as u32).to_le_bytes());
+        let service_at = HEADER_LEN + NORMAL_ICON_LEN + SMALL_ICON_LEN;
+        bytes[service_at..service_at + SERVICE].fill(filler);
+
+        // The footer covers everything before it, and the parser already reports
+        // what it would expect there -- so stamp that rather than carrying a
+        // second CRC implementation into the tests.
+        let crc = Uapp::parse(&bytes)
+            .expect("a synthetic .uapp parses")
+            .verify_crc()
+            .computed;
+        bytes[total - CRC_LEN..].copy_from_slice(&crc.to_le_bytes());
+        bytes
+    }
+
+    const MANIFEST: &str = r#"
+app_id = "A7C31F0E9B482D65"
+source = "https://github.com/someone/una-tide-clock"
+folder = "TideClock"
+licence = "MIT"
+maintainer = "someone"
+
+[[versions]]
+version = "1.0.0"
+rev = "3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d"
+sdk_rev = "apps-v1.3.0"
+"#;
+
+    /// A workspace holding one upstream release and one submission manifest.
+    struct Fixture {
+        root: PathBuf,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.root).ok();
+        }
+    }
+
+    impl Fixture {
+        fn new(case: &str, manifest: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("kira-build-{case}"));
+            fs::remove_dir_all(&root).ok();
+
+            let release = root.join("src/apps-v1.3.0/Alarm");
+            fs::create_dir_all(&release).unwrap();
+            fs::write(
+                release.join("Alarm_1.3.0.uapp"),
+                uapp(ALARM, "Alarm", Version::new(1, 3, 0), 0x11),
+            )
+            .unwrap();
+
+            fs::create_dir_all(root.join("registry")).unwrap();
+            fs::write(root.join("registry/tide-clock.toml"), manifest).unwrap();
+            fs::create_dir_all(root.join("store")).unwrap();
+
+            Self { root }
+        }
+
+        /// Put a built binary in the store under the name its recipe gives it,
+        /// which is how the catalogue build finds it.
+        fn store(&self, version: Version, bytes: &[u8]) {
+            let manifest = registry::load_dir(&self.root.join("registry")).unwrap()[0].clone();
+            let entry = manifest
+                .newest_first()
+                .into_iter()
+                .find(|e| e.version == version)
+                .expect("the manifest lists this version");
+            let name = manifest
+                .recipe_for(&entry, TOOLCHAIN)
+                .artifact_name(&manifest.folder);
+            fs::write(self.root.join("store").join(name), bytes).unwrap();
+        }
+
+        fn build(&self) -> Result<Catalog> {
+            run(&Args {
+                src: self.root.join("src"),
+                out: self.root.join("site"),
+                releases: None,
+                repo: None,
+                tag: None,
+                built: Some(self.root.join("store")),
+                toolchain: Some(TOOLCHAIN.to_owned()),
+                registry: Some(self.root.join("registry")),
+            })?;
+            let text = fs::read_to_string(self.root.join("site/data/catalog.json"))?;
+            Ok(serde_json::from_str(&text)?)
+        }
+    }
+
+    #[test]
+    fn a_submitted_app_is_published_beside_the_sdk_apps() {
+        let fixture = Fixture::new("submitted", MANIFEST);
+        let bytes = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22);
+        fixture.store(Version::new(1, 0, 0), &bytes);
+
+        let catalog = fixture.build().unwrap();
+        assert_eq!(catalog.schema, SCHEMA);
+        let app = catalog
+            .apps
+            .iter()
+            .find(|a| a.app_id == TIDE_CLOCK)
+            .expect("the submission is in the catalogue");
+
+        // In the same list as the SDK's own app, not a section of its own.
+        assert!(catalog.apps.iter().any(|a| a.app_id == ALARM));
+
+        let publisher = app
+            .publisher
+            .as_ref()
+            .expect("a submission has a publisher");
+        assert_eq!(publisher.repo, "https://github.com/someone/una-tide-clock");
+        assert_eq!(publisher.maintainer, "someone");
+        assert_eq!(app.retired, None);
+
+        let version = app.latest();
+        assert_eq!(version.origin, Origin::Kira);
+        assert_eq!(version.sha256, sha256_hex(&bytes));
+        assert_eq!(version.file, "Tide_Clock_1.0.0.uapp");
+        assert_eq!(
+            version.download,
+            "apps/registry/tide-clock/TideClock/Tide_Clock_1.0.0.uapp"
+        );
+        // No vendor binary exists for a submission, so there is nothing to
+        // compare against -- unknown, not a claim either way.
+        assert_eq!(version.upstream_sha256, None);
+        assert_eq!(version.matches_upstream, None);
+
+        let built = version.built_from.as_ref().expect("Kira built it");
+        assert_eq!(
+            built.app_source,
+            "git:https://github.com/someone/una-tide-clock\
+             @3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d:."
+        );
+
+        // And the bytes are actually served, not merely described.
+        let served = fixture.root.join("site/data").join(&version.download);
+        assert_eq!(fs::read(served).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_version_with_nothing_in_the_store_is_left_out() {
+        // There is no vendor binary to fall back on, so publishing an entry for
+        // it would name a download that does not exist.
+        let fixture = Fixture::new("unbuilt", MANIFEST);
+        let catalog = fixture.build().unwrap();
+        assert!(!catalog.apps.iter().any(|a| a.app_id == TIDE_CLOCK));
+        assert!(catalog.apps.iter().any(|a| a.app_id == ALARM));
+    }
+
+    #[test]
+    fn a_withdrawn_submission_stays_listed_with_its_reason() {
+        // Before the first [[versions]] table, so it withdraws the app itself
+        // rather than one of its builds.
+        let text = MANIFEST.replace(
+            "maintainer = \"someone\"",
+            "maintainer = \"someone\"\n\
+             retired = \"the sensor it reads was removed in firmware 2.0\"",
+        );
+        let fixture = Fixture::new("withdrawn", &text);
+        fixture.store(
+            Version::new(1, 0, 0),
+            &uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22),
+        );
+
+        let catalog = fixture.build().unwrap();
+        let app = catalog
+            .apps
+            .iter()
+            .find(|a| a.app_id == TIDE_CLOCK)
+            .expect("a withdrawn app keeps its listing and its binaries");
+        assert_eq!(
+            app.retired.as_deref(),
+            Some("the sensor it reads was removed in firmware 2.0")
+        );
+    }
+
+    #[test]
+    fn one_withdrawn_version_is_marked_without_taking_the_app_down() {
+        let text = MANIFEST.replace(
+            "sdk_rev = \"apps-v1.3.0\"\n",
+            "sdk_rev = \"apps-v1.3.0\"\nretired = \"writes a corrupt .fit on long runs\"\n\n\
+             [[versions]]\nversion = \"1.1.0\"\n\
+             rev = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
+             sdk_rev = \"apps-v1.3.0\"\n",
+        );
+        let fixture = Fixture::new("one-version", &text);
+        for version in [Version::new(1, 0, 0), Version::new(1, 1, 0)] {
+            fixture.store(
+                version,
+                &uapp(TIDE_CLOCK, "Tide Clock", version, version.patch()),
+            );
+        }
+
+        let catalog = fixture.build().unwrap();
+        let app = catalog
+            .apps
+            .iter()
+            .find(|a| a.app_id == TIDE_CLOCK)
+            .unwrap();
+        assert_eq!(app.retired, None, "the app itself is still on offer");
+        assert_eq!(app.versions.len(), 2);
+        assert_eq!(app.latest().version, Version::new(1, 1, 0));
+        assert_eq!(app.latest().retired, None);
+        assert_eq!(
+            app.find(Version::new(1, 0, 0)).unwrap().retired.as_deref(),
+            Some("writes a corrupt .fit on long runs")
+        );
+    }
+
+    #[test]
+    fn a_submission_colliding_with_an_sdk_app_fails_the_build() {
+        // The case this guards is upstream shipping the collision *later*: the
+        // manifest was fine when it was accepted, and nothing else would notice.
+        for (field, replacement, says) in [
+            (
+                "app_id = \"A7C31F0E9B482D65\"",
+                "app_id = \"A19C2A7E4F8B6D31\"",
+                "already belongs to Alarm",
+            ),
+            (
+                "folder = \"TideClock\"",
+                "folder = \"alarm\"",
+                "already used by Alarm",
+            ),
+        ] {
+            let fixture = Fixture::new("collision", &MANIFEST.replace(field, replacement));
+            let err = fixture.build().unwrap_err().to_string();
+            assert!(err.contains(says), "{err}");
+            assert!(err.contains("tide-clock"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_manifest_is_never_published_whatever_route_it_took() {
+        // The page links a submission's source, so "https and nothing else" has
+        // to hold when it is published, not only when it was reviewed.
+        let text = MANIFEST.replace(
+            "https://github.com/someone/una-tide-clock",
+            "javascript:alert(1)",
+        );
+        let fixture = Fixture::new("malformed", &text);
+        let err = fixture.build().unwrap_err().to_string();
+        assert!(err.contains("must be an https URL"), "{err}");
+    }
+
+    #[test]
+    fn a_stored_artifact_that_disagrees_with_its_manifest_is_refused() {
+        // Kira built it from a pinned recipe and verified it then, so this is a
+        // broken store rather than history to work around.
+        let fixture = Fixture::new("mismatch", MANIFEST);
+        fixture.store(
+            Version::new(1, 0, 0),
+            &uapp(ALARM, "Tide Clock", Version::new(1, 0, 0), 0x22),
+        );
+        let err = fixture.build().unwrap_err().to_string();
+        assert!(err.contains("A19C2A7E4F8B6D31"), "{err}");
+    }
+
+    #[test]
+    fn a_device_file_name_is_path_safe() {
+        assert_eq!(
+            device_file_name("Tide Clock", Version::new(1, 0, 0)),
+            "Tide_Clock_1.0.0.uapp"
+        );
+        // A real display name: the watch does not care what the file is called,
+        // but a path separator in one would be a different file entirely.
+        let odd = device_file_name("AVG / R HR", Version::new(1, 3, 0));
+        assert!(!odd.contains('/'), "{odd}");
+        assert!(!odd.contains(' '), "{odd}");
+        assert_eq!(
+            device_file_name("", Version::new(0, 1, 0)),
+            "app_0.1.0.uapp"
+        );
+    }
 }

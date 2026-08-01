@@ -481,28 +481,41 @@ pub(crate) fn check_unchanged(
     problems
 }
 
+impl Manifest {
+    /// This manifest's versions, newest first.
+    ///
+    /// The order the catalogue wants, and the order worth building in.
+    pub(crate) fn newest_first(&self) -> Vec<Entry> {
+        let mut versions = self.versions.clone();
+        versions.sort_by_key(|entry| std::cmp::Reverse(entry.version));
+        versions
+    }
+
+    /// How one of this manifest's versions is built.
+    ///
+    /// Shared with the catalogue build, so the artifact it looks for in the store
+    /// is by construction the one the submission workflow put there.
+    pub(crate) fn recipe_for(&self, entry: &Entry, toolchain: &str) -> Recipe {
+        Recipe {
+            app_source: app_source(&self.source, &entry.rev, self.subdir_for(entry)),
+            sdk_rev: entry.sdk_rev.clone(),
+            toolchain: toolchain.to_owned(),
+            build_version: entry.version,
+            flags: flags_id(),
+        }
+    }
+}
+
 /// Everything a submission needs built, newest version first.
 pub(crate) fn wanted(manifests: &[Manifest], toolchain: &str) -> Vec<Wanted> {
     let mut wanted = Vec::new();
     for manifest in manifests {
-        let mut versions = manifest.versions.clone();
-        versions.sort_by_key(|entry| std::cmp::Reverse(entry.version));
-        for entry in versions {
+        for entry in manifest.newest_first() {
             wanted.push(Wanted {
                 app_id: manifest.app_id,
                 folder: manifest.folder.clone(),
                 retired: manifest.retired_for(&entry).map(ToOwned::to_owned),
-                recipe: Recipe {
-                    app_source: app_source(
-                        &manifest.source,
-                        &entry.rev,
-                        manifest.subdir_for(&entry),
-                    ),
-                    sdk_rev: entry.sdk_rev.clone(),
-                    toolchain: toolchain.to_owned(),
-                    build_version: entry.version,
-                    flags: flags_id(),
-                },
+                recipe: manifest.recipe_for(&entry, toolchain),
             });
         }
     }
@@ -541,12 +554,27 @@ pub(crate) fn taken_from_catalog(
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let catalog: kira_core::catalog::Catalog =
         serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    if catalog.schema != kira_core::catalog::SCHEMA {
+
+    // A schema behind is normal rather than an error: this tool is always
+    // deployed before the catalogue it goes on to build, so between a schema
+    // bump landing and the next publish the live catalogue is the older one. The
+    // three fields read here have been present throughout, and everything added
+    // since is optional. Newer is refused, since it may mean something this build
+    // does not know about.
+    let expected = kira_core::catalog::SCHEMA;
+    if catalog.schema > expected {
         bail!(
-            "{} is schema {}, expected {}",
+            "{} is schema {}, newer than the {expected} this build understands",
             path.display(),
             catalog.schema,
-            kira_core::catalog::SCHEMA
+        );
+    }
+    if catalog.schema < expected {
+        eprintln!(
+            "note: {} is schema {}, one the published site has not caught up from; \
+             reading the identities it does carry",
+            path.display(),
+            catalog.schema,
         );
     }
 
@@ -871,6 +899,46 @@ sdk_rev = "apps-v1.3.0"
                 .message
                 .contains("was removed")
         );
+    }
+
+    #[test]
+    fn a_catalogue_a_schema_behind_still_answers_which_identities_are_taken() {
+        // The state on every schema bump: the tool ships first, and the site is
+        // still serving what the previous build produced. Refusing to read it
+        // would fail the submission checks until the catalogue caught up.
+        let dir = std::env::temp_dir().join("kira-registry-schema-test");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let older = kira_core::catalog::SCHEMA - 1;
+        let path = dir.join("old.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"schema": {older}, "generated": "x", "source": {{"repo": null}},
+                     "releases": [], "apps": [{{"appId": "A19C2A7E4F8B6D31", "name": "Alarm",
+                     "type": "Utility", "folder": "Alarm", "versions": []}}]}}"#
+            ),
+        )
+        .unwrap();
+        let (ids, folders) = taken_from_catalog(&path).unwrap();
+        assert_eq!(ids[&AppId::new(0xA19C_2A7E_4F8B_6D31)], "Alarm");
+        assert_eq!(folders["alarm"], "Alarm");
+
+        // Newer is refused: it may mean something this build cannot see.
+        let newer = dir.join("new.json");
+        let bumped = kira_core::catalog::SCHEMA + 1;
+        std::fs::write(
+            &newer,
+            format!(
+                r#"{{"schema": {bumped}, "generated": "x", "source": {{"repo": null}},
+                     "releases": [], "apps": []}}"#
+            ),
+        )
+        .unwrap();
+        let err = taken_from_catalog(&newer).unwrap_err().to_string();
+        assert!(err.contains("newer than"), "{err}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -17,8 +17,9 @@ use crate::uapp::{AppId, Version};
 /// Schema version emitted and expected by this crate.
 ///
 /// 3 adds provenance: who built each binary, by what recipe, and how it relates
-/// to what upstream published.
-pub const SCHEMA: u32 = 3;
+/// to what upstream published. 4 adds submissions: who publishes an app that is
+/// not upstream's, and why a listing or a single version is no longer offered.
+pub const SCHEMA: u32 = 4;
 
 /// A complete catalogue, as published to `data/catalog.json`.
 ///
@@ -98,6 +99,34 @@ pub struct App {
     /// for installation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<AppId>,
+    /// Who publishes this app, when it is not upstream's.
+    ///
+    /// Absent for an app that ships in the SDK, whose publisher is the
+    /// catalogue's own [`Source`]. Its presence is what distinguishes a
+    /// submission, and it is deliberately not a rank: see `registry/README.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<Publisher>,
+    /// Why the whole app is no longer offered, if it is not.
+    ///
+    /// A retired app stays listed and keeps its binaries, so a watch carrying it
+    /// is recognised and its owner told why -- more use than reporting it as
+    /// something unknown. The reason is the point; a bare flag would say nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired: Option<String>,
+}
+
+/// Who publishes an app that did not come from the SDK.
+///
+/// Kira still builds the binary itself, from the commit the manifest pins, so
+/// this names the source rather than the builder. What each version was built
+/// from is in its [`BuiltFrom::app_source`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Publisher {
+    /// Repository the source is taken from.
+    pub repo: String,
+    /// Handle to reach about the submission.
+    pub maintainer: String,
 }
 
 /// Who produced the binary Kira serves for a version.
@@ -176,6 +205,12 @@ pub struct VersionEntry {
     /// coming out true on its own afterwards, with no special-casing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches_upstream: Option<bool>,
+    /// Why this particular version is no longer offered, if it is not.
+    ///
+    /// Independent of the app's own [`App::retired`]: a submitter can withdraw
+    /// one bad build without taking the listing down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired: Option<String>,
 }
 
 /// One version of one app, chosen for installation or download.
@@ -229,6 +264,9 @@ pub struct Target {
     pub upstream_sha256: Option<String>,
     /// Whether the two are byte-identical.
     pub matches_upstream: Option<bool>,
+    /// Why this is not on offer, if it is not: the app was withdrawn, or this
+    /// version was.
+    pub retired: Option<String>,
 }
 
 impl App {
@@ -301,12 +339,17 @@ impl Catalog {
     /// Display names shared by more than one [`AppId`], so a UI can say which is
     /// which instead of showing identical-looking entries.
     ///
-    /// Superseded apps are excluded: they belong in an archive of their own, so
-    /// their name no longer collides with anything a reader is choosing between.
+    /// Superseded and retired apps are excluded: both belong in an archive of
+    /// their own, so their name no longer collides with anything a reader is
+    /// choosing between.
     #[must_use]
     pub fn ambiguous_names(&self) -> Vec<String> {
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-        for app in self.apps.iter().filter(|a| a.superseded_by.is_none()) {
+        for app in self
+            .apps
+            .iter()
+            .filter(|a| a.superseded_by.is_none() && a.retired.is_none())
+        {
             *counts.entry(app.name.as_str()).or_default() += 1;
         }
         counts
@@ -426,9 +469,45 @@ pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, Version>) -> 
                 built_from: chosen.built_from.clone(),
                 upstream_sha256: chosen.upstream_sha256.clone(),
                 matches_upstream: chosen.matches_upstream,
+                // A withdrawn app withdraws every version of itself; a single
+                // version can also be withdrawn on its own.
+                retired: app.retired.clone().or_else(|| chosen.retired.clone()),
             }
         })
         .collect()
+}
+
+/// A submission's source, as recorded in a recipe's `app_source`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRef {
+    /// Repository the source was fetched from.
+    pub repo: String,
+    /// The exact commit built.
+    pub rev: String,
+    /// Path within the repository to the app root.
+    pub subdir: String,
+}
+
+/// Read back the `git:<url>@<sha>:<subdir>` form a submission's recipe records.
+///
+/// Lives here so the page and the build agree on what a recipe means rather than
+/// each picking the string apart. `None` for anything else, notably the
+/// `sdk:<tag>:<path>` form: an SDK app has no separate repository to name.
+#[must_use]
+pub fn parse_source(app_source: &str) -> Option<SourceRef> {
+    // The URL cannot itself contain '@' -- a submission carrying credentials is
+    // refused -- so the first one separates it from the revision.
+    let (repo, rest) = app_source.strip_prefix("git:")?.split_once('@')?;
+    let (rev, subdir) = rest.split_once(':')?;
+    if repo.is_empty() || rev.is_empty() {
+        return None;
+    }
+    Some(SourceRef {
+        repo: repo.to_owned(),
+        rev: rev.to_owned(),
+        subdir: subdir.to_owned(),
+    })
 }
 
 /// The version embedded in a release tag, e.g. `apps-v1.3.0` or `apps-v0.1.9-rc3`.
@@ -562,6 +641,7 @@ mod tests {
             built_from: None,
             upstream_sha256: None,
             matches_upstream: None,
+            retired: None,
         }
     }
 
@@ -575,6 +655,8 @@ mod tests {
             icon: None,
             icon_small: None,
             superseded_by: None,
+            publisher: None,
+            retired: None,
         }
     }
 
@@ -837,6 +919,67 @@ mod tests {
         second.app_id = AppId::new(0xDEAD_BEEF);
         let c = catalog(vec![app(vec![version_entry("1.3.0")]), second]);
         assert_eq!(c.ambiguous_names(), ["Live HR"]);
+    }
+
+    #[test]
+    fn a_withdrawn_app_withdraws_every_version_of_itself() {
+        let mut retired = app(vec![version_entry("1.1.0"), version_entry("1.0.0")]);
+        retired.retired = Some("the sensor it reads was removed in firmware 2.0".into());
+        let c = catalog(vec![retired]);
+
+        for pin in [None, Some(Version::new(1, 0, 0))] {
+            let pinned =
+                pin.map_or_else(BTreeMap::new, |v| BTreeMap::from([(c.apps[0].app_id, v)]));
+            let targets = resolve_targets(&c, &pinned);
+            assert_eq!(
+                targets[0].retired.as_deref(),
+                Some("the sensor it reads was removed in firmware 2.0"),
+                "pinned to {pin:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_withdrawn_version_leaves_the_others_on_offer() {
+        let mut bad = version_entry("1.1.0");
+        bad.retired = Some("writes a corrupt .fit on runs over an hour".into());
+        let c = catalog(vec![app(vec![bad, version_entry("1.0.0")])]);
+
+        // The newest is the withdrawn one, so that is what an unpinned selection
+        // lands on -- and it must still say so rather than being offered.
+        assert!(resolve_targets(&c, &BTreeMap::new())[0].retired.is_some());
+
+        let pinned = BTreeMap::from([(c.apps[0].app_id, Version::new(1, 0, 0))]);
+        assert_eq!(resolve_targets(&c, &pinned)[0].retired, None);
+    }
+
+    #[test]
+    fn a_retired_app_does_not_make_a_name_ambiguous() {
+        // It is archived, so nothing in the main listing shares the name.
+        let mut retired = app(vec![version_entry("1.0.0")]);
+        retired.app_id = AppId::new(0xDEAD_BEEF);
+        retired.retired = Some("superseded by the Tide Clock 2 app".into());
+        let c = catalog(vec![app(vec![version_entry("1.3.0")]), retired]);
+        assert!(c.ambiguous_names().is_empty());
+    }
+
+    #[test]
+    fn a_recipe_names_the_commit_it_was_built_from() {
+        let parsed = parse_source(
+            "git:https://github.com/someone/una-apps\
+             @3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d:tide-clock",
+        )
+        .expect("a submission's source is parseable");
+        assert_eq!(parsed.repo, "https://github.com/someone/una-apps");
+        assert_eq!(parsed.rev, "3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d");
+        assert_eq!(parsed.subdir, "tide-clock");
+
+        // An SDK app has no repository of its own, and neither does a build with
+        // nothing pinned. Say nothing rather than inventing a source.
+        assert_eq!(parse_source("sdk:apps-v1.3.0:Examples/Apps/Alarm"), None);
+        assert_eq!(parse_source("unpinned"), None);
+        assert_eq!(parse_source("git:https://example.test/x"), None);
+        assert_eq!(parse_source("git:@abc:."), None);
     }
 
     #[test]

@@ -220,6 +220,10 @@ jobs:
           mkdir -p artifacts
           : > failures.txt
           : > built.txt
+          # Every artifact any release still wants, accumulated across the whole
+          # loop. plan.json is per tag and overwritten, so pruning from it alone
+          # would keep one release's binaries and delete the rest.
+          : > keep.txt
 
           while IFS=$'\t' read -r tag version; do
             [ -n "$tag" ] || continue
@@ -232,6 +236,7 @@ jobs:
             kira cache-plan \
               --sdk sdk --sdk-rev "$tag" --version "$version" \
               --toolchain "$TOOLCHAIN" --available available.txt --out plan.json
+            jq -r '.[].asset' plan.json >> keep.txt
 
             # stdin is redirected per command below: anything the build spawns
             # would otherwise read from this pipe and eat the remaining app list.
@@ -295,6 +300,13 @@ jobs:
           # Redundant once uploaded to the release; no need to keep it 90 days.
           retention-days: 7
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: store-keep
+          path: keep.txt
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
     name: Upload to the app-binaries release
     needs: [plan, build]
@@ -313,6 +325,17 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: plan-inputs
+      - uses: actions/download-artifact@v8
+        with:
+          name: store-keep
+
+      # The store also holds submitted apps, which no SDK plan mentions. Their
+      # recipes come from the manifests, so the tool has to be here to name them.
+      - uses: actions/download-artifact@v8
+        with:
+          name: kira-bin
+          path: /usr/local/bin
+      - run: chmod +x /usr/local/bin/kira && kira --version
 
       - name: Upload
         env:
@@ -348,7 +371,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          jq -r '.[].asset' plan.json | sort -u > keep.txt
+          # keep.txt arrives holding every SDK artifact the build considered. The
+          # submitted apps are the other half of the store and no SDK plan names
+          # them, so pruning without this would delete every one of them.
+          kira registry plan --dir registry --toolchain "$TOOLCHAIN" --out registry-plan.json
+          jq -r '.[].asset' registry-plan.json >> keep.txt
+          sort -u -o keep.txt keep.txt
+
           gh release view "$BINARIES_TAG" --json assets \
             --jq '.assets[].name | select(endswith(".uapp"))' | sort -u > have.txt
           comm -13 keep.txt have.txt > stale.txt

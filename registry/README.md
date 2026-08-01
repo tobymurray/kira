@@ -94,7 +94,15 @@ your own `CMakeLists.txt` declares: `AppID`, type, version, and the `.uapp`'s CR
 A build whose binary disagrees with its source fails.
 
 Pull requests run with no secrets and no write access, and **nothing is published
-from a pull request**. Merging to `main` is what publishes.
+from a pull request**. Merging to `main` is what publishes: the same build runs
+again, its binaries go to the content-addressed store, and the catalogue picks
+them up from there.
+
+Every rule in that table is checked again on **each** catalogue build, not only
+when your pull request was reviewed. That is not distrust — a manifest is only
+ever checked against the catalogue as it stood at the time, and upstream can ship
+a colliding `AppID` or folder in any later release. A collision that appears
+afterwards stops the whole catalogue build rather than reaching a watch.
 
 ## Things worth knowing
 
@@ -103,8 +111,12 @@ from a pull request**. Merging to `main` is what publishes.
   published recipe, and that the bytes on your watch match what was published. It
   cannot tell anyone whether the app is any good or safe. See
   [SECURITY.md](../SECURITY.md).
-- **Third-party apps are shown separately** from UNA's, with the source repository
-  and commit on the card.
+- **Your app is listed with UNA's**, in the same grid for its type, in the same
+  order, with no badge marking it out. Kira has no way to judge whether an app is
+  any good, so a layout implying a ranking would be claiming something it does not
+  know. What the card does say is where the binary came from — *built by Kira from
+  `<your repo>` at `<commit>`* against *the vendor's own build* — which is
+  information, not a verdict.
 - **Updating** means a new `[[versions]]` entry with a new commit. Old versions
   stay: every published version of every app remains downloadable.
 - **Taking a listing down** is `retired`, not a deletion:
@@ -117,10 +129,12 @@ from a pull request**. Merging to `main` is what publishes.
   retired = "writes a corrupt .fit on runs over an hour"        # just this one
   ```
 
-  A retired app stays listed and keeps its binaries, and is never offered for
-  installation. That is deliberate: a watch already carrying it should be
+  A retired app moves to the collapsed archive at the foot of the catalogue,
+  keeps its binaries, and is never offered for installation. Retiring a single
+  version leaves the app where it is and marks that version alone. Either way the
+  reason is shown on the card, because a watch already carrying it should be
   recognised and told why, which is more use than being reported as something
-  unknown. The reason is required, because a bare flag tells that person nothing.
+  unknown. The reason is required: a bare flag tells that person nothing.
   Deleting a manifest outright is reserved for cases where the binaries must
   genuinely stop being served, and is a maintainer's decision.
 - **Versions are yours to number.** Unlike UNA's apps, which are all stamped with
