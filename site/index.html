@@ -123,6 +123,18 @@
         <div id="catalogue" aria-busy="true">
           <p class="muted">Loading catalogue…</p>
         </div>
+
+        <!-- At the foot of the catalogue on purpose: whoever has just scrolled
+             every app is the person most likely to think theirs belongs here. -->
+        <p class="submit-cta">
+          <strong>Your own app can be listed here.</strong> You send a repository, a
+          commit and the SDK release to build against — never a binary. Kira compiles it
+          in the same pinned toolchain as everything above, checks the result against
+          what your <code>CMakeLists.txt</code> declares, and lists it in these same
+          grids with the source and commit shown on its card.
+          <a href="https://github.com/tobymurray/kira/blob/main/registry/README.md"
+            rel="noopener noreferrer" target="_blank">How to submit an app →</a>
+        </p>
       </section>
 
       <div class="split">
@@ -166,6 +178,11 @@
               <a href="https://github.com/tobymurray/kira/issues/new/choose"
                 rel="noopener noreferrer" target="_blank">Report a bug</a>
               — the catalogue, an install, or the site misbehaving.
+            </li>
+            <li>
+              <a href="https://github.com/tobymurray/kira/blob/main/registry/README.md"
+                rel="noopener noreferrer" target="_blank">Get your own app listed</a>
+              — a commit for Kira to build, not a binary to upload.
             </li>
             <li>
               <a href="https://github.com/tobymurray/kira/blob/main/SECURITY.md"

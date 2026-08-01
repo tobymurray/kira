@@ -345,6 +345,22 @@ button.ghost:hover:not(:disabled),
   gap: 12px;
 }
 
+/* An invitation, not a warning — dashed and quiet, so it reads as an empty slot
+   at the end of the catalogue rather than something gone wrong. */
+.submit-cta {
+  margin: 26px 0 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--ink-soft);
+  max-width: 78ch;
+}
+
+.submit-cta strong {
+  color: var(--ink);
+}
+
 .card {
   display: flex;
   /* Stops the one app in a single-app section from becoming a card the width of
