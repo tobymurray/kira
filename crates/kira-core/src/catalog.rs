@@ -19,7 +19,9 @@ use crate::uapp::{AppId, Version};
 /// 3 adds provenance: who built each binary, by what recipe, and how it relates
 /// to what upstream published. 4 adds submissions: who publishes an app that is
 /// not upstream's, and why a listing or a single version is no longer offered.
-pub const SCHEMA: u32 = 4;
+/// 5 lets a submitted version carry its own note, since the upstream release
+/// bodies say nothing about an app that does not ship in a release.
+pub const SCHEMA: u32 = 5;
 
 /// A complete catalogue, as published to `data/catalog.json`.
 ///
@@ -211,6 +213,18 @@ pub struct VersionEntry {
     /// one bad build without taking the listing down.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retired: Option<String>,
+    /// What this version changed, in the publisher's own words.
+    ///
+    /// Only submissions carry one. An SDK app is described by the release body
+    /// of the tag it shipped in, which covers the whole repository; a submission
+    /// ships on its own and no release body mentions it at all.
+    ///
+    /// An assertion, not something derived — which is why it sits beside
+    /// [`Self::changed`] rather than replacing it. The one says what the author
+    /// meant to change; the other says whether the code moved. Third-party
+    /// prose: render as text, never as HTML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
 }
 
 /// One version of one app, chosen for installation or download.
@@ -642,6 +656,7 @@ mod tests {
             upstream_sha256: None,
             matches_upstream: None,
             retired: None,
+            notes: None,
         }
     }
 

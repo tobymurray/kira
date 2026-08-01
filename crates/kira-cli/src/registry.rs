@@ -89,6 +89,15 @@ pub(crate) struct Entry {
     /// than reporting it as something unknown. They are never offered for
     /// installation.
     pub retired: Option<String>,
+    /// What changed in this version, in the publisher's own words.
+    ///
+    /// A submission ships on its own schedule, so no upstream release body ever
+    /// mentions it and there is nowhere else for this to come from. Unlike
+    /// everything else about a published version this stays editable: it is not
+    /// part of the recipe, so correcting a typo changes no artifact and
+    /// invalidates no hash. The commit is pinned either way, so the diff remains
+    /// the account of record.
+    pub notes: Option<String>,
 }
 
 /// A submitted app, as declared in `registry/<slug>.toml`.
@@ -326,6 +335,19 @@ fn check_versions(manifest: &Manifest, say: &mut impl FnMut(String)) {
         }
     }
 
+    // Long enough to say something, short enough to stay a note rather than
+    // becoming a page. Whoever reads it is deciding whether to install.
+    for entry in &manifest.versions {
+        if let Some(notes) = &entry.notes
+            && (notes.trim().len() < 4 || notes.len() > 500)
+        {
+            say(format!(
+                "version {}: notes should say what changed in 4 to 500 characters, not {notes:?}",
+                entry.version
+            ));
+        }
+    }
+
     let mut seen: BTreeSet<Version> = BTreeSet::new();
     for entry in &manifest.versions {
         if !is_hex(&entry.rev, 40) {
@@ -349,15 +371,39 @@ fn check_versions(manifest: &Manifest, say: &mut impl FnMut(String)) {
     }
 }
 
+/// Who already holds an identity the catalogue publishes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Owner {
+    /// Display name, for the message.
+    pub name: String,
+    /// Source repository, when the holder is itself a submission.
+    ///
+    /// This is what tells a manifest's own published listing apart from someone
+    /// else's: an SDK app has no repository of its own, so it is never a match.
+    pub repo: Option<String>,
+}
+
+impl Owner {
+    /// Whether this is the listing `manifest` itself produced.
+    ///
+    /// A submission keeps the identity it already published under — otherwise
+    /// adding a second version would be refused for colliding with its own
+    /// first, which is exactly what happened the moment one was published.
+    fn is_own_listing(&self, manifest: &Manifest) -> bool {
+        self.repo.as_deref() == Some(manifest.source.as_str())
+    }
+}
+
 /// Check a whole registry, plus what is already published.
 ///
 /// `taken_ids` and `taken_folders` are the identities the catalogue already uses,
-/// so a submission cannot claim one. Returns every problem rather than the first:
-/// a contributor should get the whole list in one round trip.
+/// so a submission cannot claim one — except the one it published itself.
+/// Returns every problem rather than the first: a contributor should get the
+/// whole list in one round trip.
 pub(crate) fn validate(
     manifests: &[Manifest],
-    taken_ids: &BTreeMap<AppId, String>,
-    taken_folders: &BTreeMap<String, String>,
+    taken_ids: &BTreeMap<AppId, Owner>,
+    taken_folders: &BTreeMap<String, Owner>,
 ) -> Vec<Problem> {
     let mut problems = Vec::new();
     for manifest in manifests {
@@ -369,12 +415,15 @@ pub(crate) fn validate(
     let mut ids: BTreeMap<AppId, &str> = BTreeMap::new();
     let mut folders: BTreeMap<String, &str> = BTreeMap::new();
     for manifest in manifests {
-        if let Some(owner) = taken_ids.get(&manifest.app_id) {
+        if let Some(owner) = taken_ids
+            .get(&manifest.app_id)
+            .filter(|owner| !owner.is_own_listing(manifest))
+        {
             problems.push(Problem {
                 slug: manifest.slug.clone(),
                 message: format!(
-                    "AppID {} already belongs to {owner}; generate a different one",
-                    manifest.app_id
+                    "AppID {} already belongs to {}; generate a different one",
+                    manifest.app_id, owner.name
                 ),
             });
         }
@@ -386,12 +435,15 @@ pub(crate) fn validate(
         }
 
         let folder_key = manifest.folder.to_ascii_lowercase();
-        if let Some(owner) = taken_folders.get(&folder_key) {
+        if let Some(owner) = taken_folders
+            .get(&folder_key)
+            .filter(|owner| !owner.is_own_listing(manifest))
+        {
             problems.push(Problem {
                 slug: manifest.slug.clone(),
                 message: format!(
-                    "folder {} is already used by {owner}; the watch cannot hold two apps in one folder",
-                    manifest.folder
+                    "folder {} is already used by {}; the watch cannot hold two apps in one folder",
+                    manifest.folder, owner.name
                 ),
             });
         }
@@ -413,7 +465,7 @@ pub(crate) fn validate(
 pub(crate) fn check_unchanged(
     before: &[Manifest],
     after: &[Manifest],
-    published: &BTreeMap<AppId, String>,
+    published: &BTreeMap<AppId, Owner>,
 ) -> Vec<Problem> {
     let mut problems = Vec::new();
     let index: BTreeMap<&str, &Manifest> = after.iter().map(|m| (m.slug.as_str(), m)).collect();
@@ -549,7 +601,7 @@ pub(crate) fn report(problems: &[Problem]) -> String {
 /// If the catalogue cannot be read or parsed.
 pub(crate) fn taken_from_catalog(
     path: &Path,
-) -> Result<(BTreeMap<AppId, String>, BTreeMap<String, String>)> {
+) -> Result<(BTreeMap<AppId, Owner>, BTreeMap<String, Owner>)> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let catalog: kira_core::catalog::Catalog =
@@ -581,8 +633,12 @@ pub(crate) fn taken_from_catalog(
     let mut ids = BTreeMap::new();
     let mut folders = BTreeMap::new();
     for app in &catalog.apps {
-        ids.insert(app.app_id, app.name.clone());
-        folders.insert(app.folder.to_ascii_lowercase(), app.name.clone());
+        let owner = Owner {
+            name: app.name.clone(),
+            repo: app.publisher.as_ref().map(|p| p.repo.clone()),
+        };
+        ids.insert(app.app_id, owner.clone());
+        folders.insert(app.folder.to_ascii_lowercase(), owner);
     }
     Ok((ids, folders))
 }
@@ -610,8 +666,16 @@ sdk_rev = "apps-v1.3.0"
     }
 
     /// The catalogue already carrying the example app.
-    fn live() -> BTreeMap<AppId, String> {
-        BTreeMap::from([(good().app_id, "Tide Clock".to_owned())])
+    fn live() -> BTreeMap<AppId, Owner> {
+        BTreeMap::from([(good().app_id, owner("Tide Clock", None))])
+    }
+
+    /// An identity holder in the published catalogue.
+    fn owner(name: &str, repo: Option<&str>) -> Owner {
+        Owner {
+            name: name.to_owned(),
+            repo: repo.map(ToOwned::to_owned),
+        }
     }
 
     fn checked(manifest: &Manifest) -> Vec<String> {
@@ -709,7 +773,7 @@ sdk_rev = "apps-v1.3.0"
     #[test]
     fn an_identity_the_catalogue_already_uses_is_refused() {
         let manifest = good();
-        let taken_id = BTreeMap::from([(manifest.app_id, "Live HR".to_owned())]);
+        let taken_id = BTreeMap::from([(manifest.app_id, owner("Live HR", None))]);
         let problems = validate(std::slice::from_ref(&manifest), &taken_id, &BTreeMap::new());
         assert!(
             problems
@@ -717,7 +781,7 @@ sdk_rev = "apps-v1.3.0"
                 .any(|p| p.message.contains("already belongs"))
         );
 
-        let taken_folder = BTreeMap::from([("tideclock".to_owned(), "Alarm".to_owned())]);
+        let taken_folder = BTreeMap::from([("tideclock".to_owned(), owner("Alarm", None))]);
         let problems = validate(&[manifest], &BTreeMap::new(), &taken_folder);
         assert!(problems.iter().any(|p| p.message.contains("already used")));
     }
@@ -766,6 +830,7 @@ sdk_rev = "apps-v1.3.0"
             sdk_rev: "apps-v1.3.0".into(),
             subdir: None,
             retired: None,
+            notes: None,
         });
         assert!(check_unchanged(&before, &[after], &live()).is_empty());
 
@@ -814,6 +879,7 @@ sdk_rev = "apps-v1.3.0"
             sdk_rev: "apps-v1.3.0".into(),
             subdir: None,
             retired: None,
+            notes: None,
         });
         assert!(check_unchanged(&before, &[after.clone()], &live()).is_empty());
 
@@ -864,6 +930,7 @@ sdk_rev = "apps-v1.3.0"
             sdk_rev: "apps-v1.3.0".into(),
             subdir: None,
             retired: None,
+            notes: None,
         });
         assert!(checked(&manifest).is_empty(), "{:?}", checked(&manifest));
         assert!(manifest.retired_for(&manifest.versions[0]).is_some());
@@ -921,8 +988,8 @@ sdk_rev = "apps-v1.3.0"
         )
         .unwrap();
         let (ids, folders) = taken_from_catalog(&path).unwrap();
-        assert_eq!(ids[&AppId::new(0xA19C_2A7E_4F8B_6D31)], "Alarm");
-        assert_eq!(folders["alarm"], "Alarm");
+        assert_eq!(ids[&AppId::new(0xA19C_2A7E_4F8B_6D31)].name, "Alarm");
+        assert_eq!(folders["alarm"].name, "Alarm");
 
         // Newer is refused: it may mean something this build cannot see.
         let newer = dir.join("new.json");
@@ -939,6 +1006,56 @@ sdk_rev = "apps-v1.3.0"
         assert!(err.contains("newer than"), "{err}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_app_keeps_the_identity_it_already_published_under() {
+        // Once a submission reaches the catalogue, its own listing holds its
+        // AppID and its folder. Reading those back as "taken" refused every
+        // later version of it -- and since validate checks the whole registry,
+        // every other submission's pull request along with it. The catalogue
+        // entry records which repository it came from, which is what tells a
+        // manifest's own listing apart from somebody else's.
+        let manifest = good();
+        let mine = owner("Tide Clock", Some(&manifest.source));
+        let ids = BTreeMap::from([(manifest.app_id, mine.clone())]);
+        let folders = BTreeMap::from([("tideclock".to_owned(), mine)]);
+        assert!(
+            validate(std::slice::from_ref(&manifest), &ids, &folders).is_empty(),
+            "a submission must not collide with its own listing"
+        );
+
+        // Someone else's submission holding it is still a collision.
+        let theirs = owner("Impostor", Some("https://github.com/someone-else/app"));
+        let ids = BTreeMap::from([(manifest.app_id, theirs)]);
+        assert!(!validate(&[manifest], &ids, &BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn a_version_can_say_what_it_changed() {
+        let mut manifest = good();
+        manifest.versions[0].notes = Some("The back button now exits the app.".into());
+        assert!(checked(&manifest).is_empty(), "{:?}", checked(&manifest));
+
+        for notes in ["", "  ", "x", &"x".repeat(501)] {
+            let mut manifest = good();
+            manifest.versions[0].notes = Some(notes.to_owned());
+            assert!(
+                checked(&manifest).iter().any(|p| p.contains("notes")),
+                "{notes:?} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn notes_stay_editable_after_a_version_is_published() {
+        // Unlike rev, sdk_rev and subdir, notes are not part of the recipe, so
+        // rewording them changes no artifact and invalidates no published hash.
+        // The commit stays pinned, so the diff remains the account of record.
+        let before = vec![good()];
+        let mut after = good();
+        after.versions[0].notes = Some("Reworded after the fact.".into());
+        assert!(check_unchanged(&before, &[after], &live()).is_empty());
     }
 
     #[test]
@@ -960,6 +1077,7 @@ sdk_rev = "apps-v1.3.0"
             sdk_rev: "apps-v1.3.0".into(),
             subdir: None,
             retired: None,
+            notes: None,
         });
         let items = wanted(&[two], "sha256:abc");
         assert_ne!(items[0].recipe.key(), items[1].recipe.key());

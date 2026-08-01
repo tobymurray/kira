@@ -443,6 +443,16 @@ details.archive .card {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* The publisher's own account of a version. Set apart from the derived meta
+   lines above it, because it is the one thing on the card nobody can check. */
+.meta.version-notes {
+  margin: 2px 0 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+
 .meta.appid {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
