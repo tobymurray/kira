@@ -73,5 +73,7 @@ does not claim about an app it carries.
 
 ## Licence
 
-Kira's own code is MIT. App binaries are redistributed from the UNA SDK's public
-releases under its MIT licence — see [THIRD-PARTY.md](THIRD-PARTY.md).
+Kira's own code is MIT. Most app binaries here are Kira's own builds of the UNA
+SDK's source rather than UNA's binaries, covered by the SDK's MIT licence as
+derivative works; submitted apps carry their own — see
+[THIRD-PARTY.md](THIRD-PARTY.md).

@@ -2,15 +2,24 @@
 
 ## App binaries (`.uapp`)
 
-The published site redistributes application binaries built and released by
-UNA Watch Ltd from the UNA Watch SDK. They are downloaded unmodified from that
-project's public `apps-v*` GitHub releases and republished byte-for-byte; Kira
-adds only metadata (a catalogue entry and PNG copies of the icons already
-embedded in each binary).
+Most of the binaries the site serves are ones **Kira compiled itself** from the
+UNA Watch SDK's source, in its own pinned toolchain container. They are *not*
+UNA Watch Ltd's binaries and are not byte-identical to them — Kira's build of the
+same source currently differs from the vendor's. Every catalogue entry records
+which is being served (`origin`) and whether the two match (`matchesUpstream`).
+
+A minority are republished unmodified from that project's public `apps-v*`
+GitHub releases, where Kira has no build of its own or its build was refused.
+Those carry `origin: "upstream"`.
+
+Kira adds a catalogue entry and PNG copies of the icons already embedded in each
+binary.
 
 Source project: <https://github.com/UNAWatch/una-sdk>
 
-Those binaries are covered by the SDK's MIT licence:
+The SDK's source, the binaries compiled from it, and the releases republished
+unmodified are all covered by the SDK's MIT licence — Kira's builds being
+derivative works of that source:
 
 ```
 MIT License
@@ -36,6 +45,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Submitted apps
+
+Third-party apps in `registry/` are covered by none of the above. Each declares
+its own licence in its manifest, is built from its own repository, and names its
+publisher on its catalogue card. See [registry/README.md](registry/README.md).
+
 ## Trademarks
 
 “UNA”, “UNA Watch” and the UNA logo are trademarks of UNA Watch Ltd. Kira is
@@ -49,6 +64,6 @@ each app's own binary and displayed alongside that app.
 
 ## Kira's own code
 
-Everything under `src/`, `site/`, `tools/` and `test/` is MIT licensed — see
+Everything under `crates/` and `site/` is MIT licensed — see
 [LICENSE](LICENSE). It has no runtime dependencies: the `.uapp` parser, PNG
 encoder and CRC-32 implementation are all first-party.

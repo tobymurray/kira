@@ -784,3 +784,15 @@ code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.92em;
 }
+
+/* The one line on a card that says these are not the vendor's bytes. Muted
+   rather than alarming: it is the expected state, not a fault. */
+.meta.provenance .differs {
+  font-style: italic;
+}
+
+/* The caveats, on the page that writes to the watch rather than only in docs
+   nobody installing has a reason to open. */
+.what-this-is-not {
+  margin: 0 0 14px;
+}

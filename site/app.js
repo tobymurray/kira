@@ -523,6 +523,11 @@ function renderProvenance(app, selected) {
   }
 
   provenance.append('built by Kira from ');
+  // Whether this is the vendor's binary or merely built from the vendor's
+  // source. The catalogue has recorded it all along and the card never showed
+  // it, which left every SDK app reading as though Kira and UNA ship the same
+  // bytes. They do not, and until the SDK carries the path-independence fix they
+  // will not — appended below, after the source is named.
   if (app.publisher) {
     const repo = document.createElement('a');
     // Manifests are re-validated at every catalogue build, so this is https.
@@ -542,6 +547,24 @@ function renderProvenance(app, selected) {
     }
   } else {
     provenance.append('source');
+  }
+
+  // Only meaningful where the vendor published a binary to compare against; a
+  // submission has none, so `null` stays silent rather than being reported as a
+  // difference nobody measured.
+  if (selected.matchesUpstream === false) {
+    const differs = document.createElement('span');
+    differs.className = 'differs';
+    differs.textContent = ' · not the vendor’s bytes';
+    differs.title =
+      `This is Kira's build of the same source, not the binary UNA ships.\n` +
+      `UNA's build of ${selected.version} hashes ${(selected.upstreamSha256 ?? '').slice(0, 16)}…\n` +
+      'The two are expected to converge once the SDK carries its path-independence fix.';
+    provenance.appendChild(differs);
+  } else if (selected.matchesUpstream === true) {
+    const same = document.createElement('span');
+    same.textContent = ' · identical to the vendor’s build';
+    provenance.appendChild(same);
   }
 
   if (built) {

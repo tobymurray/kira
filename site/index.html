@@ -120,6 +120,19 @@
           <h2>Catalogue</h2>
           <span id="catalogue-meta" class="muted"></span>
         </div>
+        <!-- The caveats existed only in README.md, registry/README.md and
+             docs/reproducibility.md — none of which the person about to write an
+             executable to their watch has any reason to open. -->
+        <p class="what-this-is-not note">
+          <strong>Nobody reviews these apps.</strong> Kira compiles each one from a named commit
+          and publishes the recipe, so you can check that a binary came from the source it claims.
+          It cannot tell you whether that source is any good, or safe. There is no code signing on
+          this watch, so integrity here is a SHA-256 against this catalogue plus the file’s own
+          CRC — that catches corruption, not a hostile publisher.
+          <a href="https://github.com/tobymurray/kira/blob/main/docs/reproducibility.md"
+            rel="noopener noreferrer" target="_blank">What this does and does not prove →</a>
+        </p>
+
         <div id="catalogue" aria-busy="true">
           <p class="muted">Loading catalogue…</p>
         </div>
@@ -203,8 +216,10 @@
     <footer class="wrap">
       <p>
         Kira is an independent project. “UNA”, “UNA Watch” and the UNA logo are trademarks of UNA
-        Watch Ltd, used here only to state compatibility. App binaries are redistributed from the
-        UNA SDK’s public releases under the MIT licence — see
+        Watch Ltd, used here only to state compatibility. Most binaries here were compiled by Kira
+        from the UNA SDK’s source and are <strong>not</strong> UNA’s own builds; each card says
+        which it is serving. Both are covered by the SDK’s MIT licence; submitted apps carry their
+        own — see
         <a href="https://github.com/tobymurray/kira/blob/main/THIRD-PARTY.md">THIRD-PARTY.md</a>.
       </p>
       <p>

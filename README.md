@@ -27,8 +27,12 @@ volume.
 Kira builds the binaries it ships rather than trusting upstream's: a second
 workflow compiles each app from its tagged source in a digest-pinned ARM
 toolchain container and republishes the result, recording what it was built from.
-Where a release predates the SDK's reproducibility fix, or where the rebuild does
-not match, the upstream artifact is used instead and the card says so. See
+A rebuild that disagrees with upstream about *which app or which version it is*,
+or that fails its own CRC, is refused and upstream's artifact used instead. A
+rebuild that merely differs byte-for-byte is still what gets served — that is the
+expected state until the SDK carries its path-independence fix, and it is
+currently true of every SDK app in the catalogue. The card says which binary is
+being served and whether it matches the vendor's. See
 [docs/reproducibility.md](docs/reproducibility.md).
 
 ### One implementation, two runtimes
