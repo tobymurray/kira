@@ -87,6 +87,7 @@ the old ones to where they actually lived.
 | A published version's `subdir` never changes | The path is part of the recipe. Moving an app is fine; rewriting where an old version came from is not. |
 | `licence` is a recognised open licence | Source-accessible is the premise. If yours is missing from the list, add it in the same pull request. |
 | A published version's `rev` never changes | Somebody's watch may be carrying it. Change anything by publishing a new version. |
+| A manifest is retired, not deleted | An app that vanishes leaves every watch carrying it holding something the catalogue cannot name. |
 
 CI then fetches exactly that commit, builds it, and checks the result against what
 your own `CMakeLists.txt` declares: `AppID`, type, version, and the `.uapp`'s CRC.
@@ -106,9 +107,22 @@ from a pull request**. Merging to `main` is what publishes.
   and commit on the card.
 - **Updating** means a new `[[versions]]` entry with a new commit. Old versions
   stay: every published version of every app remains downloadable.
-- **Retiring** an app is also a pull request, and it does not delete the manifest —
-  a watch still carrying the app should be recognised rather than reported as
-  something unknown.
+- **Taking a listing down** is `retired`, not a deletion:
+
+  ```toml
+  retired = "the sensor it reads was removed in firmware 2.0"   # the whole app
+
+  [[versions]]
+  version = "1.0.0"
+  retired = "writes a corrupt .fit on runs over an hour"        # just this one
+  ```
+
+  A retired app stays listed and keeps its binaries, and is never offered for
+  installation. That is deliberate: a watch already carrying it should be
+  recognised and told why, which is more use than being reported as something
+  unknown. The reason is required, because a bare flag tells that person nothing.
+  Deleting a manifest outright is reserved for cases where the binaries must
+  genuinely stop being served, and is a maintainer's decision.
 - **Versions are yours to number.** Unlike UNA's apps, which are all stamped with
   the release tag they shipped in, a submission's version means whatever you
   intend it to mean.

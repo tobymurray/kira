@@ -82,6 +82,13 @@ pub(crate) struct Entry {
     /// the catalogue describes. Overriding per version lets a monorepo be
     /// reorganised without rewriting history.
     pub subdir: Option<String>,
+    /// Why this version was withdrawn, if it was.
+    ///
+    /// Withdrawn versions stay in the catalogue and keep their binaries: a watch
+    /// already carrying one should be recognised and told why, which is more use
+    /// than reporting it as something unknown. They are never offered for
+    /// installation.
+    pub retired: Option<String>,
 }
 
 /// A submitted app, as declared in `registry/<slug>.toml`.
@@ -107,9 +114,25 @@ pub(crate) struct Manifest {
     pub maintainer: String,
     /// Every version to publish, in any order.
     pub versions: Vec<Entry>,
+    /// Why the whole app was withdrawn, if it was.
+    ///
+    /// This is how a listing comes down. Deleting the manifest is not: an app
+    /// that vanishes leaves every watch carrying it holding something the
+    /// catalogue can no longer name. Deletion is reserved for the cases where the
+    /// binaries must genuinely stop being served, which is a maintainer's
+    /// decision rather than a submitter's.
+    pub retired: Option<String>,
 }
 
 impl Manifest {
+    /// Why a given version is not on offer, if it is not.
+    ///
+    /// A withdrawn app withdraws all of its versions; a single version can also
+    /// be withdrawn on its own.
+    pub(crate) fn retired_for<'a>(&'a self, entry: &'a Entry) -> Option<&'a str> {
+        self.retired.as_deref().or(entry.retired.as_deref())
+    }
+
     /// Where a given version's source sits in the repository.
     pub(crate) fn subdir_for<'a>(&'a self, entry: &'a Entry) -> &'a str {
         entry.subdir.as_deref().unwrap_or(&self.subdir)
@@ -287,6 +310,22 @@ fn check_versions(manifest: &Manifest, say: &mut impl FnMut(String)) {
         say("no versions listed, so there is nothing to build".to_owned());
     }
 
+    // A bare flag would tell whoever finds the app nothing about why.
+    for (what, reason) in std::iter::once(("this app", manifest.retired.as_ref())).chain(
+        manifest
+            .versions
+            .iter()
+            .map(|e| ("this version", e.retired.as_ref())),
+    ) {
+        if let Some(reason) = reason
+            && (reason.trim().len() < 8 || reason.len() > 200)
+        {
+            say(format!(
+                "the reason {what} was retired should say why in 8 to 200 characters, not {reason:?}"
+            ));
+        }
+    }
+
     let mut seen: BTreeSet<Version> = BTreeSet::new();
     for entry in &manifest.versions {
         if !is_hex(&entry.rev, 40) {
@@ -442,6 +481,7 @@ pub(crate) fn wanted(manifests: &[Manifest], toolchain: &str) -> Vec<Wanted> {
             wanted.push(Wanted {
                 app_id: manifest.app_id,
                 folder: manifest.folder.clone(),
+                retired: manifest.retired_for(&entry).map(ToOwned::to_owned),
                 recipe: Recipe {
                     app_source: app_source(
                         &manifest.source,
@@ -682,6 +722,7 @@ sdk_rev = "apps-v1.3.0"
             rev: "a".repeat(40),
             sdk_rev: "apps-v1.3.0".into(),
             subdir: None,
+            retired: None,
         });
         assert!(check_unchanged(&before, &[after]).is_empty());
 
@@ -729,6 +770,7 @@ sdk_rev = "apps-v1.3.0"
             rev: "c".repeat(40),
             sdk_rev: "apps-v1.3.0".into(),
             subdir: None,
+            retired: None,
         });
         assert!(check_unchanged(&before, &[after.clone()]).is_empty());
 
@@ -743,6 +785,61 @@ sdk_rev = "apps-v1.3.0"
         let mut manifest = good();
         manifest.versions[0].subdir = Some("../elsewhere".into());
         assert!(checked(&manifest).iter().any(|p| p.contains("subdir")));
+    }
+
+    #[test]
+    fn a_listing_comes_down_by_being_retired_rather_than_deleted() {
+        let before = vec![good()];
+
+        // Withdrawing the app is an accepted change, unlike deleting it.
+        let mut retired = good();
+        retired.retired = Some("superseded by the Tide Clock 2 app".into());
+        assert!(check_unchanged(&before, &[retired.clone()]).is_empty());
+        assert_eq!(
+            retired.retired_for(&retired.versions[0]),
+            Some("superseded by the Tide Clock 2 app")
+        );
+
+        // Deleting it is still refused, so a watch carrying it stays nameable.
+        assert!(
+            check_unchanged(&before, &[])[0]
+                .message
+                .contains("was removed")
+        );
+
+        // And a retired app is still buildable, so its binary can be recognised.
+        assert_eq!(wanted(&[retired], "sha256:abc").len(), 1);
+    }
+
+    #[test]
+    fn one_version_can_be_withdrawn_without_the_others() {
+        let mut manifest = good();
+        manifest.versions[0].retired = Some("writes a corrupt .fit on long runs".into());
+        manifest.versions.push(Entry {
+            version: Version::new(1, 1, 0),
+            rev: "d".repeat(40),
+            sdk_rev: "apps-v1.3.0".into(),
+            subdir: None,
+            retired: None,
+        });
+        assert!(checked(&manifest).is_empty(), "{:?}", checked(&manifest));
+        assert!(manifest.retired_for(&manifest.versions[0]).is_some());
+        assert!(manifest.retired_for(&manifest.versions[1]).is_none());
+    }
+
+    #[test]
+    fn withdrawing_something_has_to_say_why() {
+        for reason in ["", "  ", "bad", &"x".repeat(201)] {
+            let mut manifest = good();
+            manifest.retired = Some(reason.to_owned());
+            assert!(
+                checked(&manifest).iter().any(|p| p.contains("retired")),
+                "{reason:?} should be refused"
+            );
+        }
+        let mut manifest = good();
+        manifest.retired = Some("the sensor it reads was removed in firmware 2.0".into());
+        assert!(checked(&manifest).is_empty());
     }
 
     #[test]
@@ -763,6 +860,7 @@ sdk_rev = "apps-v1.3.0"
             rev: "b".repeat(40),
             sdk_rev: "apps-v1.3.0".into(),
             subdir: None,
+            retired: None,
         });
         let items = wanted(&[two], "sha256:abc");
         assert_ne!(items[0].recipe.key(), items[1].recipe.key());

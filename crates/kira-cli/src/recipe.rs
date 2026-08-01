@@ -124,6 +124,11 @@ pub(crate) struct Wanted {
     /// Folder the app occupies on the watch, for logging.
     pub folder: String,
     pub recipe: Recipe,
+    /// Why this build is not on offer, if it is not.
+    ///
+    /// Still built: a withdrawn app keeps its binary so a watch carrying it can
+    /// be recognised and its owner told why.
+    pub retired: Option<String>,
 }
 
 /// What to do about a wanted artifact.
@@ -206,6 +211,7 @@ pub(crate) fn wanted_from_sdk(
         wanted.push(Wanted {
             app_id: declared.app_id,
             folder: folder.clone(),
+            retired: None,
             recipe: Recipe {
                 app_source: format!("sdk:{sdk_rev}:Examples/Apps/{folder}"),
                 sdk_rev: sdk_rev.to_owned(),
@@ -236,6 +242,9 @@ pub(crate) struct PlanItem {
     pub app_source: String,
     /// SDK revision to compile against.
     pub sdk_rev: String,
+    /// Why this build is not on offer, if it is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retired: Option<String>,
 }
 
 /// Render a plan as JSON for a workflow to consume.
@@ -255,6 +264,7 @@ pub(crate) fn plan_items(planned: &[(Wanted, Action)]) -> Vec<PlanItem> {
             },
             app_source: wanted.recipe.app_source.clone(),
             sdk_rev: wanted.recipe.sdk_rev.clone(),
+            retired: wanted.retired.clone(),
         })
         .collect()
 }
@@ -372,11 +382,13 @@ mod tests {
                 app_id: ALARM,
                 folder: "Alarm".into(),
                 recipe: recipe(),
+                retired: None,
             },
             Wanted {
                 app_id: AppId::new(0xA135_8F7C_2E9D_4BA6),
                 folder: "GlanceHR".into(),
                 recipe: recipe(),
+                retired: None,
             },
         ];
         let available = BTreeSet::from([wanted[0].recipe.artifact_name(&wanted[0].folder)]);
@@ -396,6 +408,7 @@ mod tests {
             app_id: ALARM,
             folder: "Alarm".into(),
             recipe: recipe(),
+            retired: None,
         };
         let available = BTreeSet::from([old.recipe.artifact_name(&old.folder)]);
 
@@ -412,6 +425,7 @@ mod tests {
             app_id: ALARM,
             folder: "Alarm".into(),
             recipe: recipe(),
+            retired: None,
         }];
         let planned = plan(&wanted, &BTreeSet::new());
         assert!(matches!(planned[0].1, Action::Build(_)));
