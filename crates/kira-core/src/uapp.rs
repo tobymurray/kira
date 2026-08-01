@@ -520,10 +520,19 @@ impl<'a> Uapp<'a> {
 
     /// Everything between the header and the CRC footer: icons, service and GUI.
     ///
-    /// This is the app itself, with no version stamp in it. Hashing this rather
-    /// than the whole file distinguishes "the code changed" from "the release tag
-    /// moved" — in `apps-v1.3.0`, six of the thirteen apps were byte-identical to
-    /// their `apps-v1.2.0` builds.
+    /// This is the app itself. Hashing it rather than the whole file
+    /// distinguishes "the code changed" from "the release tag moved" — in
+    /// `apps-v1.3.0`, six of the thirteen apps were byte-identical to their
+    /// `apps-v1.2.0` builds.
+    ///
+    /// The version stamp is the reason, but the *whole* header is excluded, so
+    /// the [`AppId`], the `LibC` ABI version, the type and autostart flags, the
+    /// display name and the icon lengths are out of it too. Two builds differing
+    /// only in one of those hash the same and are reported as unchanged code —
+    /// true of the code, and silent about the flag. Narrowing the exclusion to
+    /// the version field alone would redefine a field the catalogue has already
+    /// published, so this is a boundary to be aware of rather than a bug to fix
+    /// quietly. `the_payload_hash_ignores_every_header_field` pins it.
     #[must_use]
     pub fn payload(&self) -> &'a [u8] {
         &self.bytes[HEADER_LEN..self.bytes.len() - CRC_LEN]
@@ -595,6 +604,55 @@ mod tests {
         assert_eq!(header.service_len, 64);
         assert_eq!(uapp.gui_len(), 32);
         assert!(uapp.verify_crc().is_valid());
+    }
+
+    #[test]
+    fn the_payload_hash_ignores_every_header_field() {
+        // Pins the boundary the docs describe. The payload is what "same code"
+        // is decided from, and it excludes the whole header -- so a build that
+        // changed only its autostart flag, its name or its declared type reads
+        // as unchanged code. That is accurate about the code and says nothing
+        // about the flag, and it is worth failing loudly if it ever shifts,
+        // because the catalogue has published these hashes.
+        let base = make("Alarm", 0x29, 64, 32);
+        let payload_of = |bytes: &[u8]| Uapp::parse(bytes).unwrap().payload().to_vec();
+        let expected = payload_of(&base);
+
+        // Every header field, one at a time. Offsets are the layout at the top of
+        // this file; replacements are valid values rather than flipped bits, so
+        // each fixture stays a parseable .uapp, and the CRC is restamped.
+        let name: &[u8] = b"Renamed\0\0\0\0\0\0\0\0\0";
+        for (offset, replacement, what) in [
+            (0usize, &0xDEAD_BEEF_DEAD_BEEFu64.to_le_bytes()[..], "AppID"),
+            (
+                8,
+                &Version::new(9, 9, 9).packed().to_le_bytes()[..],
+                "version",
+            ),
+            (
+                12,
+                &Version::new(0, 0, 9).packed().to_le_bytes()[..],
+                "LibC ABI",
+            ),
+            (20, &0x21u32.to_le_bytes()[..], "flags, including autostart"),
+            (24, name, "display name"),
+        ] {
+            let mut altered = base.clone();
+            altered[offset..offset + replacement.len()].copy_from_slice(replacement);
+            let end = altered.len() - CRC_LEN;
+            let crc = crc32(&altered[..end]);
+            altered[end..].copy_from_slice(&crc.to_le_bytes());
+
+            assert!(
+                Uapp::parse(&altered).unwrap().verify_crc().is_valid(),
+                "{what}: the fixture should still be a valid .uapp"
+            );
+            assert_eq!(
+                payload_of(&altered),
+                expected,
+                "{what} reached the payload hash; \"same code\" now means something else"
+            );
+        }
     }
 
     #[test]

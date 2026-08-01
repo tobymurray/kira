@@ -142,7 +142,12 @@ function fmtSize(bytes) {
     : `${Math.round(bytes / 1024)} kB`;
 }
 
-/** Hash the code within a .uapp, excluding the version stamp and CRC footer. */
+/**
+ * Hash the code within a .uapp: everything between the header and the CRC.
+ *
+ * The whole 48-byte header is excluded, not only the version stamp — so the
+ * AppID, LibC ABI, flags, display name and icon lengths do not reach it either.
+ */
 async function payloadHash(bytes) {
   const { start, end } = payloadBounds(bytes.length);
   return sha256Hex(bytes.subarray(start, end));
