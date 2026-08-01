@@ -21,20 +21,22 @@ RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       bash git curl ca-certificates jq \
-      cmake \
+      cmake make \
       python3-full python3-pip python-is-python3 \
  && rm -rf /var/lib/apt/lists/*
 
 # The image ships these unexecutable, and every job had to fix that itself.
-RUN for tool in make arm-none-eabi-gcc arm-none-eabi-g++ arm-none-eabi-objcopy arm-none-eabi-size; do \
+RUN for tool in arm-none-eabi-gcc arm-none-eabi-g++ arm-none-eabi-objcopy arm-none-eabi-size; do \
       path="$(find /opt/st/stm32cubeide_* -type f -name "$tool" | head -n 1)"; \
       [ -n "$path" ] && chmod +x "$path" || true; \
     done
 
-# Put the ARM tools and the bundled make on PATH once, rather than in each job.
+# Put the ARM tools on PATH once, rather than in each job. Deliberately not the
+# bundled `make`: it is a wrapper that sources an environment file this image
+# does not have, and on PATH it would shadow the real one from apt.
 ENV PATH="/opt/st/toolchain/bin:${PATH}"
 RUN mkdir -p /opt/st/toolchain/bin \
- && for tool in arm-none-eabi-gcc arm-none-eabi-g++ arm-none-eabi-objcopy arm-none-eabi-size arm-none-eabi-objdump make; do \
+ && for tool in arm-none-eabi-gcc arm-none-eabi-g++ arm-none-eabi-objcopy arm-none-eabi-size arm-none-eabi-objdump; do \
       path="$(find /opt/st/stm32cubeide_* -type f -name "$tool" | head -n 1)"; \
       [ -n "$path" ] && ln -sf "$path" "/opt/st/toolchain/bin/$tool" || true; \
     done
