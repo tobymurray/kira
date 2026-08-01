@@ -18,13 +18,51 @@
  * removed, so settings.json and Activity/ survive an update.
  */
 
-import init, {
-  Store,
-  crc_is_valid as crcIsValid,
-  payload_bounds as payloadBounds,
-  read_header as readHeader,
-  source_ref as sourceRef,
-} from './lib/kira_wasm.js';
+/**
+ * Bound by loadModule() once the schema the catalogue is published at is known.
+ *
+ * Deliberately not a static import: see loadModule() for why the module has to
+ * be fetched after the catalogue rather than alongside it.
+ */
+let Store;
+let crcIsValid;
+let payloadBounds;
+let readHeader;
+let sourceRef;
+
+/**
+ * Load the WebAssembly module, keyed to the schema it has to understand.
+ *
+ * `catalog.json` is fetched with `no-cache` so it is always current, but the
+ * page and the module are ordinary requests under GitHub Pages' `max-age=600`.
+ * A deploy that bumps the schema therefore hands a returning visitor a fresh
+ * catalogue and a ten-minute-stale module, which fails hard: the Store refuses
+ * a schema it was not built for, and the page shows nothing at all. Deploying
+ * both together does not help, because the browser does not fetch them together.
+ *
+ * Putting the schema in the query means a bump is a different URL and cannot be
+ * served from a cache filled before it. Keyed on the schema rather than the
+ * build timestamp on purpose: only a schema change can break this pairing, and
+ * keying on the timestamp would re-download 175 kB after every catalogue build
+ * to fix a problem those builds do not cause.
+ *
+ * The `.wasm` needs the query too. The glue resolves it relative to its own URL,
+ * which drops the query, so it is passed explicitly.
+ */
+async function loadModule(schema) {
+  const key = `v${schema}`;
+  const module = await import(`./lib/kira_wasm.js?${key}`);
+  const binary = new URL('./lib/kira_wasm_bg.wasm', import.meta.url);
+  await module.default({ module_or_path: `${binary}?${key}` });
+
+  ({
+    Store,
+    crc_is_valid: crcIsValid,
+    payload_bounds: payloadBounds,
+    read_header: readHeader,
+    source_ref: sourceRef,
+  } = module);
+}
 
 const CAN_WRITE = typeof window.showDirectoryPicker === 'function';
 const DATA_BASE = new URL('data', location.href).href.replace(/\/$/, '');
@@ -156,14 +194,23 @@ async function idbGet(key) {
 
 // ------------------------------------------------------------------ catalogue
 
-async function loadCatalog() {
+/**
+ * Fetch the published catalogue, always current.
+ *
+ * Parsing is left to the browser's own JSON parser and handed over as an object:
+ * linking a second JSON parser into the WebAssembly module cost about 16 kB
+ * gzipped for no benefit. It is read before the module is loaded, because its
+ * schema is what decides which module to ask for.
+ */
+async function fetchCatalog() {
   const res = await fetch(`${DATA_BASE}/catalog.json`, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`catalog.json: HTTP ${res.status}`);
-  // Parsing is left to the browser's own JSON parser and handed over as an
-  // object: linking a second JSON parser into the WebAssembly module cost about
-  // 16 kB gzipped for no benefit.
+  return res.json();
+}
+
+function startCatalog(catalog) {
   // The store validates the schema and throws if it is not the expected one.
-  state.store = new Store(await res.json());
+  state.store = new Store(catalog);
 
   const when = new Date(state.store.generated).toLocaleDateString();
   el('catalogue-meta').textContent =
@@ -1336,8 +1383,18 @@ function wireUp() {
 }
 
 async function main() {
+  // Catalogue first: its schema decides which module the page needs, and asking
+  // for the wrong one is the failure this ordering exists to prevent.
+  let catalog;
   try {
-    await init();
+    catalog = await fetchCatalog();
+  } catch (err) {
+    el('catalogue').textContent = `Could not load the catalogue: ${err.message}`;
+    return;
+  }
+
+  try {
+    await loadModule(catalog.schema);
   } catch (err) {
     el('catalogue').textContent = `Could not load the WebAssembly module: ${err.message}`;
     return;
@@ -1345,7 +1402,7 @@ async function main() {
 
   wireUp();
   try {
-    await loadCatalog();
+    startCatalog(catalog);
     renderCatalogue();
   } catch (err) {
     el('catalogue').textContent = `Could not load the catalogue: ${err.message}`;
