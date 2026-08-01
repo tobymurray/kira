@@ -61,12 +61,21 @@ jobs:
 
       - name: Check the tools are all there
         run: |
-          set -euo pipefail
+          # No pipefail: some of these are wrapper scripts that write to stderr
+          # and do not like having their stdout closed early by head.
+          set -eu
           image="${{ env.IMAGE }}:latest"
+          missing=0
           for tool in arm-none-eabi-gcc arm-none-eabi-g++ make cmake cargo rustc git python3 jq; do
             printf '%-20s ' "$tool"
-            docker run --rm --entrypoint "$tool" "$image" --version | head -1
+            if out=$(docker run --rm --entrypoint "$tool" "$image" --version 2>&1); then
+              echo "$out" | grep -v "environment-setup" | head -1
+            else
+              echo "MISSING"
+              missing=$((missing + 1))
+            fi
           done
+          [ "$missing" -eq 0 ]
           echo "rust targets:"
           docker run --rm --entrypoint rustup "$image" target list --installed
 
