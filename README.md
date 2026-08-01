@@ -219,6 +219,13 @@ revision, the toolchain container digest, the stamped version and the flags. See
 has been verified, and the weak points — including the fact that reproducibility
 is not authenticity.
 
+The SDK revision in a recipe is a tag, and tags move — which `registry/README.md`
+tells submitters is exactly what makes a pinned source a lie. Changing the recipe
+to name a commit would invalidate every stored artifact and force a full rebuild,
+so instead `sdk-tags.lock.json` records the commit each published tag pointed at
+and the catalogue build refuses to publish if upstream has moved one. That does
+not make the recipe immutable; it makes a move impossible to miss.
+
 ### Module size
 
 The published `.wasm` is ~58 kB gzipped, and the whole page is ~100 kB:
