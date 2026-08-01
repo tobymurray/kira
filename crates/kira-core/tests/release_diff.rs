@@ -120,6 +120,7 @@ fn catalog_from(fixtures: &[Fixture], tag: &str) -> Catalog {
                     upstream_sha256: None,
                     matches_upstream: None,
                     retired: None,
+                    notes: None,
                 }],
                 icon: None,
                 icon_small: None,

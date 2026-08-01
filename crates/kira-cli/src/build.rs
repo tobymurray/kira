@@ -517,6 +517,9 @@ fn process_release(
             matches_upstream: Some(chosen.matches_upstream),
             built_from: chosen.built_from,
             retired: None,
+            // Upstream describes a release, not an app: which of its notes could
+            // reach a given watch app is inferred from the body, in notes.rs.
+            notes: None,
         });
 
         record_icons(entry, data, header.app_id, &normal_icon, &small_icon)?;
@@ -578,13 +581,16 @@ fn record_icons(
 /// took onto `main`. The page links a submission's `source`, so "https and
 /// nothing else" has to hold at the point of publication, not only at review.
 fn refuse_bad_submissions(manifests: &[Manifest], upstream: &BTreeMap<AppId, App>) -> Result<()> {
-    let ids = upstream
-        .iter()
-        .map(|(id, app)| (*id, app.name.clone()))
-        .collect();
+    // No repo: these are the SDK's own apps, so a submission can never be
+    // holding one of these identities already.
+    let owner = |app: &App| registry::Owner {
+        name: app.name.clone(),
+        repo: None,
+    };
+    let ids = upstream.iter().map(|(id, app)| (*id, owner(app))).collect();
     let folders = upstream
         .values()
-        .map(|app| (app.folder.to_ascii_lowercase(), app.name.clone()))
+        .map(|app| (app.folder.to_ascii_lowercase(), owner(app)))
         .collect();
 
     let problems = registry::validate(manifests, &ids, &folders);
@@ -802,6 +808,7 @@ fn submitted_version(built: SubmittedBuild<'_>) -> VersionEntry {
         matches_upstream: None,
         // The app's own withdrawal is recorded on the app; this is per-version.
         retired: entry.retired.clone(),
+        notes: entry.notes.clone(),
     }
 }
 

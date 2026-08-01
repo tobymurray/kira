@@ -36,6 +36,7 @@ maintainer = "someone"                                   # GitHub handle
 version = "1.0.0"
 rev     = "3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d"     # full commit sha
 sdk_rev = "apps-v1.3.0"                                  # SDK release to build against
+notes   = "What changed in this version."                # optional, shown on the card
 # subdir = "old/path"                                    # optional, if this version lived elsewhere
 ```
 
@@ -119,6 +120,13 @@ afterwards stops the whole catalogue build rather than reaching a watch.
   information, not a verdict.
 - **Updating** means a new `[[versions]]` entry with a new commit. Old versions
   stay: every published version of every app remains downloadable.
+- **`notes` is how a version says what changed**, in 4 to 500 characters, shown on
+  the card. Nothing else can: the release notes panel carries the UNA SDK's own
+  release bodies, and none of them mention your app. It is the one line on a card
+  that nobody can check — it sits below the byte-derived history, which says
+  whether the code actually moved, and above the pinned commit, which is the
+  account of record. Alone among a published version's fields it stays editable,
+  because it is not part of the recipe: correcting a typo changes no artifact.
 - **Taking a listing down** is `retired`, not a deletion:
 
   ```toml

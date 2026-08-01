@@ -486,6 +486,17 @@ function renderCard(app, entry) {
 
   body.appendChild(renderProvenance(app, selected));
 
+  // What the publisher says this version changed. Deliberately below the
+  // byte-derived history line rather than instead of it: one is an assertion,
+  // the other is evidence, and the card keeps them apart. textContent, never
+  // innerHTML — this is prose from another project.
+  if (selected.notes) {
+    const note = document.createElement('p');
+    note.className = 'meta version-notes';
+    note.textContent = selected.notes;
+    body.appendChild(note);
+  }
+
   // Withdrawn by whoever publishes it. The reason is shown rather than hidden
   // behind a flag: it is the only part of a withdrawal that helps anyone whose
   // watch is already carrying the app.

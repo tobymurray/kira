@@ -11,3 +11,10 @@ maintainer = "tobymurray"
 version = "0.1.0"
 rev     = "22ad629eaa71d0207beefaeec6f25edff5870e02"
 sdk_rev = "apps-v1.3.0"
+notes   = "First build: two screens drawn by Rust and embedded-graphics through the SDK's CustomGUI entry point, cycled with the top-right button. No way to leave the app — use 0.2.0."
+
+[[versions]]
+version = "0.2.0"
+rev     = "9c3f7f25ea0170d9a0cfc21b073185f41ed601f6"
+sdk_rev = "apps-v1.3.0"
+notes   = "The bottom-right button now exits the app. 0.1.0 handled no button but screen-cycling and owned the message loop, so the only way out of it was rebooting the watch."
