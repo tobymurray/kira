@@ -1006,8 +1006,28 @@ async function installOne(entry) {
   // eject-then-Verify step is for.
   const back = await handle.getFile();
   if (back.size !== bytes.length) {
-    await dir.removeEntry(app.file).catch(() => {});
-    throw new Error(`short write (${back.size}/${bytes.length}); stale binary left in place`);
+    // Only remove the half-written file when there is something else in the
+    // folder to fall back to. On a corrupt-reinstall the name being written is
+    // the name already there, so deleting it takes the app off the watch
+    // entirely — and the old message said "stale binary left in place", which
+    // in exactly that case was untrue.
+    const others = [];
+    for await (const [name, child] of dir.entries()) {
+      if (child.kind === 'file' && name.toLowerCase().endsWith('.uapp') && name !== app.file) {
+        others.push(name);
+      }
+    }
+    if (others.length > 0) {
+      await dir.removeEntry(app.file).catch(() => {});
+      throw new Error(
+        `short write (${back.size}/${bytes.length}); removed it, ${others.join(', ')} left in place`,
+      );
+    }
+    throw new Error(
+      `short write (${back.size}/${bytes.length}); left in place — it is the only ` +
+        `.uapp in Apps/${app.folder}/, so removing it would take the app off the watch. ` +
+        'Re-install before rebooting.',
+    );
   }
 
   // Only now is it safe to remove older binaries.
@@ -1080,6 +1100,18 @@ async function verifyFlash() {
   clearLog();
   setBusy(true);
   try {
+    // Read mode holds Blobs from a <input webkitdirectory> pick, which cannot be
+    // re-read: they are a snapshot of the folder as it was when it was chosen,
+    // and after an install script has run they describe the previous state. This
+    // used to re-plan against that snapshot and report "All N file(s) verified
+    // against flash" having read nothing at all — the exact false OK the two-step
+    // verify exists to prevent, in the tier that most needs it.
+    if (state.mode !== 'write') {
+      log('This browser cannot re-read the watch, so it cannot verify.', 'bad');
+      log('Eject, reconnect, and pick the Apps folder again — that scan is the check.', 'bad');
+      return;
+    }
+
     log('Verifying — this is only trustworthy if you ejected and reconnected the watch.');
     try {
       await refreshInventory();
@@ -1308,8 +1340,10 @@ function renderPlan() {
     why.className = 'muted';
     why.textContent =
       'Run it and it performs exactly these writes, checking each binary before it ' +
-      'touches the watch. Individual binaries can be downloaded per app above, and ' +
-      'each row shows the folder it belongs in.';
+      'touches the watch and reading it back afterwards before removing anything. ' +
+      'Then eject, reconnect, and pick the Apps folder again — that scan reads cold ' +
+      'flash and is how you verify what landed. Individual binaries can be ' +
+      'downloaded per app above, and each row shows the folder it belongs in.';
     // Into the list, which is cleared each render; a sibling of `actions` would
     // accumulate one copy per refresh.
     list.prepend(why);
@@ -1519,7 +1553,12 @@ async function connectWithInput(files) {
   state.appsDir = null;
   state.installed = await readInstalledFromFiles(files);
   el('source').textContent = 'read-only snapshot';
-  el('verify').hidden = state.installed.length === 0;
+  // No Verify button here. This tier holds a snapshot of the folder as it was
+  // when it was picked, not a handle it can re-read, so the only honest way to
+  // check flash is to eject, reconnect and pick again — which re-runs the scan
+  // and re-plans. Offering a button that can only report on stale bytes is how
+  // it came to print "All N file(s) verified against flash" having read nothing.
+  el('verify').hidden = true;
   el('forget').hidden = false;
   await refreshInventory();
   log(`Found ${state.installed.length} installed app(s).`);
