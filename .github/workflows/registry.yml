@@ -11,6 +11,14 @@ on:
     paths:
       - "registry/**"
       - ".github/workflows/registry.yml"
+  # And again after merge: the pull-request run gates a contributor's code, this
+  # one keeps main honest, and it is where publishing will hang once submitted
+  # apps reach the catalogue.
+  push:
+    branches: [main]
+    paths:
+      - "registry/**"
+      - ".github/workflows/registry.yml"
   workflow_dispatch:
 
 permissions:
