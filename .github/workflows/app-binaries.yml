@@ -75,6 +75,11 @@ jobs:
 
   plan:
     name: Decide what to build
+    outputs:
+      # Only a run that considered every release may prune: a single-tag run's
+      # plan names a fraction of the store, and deleting the rest would throw
+      # away every other release's binaries.
+      full: ${{ steps.resolve.outputs.full }}
     needs: tool
     runs-on: ubuntu-latest
     steps:
@@ -88,6 +93,7 @@ jobs:
       # questions that need it -- which releases exist, and what the store already
       # holds -- are answered before entering the container.
       - name: Resolve releases and the current store
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           WANTED: ${{ inputs.sdk_ref || 'all' }}
@@ -105,6 +111,11 @@ jobs:
           fi
           echo "$(wc -l < tags.txt) release(s) to consider:"
           sed 's/^/  /' tags.txt
+          if [ "${WANTED:-all}" = "all" ]; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          fi
 
           # The version stamped into a release is not reliably the one in its tag:
           # apps-v0.1.9-rc1 ships binaries stamped 0.1.4. Since the version is part
@@ -286,7 +297,7 @@ jobs:
 
   publish:
     name: Upload to the app-binaries release
-    needs: build
+    needs: [plan, build]
     if: github.event_name == 'push' || inputs.publish == true
     runs-on: ubuntu-latest
     permissions:
@@ -297,6 +308,11 @@ jobs:
         with:
           name: built-uapps
           path: artifacts
+
+      # The plan is what says which artifacts are still wanted.
+      - uses: actions/download-artifact@v8
+        with:
+          name: plan-inputs
 
       - name: Upload
         env:
@@ -322,3 +338,39 @@ jobs:
           fi
           gh release upload "$BINARIES_TAG" "${built[@]}" --clobber
           echo "store now holds $(gh release view "$BINARIES_TAG" --json assets --jq '.assets | length') artifact(s)"
+
+      # Artifacts are named by recipe key, so a toolchain change does not replace
+      # them -- it adds a second generation alongside the first. Nothing else ever
+      # removes the old one.
+      - name: Prune artifacts no recipe wants
+        if: needs.plan.outputs.full == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          jq -r '.[].asset' plan.json | sort -u > keep.txt
+          gh release view "$BINARIES_TAG" --json assets \
+            --jq '.assets[].name | select(endswith(".uapp"))' | sort -u > have.txt
+          comm -13 keep.txt have.txt > stale.txt
+
+          echo "$(wc -l < keep.txt) wanted, $(wc -l < have.txt) stored, $(wc -l < stale.txt) stale"
+          # A plan that wants nothing means something went wrong upstream of here;
+          # deleting the whole store on the strength of it would be the worst
+          # possible reading.
+          if [ ! -s keep.txt ]; then
+            echo "::error::the plan wants no artifacts at all; refusing to prune"
+            exit 1
+          fi
+
+          while read -r asset; do
+            [ -n "$asset" ] || continue
+            echo "  deleting $asset"
+            gh release delete-asset "$BINARIES_TAG" "$asset" --yes
+          done < stale.txt
+
+          {
+            echo "### Store"
+            echo
+            echo "- kept: $(wc -l < keep.txt)"
+            echo "- deleted: $(wc -l < stale.txt)"
+          } >> "$GITHUB_STEP_SUMMARY"
