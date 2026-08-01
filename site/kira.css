@@ -792,7 +792,13 @@ code {
 }
 
 /* The caveats, on the page that writes to the watch rather than only in docs
-   nobody installing has a reason to open. */
+   nobody installing has a reason to open.
+
+   Centred as a block, left-aligned inside it. The 78ch cap that keeps the line
+   length readable is also what left this hugging one corner of a much wider
+   panel; `auto` puts the box back in the middle. The text stays left because
+   five lines of centred prose is harder to read, not easier — unlike the submit
+   invitation under the grid, which is short enough to carry it. */
 .what-this-is-not {
-  margin: 0 0 14px;
+  margin: 0 auto 14px;
 }
