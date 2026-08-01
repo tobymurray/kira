@@ -281,8 +281,7 @@ jobs:
   publish:
     name: Upload to the app-binaries store
     needs: [check, build]
-    # Merging to main is what publishes; a pull request builds and stops. The
-    # store is content-addressed, so this only ever adds.
+    # Merging to main is what publishes; a pull request builds and stops.
     if: github.event_name == 'push' && needs.check.outputs.builds != '0'
     runs-on: ubuntu-latest
     permissions:
@@ -293,32 +292,83 @@ jobs:
           name: submitted-uapps
           path: artifacts
 
+      # The plan is the only trustworthy statement of what this run was allowed
+      # to produce: it is computed from the manifests before any submitted code
+      # runs. Everything below is checked against it.
+      - uses: actions/download-artifact@v8
+        with:
+          name: submission-plan
+
       - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          built=(artifacts/*.uapp)
-          if [ ${#built[@]} -eq 0 ]; then
-            echo "nothing to upload"
-            exit 0
+
+          # The build job runs the submitter's own CMakeLists -- arbitrary code,
+          # deliberately unreviewed, as root in the container that also holds
+          # artifacts/. So the directory listing is a statement by that code, not
+          # by Kira, and uploading it wholesale let a submission write any name it
+          # liked into the store: one extra file called
+          # Alarm-1.3.0-<known recipe key>.uapp and the catalogue would serve it
+          # as UNA's Alarm, "built by Kira from source", past every hash check,
+          # because the hash is taken from whatever is stored.
+          #
+          # So: upload the names the plan asked for, and nothing else.
+          jq -r '.[] | select(.action == "build") | .asset' plan.json | sort -u > wanted.txt
+          (cd artifacts && ls -1 -- *.uapp 2>/dev/null || true) | sort -u > produced.txt
+
+          stray=$(comm -13 wanted.txt produced.txt)
+          if [ -n "$stray" ]; then
+            echo "::error::the build produced .uapp files no recipe asked for; refusing to publish"
+            printf '::error::  unexpected: %s\n' $stray
+            exit 1
           fi
 
-          # Artifacts are named by recipe, so an upload never replaces anything
-          # meaningful and the same name always denotes the same bytes.
           if ! gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" \
               --title "App binaries" \
               --notes "Binaries Kira built from source, named by recipe key. A store for the build pipeline, not a user-facing release." \
               --latest=false
           fi
-          gh release upload "$BINARIES_TAG" "${built[@]}" -R "$GITHUB_REPOSITORY" --clobber
+          gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | sort -u > stored.txt
+
+          mkdir -p stored
+          uploaded=0 skipped=0
+          while read -r asset; do
+            [ -n "$asset" ] || continue
+            path="artifacts/$asset"
+            if [ ! -f "$path" ]; then
+              echo "::error::$asset was planned but the build did not produce it"
+              exit 1
+            fi
+
+            # A recipe key names one set of bytes. If the store already holds this
+            # name the only acceptable outcome is that it is the same file, so a
+            # re-run stays idempotent -- and --clobber never appears, because the
+            # case it silently handled is the case worth failing on.
+            if grep -qxF -- "$asset" stored.txt; then
+              gh release download "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" \
+                --pattern "$asset" --dir stored --clobber
+              if cmp -s -- "stored/$asset" "$path"; then
+                echo "  = $asset already stored, byte-identical"
+                skipped=$((skipped + 1))
+                continue
+              fi
+              echo "::error::$asset is already stored with different bytes"
+              echo "::error::two binaries are claiming one recipe; refusing to overwrite"
+              exit 1
+            fi
+
+            gh release upload "$BINARIES_TAG" "$path" -R "$GITHUB_REPOSITORY"
+            uploaded=$((uploaded + 1))
+          done < wanted.txt
 
           {
             echo "### Published"
             echo
-            for file in "${built[@]}"; do
-              echo "- \`$(basename "$file")\`"
-            done
+            echo "$uploaded uploaded, $skipped already stored and identical."
+            echo
+            sed 's/^/- `/; s/$/`/' wanted.txt
           } >> "$GITHUB_STEP_SUMMARY"
