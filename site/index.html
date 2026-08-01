@@ -33,6 +33,29 @@
     <meta property="og:image" content="img/og-image.png" />
     <meta name="twitter:card" content="summary_large_image" />
 
+    <!-- CONTRIBUTING.md states that this page loads no third-party script,
+         because it holds a read/write handle to your watch while you use it.
+         That was a promise with nothing enforcing it; this enforces it. GitHub
+         Pages will not serve custom headers, so it goes in a meta tag — which
+         covers every directive here, frame-ancestors and sandbox being the two
+         that a meta tag cannot carry.
+
+         'wasm-unsafe-eval' is required to instantiate the WebAssembly module;
+         without it the page cannot start. Everything else is same-origin: no
+         CDN, no font service, no analytics, and nothing is ever assigned to
+         innerHTML. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self';
+               script-src 'self' 'wasm-unsafe-eval';
+               style-src 'self';
+               img-src 'self';
+               connect-src 'self';
+               base-uri 'none';
+               object-src 'none';
+               form-action 'none'"
+    />
+
     <link rel="stylesheet" href="kira.css" />
   </head>
   <body>
