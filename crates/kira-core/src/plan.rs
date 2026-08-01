@@ -1177,12 +1177,22 @@ mod tests {
         let config = ScriptConfig::default();
 
         let sh = shell(&plan, &config);
-        let copy = sh.find("cp \"$TMP/$file\"").expect("the shell script copies");
+        let copy = sh
+            .find("cp \"$TMP/$file\"")
+            .expect("the shell script copies");
         let check = sh.find("$wrote").expect("the shell script reads it back");
-        let remove = sh.find("removed stale").expect("the shell script clears stale files");
+        let remove = sh
+            .find("removed stale")
+            .expect("the shell script clears stale files");
         assert!(copy < check, "the read-back must come after the copy");
-        assert!(check < remove, "nothing may be deleted before the read-back");
-        assert!(sh.contains("size="), "the expected length has to reach the script");
+        assert!(
+            check < remove,
+            "nothing may be deleted before the read-back"
+        );
+        assert!(
+            sh.contains("size="),
+            "the expected length has to reach the script"
+        );
 
         let ps = powershell(&plan, &config);
         let copy = ps.find("::Copy(").expect("powershell copies");
