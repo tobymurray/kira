@@ -104,6 +104,23 @@ pub fn payload_bounds(total_len: usize) -> Result<JsValue, JsError> {
     })
 }
 
+/// Pick apart the `app_source` a submission's recipe records: the repository,
+/// the exact commit, and the path within it.
+///
+/// Exported rather than done in the page so the recipe format has one reader.
+/// Returns `undefined` for anything that is not a submission's source, notably an
+/// SDK app's, which names no repository of its own.
+///
+/// # Errors
+/// If the parsed value cannot be handed to JavaScript.
+#[wasm_bindgen]
+pub fn source_ref(app_source: &str) -> Result<JsValue, JsError> {
+    match catalog::parse_source(app_source) {
+        Some(parsed) => to_js(&parsed),
+        None => Ok(JsValue::UNDEFINED),
+    }
+}
+
 /// An app with its rendered history line, ready to display.
 ///
 /// Fields are listed rather than flattened from [`App`]: `serde_wasm_bindgen`
@@ -129,6 +146,11 @@ struct AppView<'a> {
     /// Set when another app owns this on-device folder with newer versions, in
     /// which case this one cannot be installed alongside it.
     superseded_by: Option<AppId>,
+    /// Who publishes this app, when it is not upstream's. Its presence is what
+    /// makes an entry a submission; it is not a rank.
+    publisher: Option<&'a catalog::Publisher>,
+    /// Why the app is no longer offered, if it is not.
+    retired: Option<&'a str>,
 }
 
 /// A release, with its prose sorted and its effect on the apps worked out.
@@ -327,6 +349,8 @@ impl Store {
                     .unwrap_or_else(|| app.latest().version),
                 ambiguous_name: self.ambiguous.contains(&app.name),
                 superseded_by: app.superseded_by,
+                publisher: app.publisher.as_ref(),
+                retired: app.retired.as_deref(),
             })
             .collect();
         to_js(&views)

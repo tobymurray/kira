@@ -63,12 +63,18 @@ jobs:
             unzip -q "$(find "zips/$tag" -name '*.zip' | head -n 1)" -d "apps/$tag"
           done
 
+          # --registry against an empty store: nothing is built here, so no
+          # submission can be published, but the checks that run at every
+          # catalogue build do run -- including the identity collisions between
+          # the live registry and the two newest upstream releases.
+          mkdir -p empty-store
           cargo run --release -p kira-cli -- build \
-            --src apps --out site --releases releases.json --repo UNAWatch/una-sdk
+            --src apps --out site --releases releases.json --repo UNAWatch/una-sdk \
+            --registry registry --built empty-store --toolchain unpinned
 
           test -s site/data/catalog.json
           # Deliberately hardcoded: a schema bump should require updating this.
-          jq -e '.schema == 3 and (.releases | length) == 2' site/data/catalog.json > /dev/null
+          jq -e '.schema == 4 and (.releases | length) == 2' site/data/catalog.json > /dev/null
           # Provenance must actually be populated, not just declared in the types.
           jq -e '[.apps[].versions[] | select(.origin == null)] | length == 0' \
             site/data/catalog.json > /dev/null

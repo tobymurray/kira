@@ -11,6 +11,13 @@ name: Catalogue
 on:
   push:
     branches: [main]
+  # A merged submission builds and uploads to the store in its own workflow,
+  # which finishes after the push run here has already read the store. Without
+  # this the app would not appear until the next build, which reads as broken.
+  workflow_run:
+    workflows: [Submissions]
+    types: [completed]
+    branches: [main]
   schedule:
     # Daily, to pick up a new apps-v* release without a manual nudge.
     - cron: '17 6 * * *'
@@ -42,6 +49,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # A failed submission run leaves the store as it was, so there is nothing new
+    # to publish and no reason to redeploy.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     outputs:
       releases: ${{ steps.fetch.outputs.count }}
     steps:
@@ -154,13 +164,18 @@ jobs:
 
       - name: Build the catalogue
         run: |
+          # --registry folds the submitted apps in beside the SDK's, from the same
+          # store. It also re-runs the submission checks against the catalogue as
+          # it stands now, so a collision upstream introduced later stops the
+          # build rather than reaching a watch.
           cargo run --release -p kira-cli -- build \
             --src apps \
             --out site \
             --releases releases.json \
             --repo UNAWatch/una-sdk \
             --built built \
-            --toolchain "$TOOLCHAIN"
+            --toolchain "$TOOLCHAIN" \
+            --registry registry
 
       - uses: actions/upload-pages-artifact@v5
         with:

@@ -78,6 +78,12 @@ pub enum Status {
     /// offered: the watch loads whichever `.uapp` is first in a folder, so a
     /// second one there could mean booting the wrong app.
     Superseded,
+    /// Withdrawn by whoever publishes it, with a reason on the entry.
+    ///
+    /// Overrides everything else, installed or not: a watch already carrying it
+    /// should be recognised and told why, which is more use than either offering
+    /// it again or reporting it as something unknown.
+    Retired,
 }
 
 /// Which build of a version is on the watch.
@@ -138,15 +144,22 @@ impl Entry {
     /// Human-readable reason this entry is in the plan.
     #[must_use]
     pub fn describe(&self) -> String {
-        let Some(installed) = &self.installed else {
-            return if self.status == Status::Superseded {
-                "superseded by another app in the same folder".to_owned()
-            } else {
-                format!("install {}", self.app.version)
+        // Both of these hold whether or not anything is installed, and the
+        // withdrawal reason is the only thing that makes a retirement useful.
+        if self.status == Status::Retired {
+            return match self.app.retired.as_deref() {
+                Some(reason) => format!("withdrawn: {reason}"),
+                None => "withdrawn".to_owned(),
             };
+        }
+        if self.status == Status::Superseded {
+            return "superseded by another app in the same folder".to_owned();
+        }
+
+        let Some(installed) = &self.installed else {
+            return format!("install {}", self.app.version);
         };
         match self.status {
-            Status::Superseded => "superseded by another app in the same folder".to_owned(),
             Status::Corrupt => format!("{} is corrupt, reinstall", installed.file),
             Status::DifferentBuild => {
                 format!(
@@ -254,6 +267,20 @@ fn classify(on_watch: &Installed, target: &Target, recognised: Recognised) -> St
     }
 }
 
+/// Why this selection is not on offer, if it is not.
+///
+/// Withdrawal comes first: it is a statement by whoever publishes the app, where
+/// supersession is something Kira worked out about a folder.
+const fn not_offered(target: &Target) -> Option<Status> {
+    if target.retired.is_some() {
+        Some(Status::Retired)
+    } else if target.superseded_by.is_some() {
+        Some(Status::Superseded)
+    } else {
+        None
+    }
+}
+
 /// Compare selected versions against what is installed.
 ///
 /// Keyed on [`AppId`], never on folder or display name: folders are arbitrary and
@@ -269,12 +296,7 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
             let Some(on_watch) = on_watch else {
                 return Entry {
                     app: target.clone(),
-                    // Not installed, and must not be: another app owns its folder.
-                    status: if target.superseded_by.is_some() {
-                        Status::Superseded
-                    } else {
-                        Status::Install
-                    },
+                    status: not_offered(target).unwrap_or(Status::Install),
                     installed: None,
                     identical_payload: false,
                     recognised: Recognised::Unhashed,
@@ -282,7 +304,11 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
             };
 
             let recognised = recognise(on_watch, target);
-            let status = classify(on_watch, target, recognised);
+            // Whether it is on offer at all is decided before what state it is
+            // in: a withdrawn app that happens to be installed must be named and
+            // explained, not reported as up to date or offered as an update.
+            let status =
+                not_offered(target).unwrap_or_else(|| classify(on_watch, target, recognised));
 
             // Version moved but the code did not. Still offered, since installing
             // changes what the watch reports, but labelled rather than presented
@@ -350,6 +376,7 @@ fn job_note(entry: &Entry) -> String {
         Status::DifferentBuild => "different-build",
         Status::Corrupt => "corrupt, reinstalling",
         Status::Superseded => "superseded",
+        Status::Retired => "withdrawn",
     };
     if entry.identical_payload {
         format!("{status}; identical code, version stamp only")
@@ -567,6 +594,7 @@ mod tests {
             built_from: None,
             upstream_sha256: None,
             matches_upstream: None,
+            retired: None,
         }
     }
 
@@ -799,6 +827,37 @@ mod tests {
         assert_eq!(plan.entries[0].status, Status::Superseded);
         assert_eq!(plan.actionable().count(), 0);
         assert!(plan.entries[0].describe().contains("superseded"));
+    }
+
+    #[test]
+    fn a_withdrawn_app_is_named_and_explained_rather_than_offered() {
+        let mut app = target("1.3.0");
+        app.retired = Some("writes a corrupt .fit on runs over an hour".into());
+
+        // Not installed: never offered, and the reason travels with the entry.
+        let plan = build(&[app.clone()], &[]);
+        assert_eq!(plan.entries[0].status, Status::Retired);
+        assert_eq!(plan.actionable().count(), 0);
+        assert!(plan.entries[0].describe().contains("corrupt .fit"));
+
+        // Already on the watch: still not offered, and specifically not reported
+        // as up to date, which would tell its owner nothing about the problem.
+        let mut on_watch = installed("1.3.0", app.size);
+        on_watch.sha256 = Some(app.sha256.clone());
+        on_watch.crc_valid = Some(true);
+        let plan = build(&[app], &[on_watch]);
+        assert_eq!(plan.entries[0].status, Status::Retired);
+        assert_eq!(plan.actionable().count(), 0);
+    }
+
+    #[test]
+    fn withdrawal_is_reported_ahead_of_supersession() {
+        // Both are reasons not to install, but only one is a statement by
+        // whoever publishes the app, and it is the one worth showing.
+        let mut app = target("1.3.0");
+        app.retired = Some("the sensor it reads was removed in firmware 2.0".into());
+        app.superseded_by = Some(AppId::new(0x8899_AABB_CCDD_EEFF));
+        assert_eq!(build(&[app], &[]).entries[0].status, Status::Retired);
     }
 
     #[test]

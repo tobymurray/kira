@@ -119,10 +119,13 @@ fn catalog_from(fixtures: &[Fixture], tag: &str) -> Catalog {
                     built_from: None,
                     upstream_sha256: None,
                     matches_upstream: None,
+                    retired: None,
                 }],
                 icon: None,
                 icon_small: None,
                 superseded_by: None,
+                publisher: None,
+                retired: None,
             }
         })
         .collect();

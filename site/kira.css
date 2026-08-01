@@ -427,6 +427,22 @@ details.archive .card {
   margin: -6px 0 6px;
 }
 
+.meta.provenance a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.meta.provenance a:hover {
+  color: var(--accent);
+}
+
+/* The commit a submission was built from: monospace because it is a hash, and
+   hashes get compared character by character. */
+.meta.provenance .rev {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .meta.appid {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
