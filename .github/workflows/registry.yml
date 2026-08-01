@@ -47,8 +47,8 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: cargo-musl-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-musl-${{ runner.os }}-
 
       # The live catalogue is the authoritative list of identities already in use,
       # and it is not in the repository: site/data is generated.
@@ -58,9 +58,26 @@ jobs:
             https://kira.technicallyrural.com/data/catalog.json
           echo "$(jq '.apps | length' catalog.json) apps already published"
 
+      - name: Cross-compile the tool statically
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          # Static, because the build job runs inside a container that has no
+          # Rust at all and an older libc than this runner.
+          cargo build --release -p kira-cli --target x86_64-unknown-linux-musl
+          file target/x86_64-unknown-linux-musl/release/kira
+          echo "KIRA=$PWD/target/x86_64-unknown-linux-musl/release/kira" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kira-bin
+          path: target/x86_64-unknown-linux-musl/release/kira
+          retention-days: 1
+
       - name: Validate
         run: |
-          cargo run --quiet -p kira-cli -- registry validate \
+          "$KIRA" registry validate \
             --dir registry \
             --base base/registry \
             --catalog catalog.json
@@ -68,7 +85,7 @@ jobs:
       - name: Plan what has to be built
         id: plan
         run: |
-          cargo run --quiet -p kira-cli -- registry plan \
+          "$KIRA" registry plan \
             --dir registry --toolchain "${TOOLCHAIN#*@}" --out plan.json
           jq -r '.[] | "\(.folder) \(.version) \(.appSource)"' plan.json
           echo "builds=$(jq 'length' plan.json)" >> "$GITHUB_OUTPUT"
@@ -95,10 +112,6 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          path: kira
-
-      - uses: actions/checkout@v7
-        with:
           repository: UNAWatch/una-sdk
           # Tags included: each submission names the SDK revision to build with.
           fetch-depth: 0
@@ -107,11 +120,14 @@ jobs:
       - name: Install packer requirements
         run: python3 -m pip install --break-system-packages -r sdk/Utilities/Scripts/app_packer/requirements.txt
 
-      - name: Build the tool
-        working-directory: kira
+      - uses: actions/download-artifact@v8
+        with:
+          name: kira-bin
+          path: /usr/local/bin
+
+      - name: Check the tool runs here
         run: |
-          cargo build --release -p kira-cli
-          install -m 755 target/release/kira /usr/local/bin/kira
+          chmod +x /usr/local/bin/kira
           kira --version
 
       - name: Prepare the toolchain
