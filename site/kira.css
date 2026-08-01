@@ -80,6 +80,25 @@ body {
   .split > .panel {
     margin-bottom: 0;
   }
+
+  /* The pair at the foot of the page are wildly unequal — thirteen collapsible
+     releases beside eight lines of links — so the short one used to trail a
+     column of nothing half a page tall. Sticking it to the top means it stays
+     with you while the notes scroll past, which is both useful and no longer a
+     hole. Sticky works here because the grid area is as tall as the row even
+     though `align-items: start` keeps the panel its own height. */
+  #feedback {
+    position: sticky;
+    top: 16px;
+  }
+}
+
+/* Before a watch is connected there is no pending-changes panel, so the two-up
+   layout left "Your watch" sitting in half a row with nothing beside it. One
+   column until there is a second thing to show. Browsers without :has() get the
+   old behaviour, which is untidy rather than broken. */
+.split:has(> .panel[hidden]) {
+  grid-template-columns: 1fr;
 }
 
 /* Large displays: the page gets wider, so the text gets slightly bigger rather
@@ -309,12 +328,20 @@ button.ghost:hover:not(:disabled),
 
 .grid {
   display: grid;
-  /* auto-fit collapses leftover tracks, so a row grows to use the width rather
-     than stopping a quarter of the way across a wide screen. A fixed track
-     maximum was tried instead and cost more than it gave: the repetition count
-     is worked out from the maximum, so 360px tracks left a 1280px window showing
-     two cards where 1fr shows four. The cap moved to the card itself. */
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  /* auto-FILL, not auto-fit. Both fill a wide screen, but auto-fit collapses the
+     tracks a short section does not use, so its two cards were handed half the
+     row each and -- capped at 400px by .card -- sat marooned at opposite ends
+     with 250px of nothing between them. Keeping the empty tracks makes a short
+     section read as a partly filled row, and every card the same width as the
+     section above it.
+
+     The maximum stays `1fr` rather than a length, because a *definite* maximum
+     is what the repetition count gets worked out from: `minmax(260px, 400px)`
+     looks equivalent and quietly halves a 1280px window to two cards. With 1fr
+     the count comes from the minimum, which is why raising that from 260px to
+     300px is the whole lever -- it buys a card wide enough not to wrap its size
+     line, and still lands three across a 1280px laptop. */
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 12px;
 }
 
