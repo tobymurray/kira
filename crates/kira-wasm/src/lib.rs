@@ -203,6 +203,13 @@ struct EntryView<'a> {
     identical_payload: bool,
     /// Which build is on the watch: Kira's, the vendor's, or neither.
     recognised: plan::Recognised,
+    /// What verifying would find on the device for this app.
+    ///
+    /// Exposed rather than left for the page to work out from the hashes, which
+    /// is how the vendor's own binaries came to be reported as mismatches.
+    verdict: plan::Verdict,
+    /// An app occupying this one's on-device folder that is not this app.
+    blocking: Option<&'a Installed>,
     /// Why this entry is in the plan, e.g. "1.2.0 → 1.3.0".
     describe: String,
     /// Whether acting on this entry would write to the watch.
@@ -244,6 +251,8 @@ impl<'a> PlanView<'a> {
                     installed: entry.installed.as_ref(),
                     identical_payload: entry.identical_payload,
                     recognised: entry.recognised,
+                    verdict: entry.verdict(),
+                    blocking: entry.blocking.as_ref(),
                     describe: entry.describe(),
                     is_actionable: entry.is_actionable(),
                 })
@@ -434,19 +443,33 @@ impl Store {
     /// Generate a standalone installer, for browsers that cannot write to the
     /// drive themselves.
     ///
-    /// `kind` is `"powershell"` or `"shell"`.
+    /// `kind` is `"powershell"` or `"shell"`. `chosen` is an array of `AppId`
+    /// strings to write, or `undefined` for everything the plan offers — a
+    /// script that ignored the choice made on the page would do more than the
+    /// page said it would.
     ///
     /// # Errors
-    /// If `installed` is malformed, or `kind` is unknown.
+    /// If `installed` is malformed, `chosen` holds something that is not an
+    /// `AppId`, or `kind` is unknown.
     pub fn script(
         &self,
         kind: &str,
         installed: JsValue,
         base_url: &str,
+        chosen: JsValue,
     ) -> Result<String, JsError> {
         let installed: Vec<Installed> =
             serde_wasm_bindgen::from_value(installed).map_err(js_err)?;
-        let plan = plan::build(&self.resolve(), &installed);
+        let mut plan = plan::build(&self.resolve(), &installed);
+        if !chosen.is_undefined() && !chosen.is_null() {
+            let chosen: Vec<String> = serde_wasm_bindgen::from_value(chosen).map_err(js_err)?;
+            let ids = chosen
+                .iter()
+                .map(|id| id.parse::<AppId>())
+                .collect::<Result<std::collections::BTreeSet<_>, _>>()
+                .map_err(js_err)?;
+            plan = plan.only(&ids);
+        }
         let config = ScriptConfig {
             base_url: base_url.to_owned(),
             ..ScriptConfig::default()

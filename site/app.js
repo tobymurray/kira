@@ -65,6 +65,14 @@ const state = {
   plan: null,
   /** Blobs kept from a read-mode scan so Verify can hash without re-picking. */
   blobs: new Map(),
+  /**
+   * AppIDs the user has unticked in the pending list.
+   *
+   * Held as exclusions rather than selections so that everything offered is
+   * ticked by default, and so an app that appears after a re-scan arrives
+   * selected instead of silently sitting out the install.
+   */
+  excluded: new Set(),
 };
 
 // ---------------------------------------------------------------- utilities
@@ -883,7 +891,7 @@ async function installOne(entry) {
 }
 
 async function installAll() {
-  const jobs = actionableJobs();
+  const jobs = selectedJobs();
   if (jobs.length === 0) return;
 
   clearLog();
@@ -913,43 +921,68 @@ async function installAll() {
 // --------------------------------------------------------------------- verify
 
 /**
- * Hash what is actually on the device against the catalogue.
+ * How a verified file reads, and whether it counts against the run.
  *
- * Only meaningful after an eject and reconnect: before that this reads the OS
- * write cache and can report a false OK.
+ * The verdict comes from the planner, which is the only thing that knows both
+ * published hashes. Deriving it here from `app.sha256` alone is what reported
+ * every vendor-built binary on the watch as a mismatch, on a screen that was
+ * simultaneously calling them up to date.
+ */
+const VERDICTS = {
+  match: ['ok', 'ok', false],
+  'vendor-match': ['ok · vendor build', 'ok', false],
+  'other-version': ['OTHER VERSION', 'bad', true],
+  unknown: ['UNRECOGNISED', 'bad', true],
+  corrupt: ['CORRUPT — the watch is ignoring this', 'bad', true],
+  unchecked: ['not read', '', false],
+};
+
+/**
+ * Check what is actually in flash against the catalogue.
+ *
+ * Re-reads the device first rather than trusting the inventory in memory: after
+ * an eject that inventory describes the previous mount, and reading cold flash
+ * is the entire point — before an eject this sees the OS write cache and can
+ * report a false OK.
  */
 async function verifyFlash() {
   clearLog();
   setBusy(true);
-  log('Verifying — this is only trustworthy if you ejected and reconnected the watch.');
-
-  let bad = 0;
-  let checked = 0;
-  for (const entry of state.plan.entries) {
-    const { app, installed } = entry;
-    if (!installed) continue;
-
-    if (installed.file !== app.file) {
-      log(`  [stale   ] ${installed.folder}/${installed.file} (expected ${app.file})`, 'bad');
-      bad++;
-      continue;
+  try {
+    log('Verifying — this is only trustworthy if you ejected and reconnected the watch.');
+    try {
+      await refreshInventory();
+    } catch (err) {
+      // A reconnected volume is usually a new mount, which leaves the stored
+      // handle pointing at nothing. Say so, rather than surfacing the raw
+      // "a requested file or directory could not be found".
+      if (err?.name === 'NotFoundError') {
+        log('The watch was reconnected, so this page is holding a stale handle.', 'bad');
+        log('Press "Re-scan watch" to pick it up again, then verify.', 'bad');
+        return;
+      }
+      throw err;
     }
 
-    const bytes = await readInstalledBytes(installed);
-    checked++;
-    if ((await sha256Hex(bytes)) === app.sha256) {
-      log(`  [ok      ] ${installed.folder}/${installed.file}`, 'ok');
-    } else {
-      log(`  [MISMATCH] ${installed.folder}/${installed.file}`, 'bad');
-      bad++;
+    let bad = 0;
+    let checked = 0;
+    for (const entry of state.plan.entries) {
+      const { installed, verdict } = entry;
+      if (!installed || verdict === 'absent') continue;
+
+      const [text, cls, counts] = VERDICTS[verdict] ?? [verdict, 'bad', true];
+      log(`  [${text}] ${installed.folder}/${installed.file}`, cls);
+      checked++;
+      if (counts) bad++;
     }
+
+    log('');
+    if (checked === 0) log('Nothing from the catalogue is installed yet.');
+    else if (bad === 0) log(`All ${checked} file(s) verified against flash.`, 'ok');
+    else log(`${bad} of ${checked} file(s) failed — re-install, eject, reconnect, verify.`, 'bad');
+  } finally {
+    setBusy(false);
   }
-
-  log('');
-  if (checked === 0) log('Nothing from the catalogue is installed yet.');
-  else if (bad === 0) log(`All ${checked} file(s) match the catalogue.`, 'ok');
-  else log(`${bad} file(s) failed — re-install, eject, reconnect and verify again.`, 'bad');
-  setBusy(false);
 }
 
 // ----------------------------------------------------------------- plan render
@@ -971,6 +1004,27 @@ function actionableJobs() {
         (order.get(a.app.type) ?? 99) - (order.get(b.app.type) ?? 99) ||
         a.app.name.localeCompare(b.app.name),
     );
+}
+
+/** The jobs actually ticked, which is what any install or script must cover. */
+function selectedJobs() {
+  return actionableJobs().filter((e) => !state.excluded.has(e.app.appId));
+}
+
+/**
+ * Set the ticks from a predicate, then re-render.
+ *
+ * "Updates only" exists because installing a new app and updating one already on
+ * the watch are different decisions — the vendor's own script defaults to
+ * update-only for the same reason.
+ */
+function selectJobs(wanted) {
+  state.excluded = new Set(
+    actionableJobs()
+      .filter((e) => !wanted(e))
+      .map((e) => e.app.appId),
+  );
+  renderPlan();
 }
 
 /** Anchor for an app's card, so a plan row can point at it. */
@@ -996,12 +1050,27 @@ function renderPlan() {
     (plan.restamps > 0 ? ` · ${plan.restamps} version-only` : '');
 
   const jobs = actionableJobs();
+  const chosen = selectedJobs();
+  if (jobs.length > 0) list.appendChild(renderSelectors(jobs, chosen));
 
   for (const entry of jobs) {
     const row = document.createElement('div');
     row.className = 'plan-row';
 
+    const tick = document.createElement('input');
+    tick.type = 'checkbox';
+    tick.className = 'pick-job';
+    tick.checked = !state.excluded.has(entry.app.appId);
+    tick.setAttribute('aria-label', `Install ${entry.app.name}`);
+    tick.addEventListener('change', () => {
+      if (tick.checked) state.excluded.delete(entry.app.appId);
+      else state.excluded.add(entry.app.appId);
+      renderPlan();
+    });
+    row.appendChild(tick);
+
     const left = document.createElement('div');
+    left.className = 'plan-main';
     // Links to the card, which is where the version picker, the release history
     // and the provenance for this app live.
     const name = document.createElement('a');
@@ -1049,6 +1118,19 @@ function renderPlan() {
     }
   }
 
+  // Apps in the way of an install, named so the folder clash is fixable. The
+  // planner keys this on the folder, not the id, which is what makes it catch an
+  // app the catalogue has never heard of.
+  for (const entry of plan.entries.filter((e) => e.status === 'folder-taken')) {
+    const warn = document.createElement('p');
+    warn.className = 'note';
+    warn.textContent =
+      `${entry.app.name} cannot be installed: ${entry.describe}. ` +
+      'Installing clears other .uapp files from the folder it writes to, so Kira ' +
+      'will not touch it. Remove that app from the watch if you want this one.';
+    list.appendChild(warn);
+  }
+
   if (plan.foreign.length > 0) {
     const note = document.createElement('p');
     note.className = 'muted';
@@ -1067,11 +1149,14 @@ function renderPlan() {
     return;
   }
 
+  const count = chosen.length;
+  const plural = count === 1 ? '' : 's';
   if (state.mode === 'write') {
     const go = document.createElement('button');
     go.className = 'primary';
     go.type = 'button';
-    go.textContent = `Install ${jobs.length} app${jobs.length === 1 ? '' : 's'}`;
+    go.disabled = count === 0;
+    go.textContent = count === 0 ? 'Nothing selected' : `Install ${count} app${plural}`;
     go.addEventListener('click', () => void installAll());
     actions.appendChild(go);
     el('script-details').hidden = true;
@@ -1082,7 +1167,9 @@ function renderPlan() {
     const go = document.createElement('button');
     go.className = 'primary';
     go.type = 'button';
-    go.textContent = `Download installer for ${jobs.length} app${jobs.length === 1 ? '' : 's'}`;
+    go.disabled = count === 0;
+    go.textContent =
+      count === 0 ? 'Nothing selected' : `Download installer for ${count} app${plural}`;
     go.addEventListener('click', downloadScript);
     actions.appendChild(go);
 
@@ -1102,9 +1189,46 @@ function renderPlan() {
   }
 }
 
+/** The row of quick selectors above the pending list. */
+function renderSelectors(jobs, chosen) {
+  const bar = document.createElement('div');
+  bar.className = 'plan-picks';
+
+  const label = document.createElement('span');
+  label.className = 'muted';
+  label.textContent = `${chosen.length} of ${jobs.length} selected`;
+  bar.appendChild(label);
+
+  // "New" and "Updates" are the split worth offering: adding an app to the watch
+  // is a different decision from moving one already on it forward.
+  const choices = [
+    ['All', () => true],
+    ['Updates only', (e) => e.status !== 'install'],
+    ['New only', (e) => e.status === 'install'],
+    ['None', () => false],
+  ];
+  for (const [text, wanted] of choices) {
+    if (text !== 'All' && text !== 'None' && !jobs.some(wanted)) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'link';
+    button.textContent = text;
+    button.addEventListener('click', () => selectJobs(wanted));
+    bar.appendChild(button);
+  }
+  return bar;
+}
+
 function currentScript() {
   const kind = el('script-kind').value === 'ps1' ? 'powershell' : 'shell';
-  return state.store.script(kind, state.installed, DATA_BASE);
+  // The script has to do what the page says it will, so the selection goes with
+  // it rather than the script quietly covering everything on offer.
+  return state.store.script(
+    kind,
+    state.installed,
+    DATA_BASE,
+    selectedJobs().map((e) => e.app.appId),
+  );
 }
 
 function renderScript() {
@@ -1279,6 +1403,8 @@ function disconnect() {
   state.installed = [];
   state.plan = null;
   state.blobs.clear();
+  // Ticks belong to the watch that was connected, not to the next one.
+  state.excluded.clear();
   el('source').textContent = '';
   el('verify').hidden = true;
   el('forget').hidden = true;

@@ -1,6 +1,7 @@
 //! Diffing a catalogue against a watch, and generating installers for browsers
 //! that cannot write to a removable drive themselves.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
@@ -84,6 +85,41 @@ pub enum Status {
     /// should be recognised and told why, which is more use than either offering
     /// it again or reporting it as something unknown.
     Retired,
+    /// An app Kira does not know about already occupies this on-device folder.
+    ///
+    /// Installing would put a second `.uapp` in a folder the watch resolves by
+    /// taking the first it finds, and the installer clears stale binaries from
+    /// the folder it writes to -- so going ahead would delete somebody's app.
+    /// [`Entry::blocking`] names what is in the way.
+    FolderTaken,
+}
+
+/// What verifying found on the device for one app.
+///
+/// Distinct from [`Status`], which says what *should happen*. This says what *is
+/// there*, which is the question after a write — and the reason it lives here is
+/// that answering it needs both published hashes, not just the one being served.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Verdict {
+    /// Nothing installed, so there is nothing to verify.
+    Absent,
+    /// Byte-identical to what Kira publishes for the selected version.
+    Match,
+    /// The vendor's own binary for this version.
+    ///
+    /// Equivalent, not stale: until the SDK carries the path-independence fix,
+    /// Kira's build of the same source differs byte for byte. Reporting this as a
+    /// mismatch would invite replacing a perfectly good binary.
+    VendorMatch,
+    /// A different version from the one selected.
+    OtherVersion,
+    /// Intact and the right version, but neither published build.
+    Unknown,
+    /// Fails its own CRC, so the watch is silently ignoring it.
+    Corrupt,
+    /// Not hashed, so nothing can be said either way.
+    Unchecked,
 }
 
 /// Which build of a version is on the watch.
@@ -116,9 +152,44 @@ pub struct Entry {
     pub identical_payload: bool,
     /// Which build is installed, when anything is.
     pub recognised: Recognised,
+    /// An app in this one's on-device folder that is not this app.
+    ///
+    /// Keyed on the folder rather than the id, which is the whole point: an app
+    /// Kira has never heard of still occupies the directory an install would
+    /// write into, and the installer clears other `.uapp` files from it.
+    #[serde(default)]
+    pub blocking: Option<Installed>,
 }
 
 impl Entry {
+    /// What is on the device for this app, relative to what Kira published.
+    ///
+    /// Lives here rather than in the page because it needs both published
+    /// hashes: serving Kira's build does not make the vendor's a mismatch.
+    #[must_use]
+    pub fn verdict(&self) -> Verdict {
+        let Some(installed) = &self.installed else {
+            return Verdict::Absent;
+        };
+        // A file the kernel drops is the one case worth reporting before
+        // anything else about it: the app never appears, whatever it contains.
+        if installed.crc_valid == Some(false) {
+            return Verdict::Corrupt;
+        }
+        if installed.sha256.is_none() {
+            return Verdict::Unchecked;
+        }
+        if installed.version != self.app.version {
+            return Verdict::OtherVersion;
+        }
+        match self.recognised {
+            Recognised::KiraBuild => Verdict::Match,
+            Recognised::UpstreamBuild => Verdict::VendorMatch,
+            Recognised::Unrecognised => Verdict::Unknown,
+            Recognised::Unhashed => Verdict::Unchecked,
+        }
+    }
+
     /// Whether this entry would write to the watch.
     ///
     /// A corrupt install counts: the watch is ignoring that file, so replacing it
@@ -154,6 +225,15 @@ impl Entry {
         }
         if self.status == Status::Superseded {
             return "superseded by another app in the same folder".to_owned();
+        }
+        if self.status == Status::FolderTaken {
+            return match &self.blocking {
+                Some(other) => format!(
+                    "Apps/{}/ holds {} {}, which is not in this catalogue",
+                    other.folder, other.name, other.version
+                ),
+                None => "another app already occupies this folder".to_owned(),
+            };
         }
 
         let Some(installed) = &self.installed else {
@@ -210,6 +290,27 @@ impl Plan {
     #[must_use]
     pub fn restamp_count(&self) -> usize {
         self.entries.iter().filter(|e| e.identical_payload).count()
+    }
+
+    /// The same plan with only the chosen apps still actionable.
+    ///
+    /// Written for a user who wants the updates but not the new apps, and it
+    /// applies to the generated installers too: a script that ignored the choice
+    /// made on the page would do more than the page said it would.
+    ///
+    /// Entries that were never actionable are kept as they are — dropping them
+    /// would lose what the plan knows about the rest of the watch.
+    #[must_use]
+    pub fn only(&self, chosen: &BTreeSet<AppId>) -> Self {
+        Self {
+            entries: self
+                .entries
+                .iter()
+                .filter(|entry| !entry.is_actionable() || chosen.contains(&entry.app.app_id))
+                .cloned()
+                .collect(),
+            foreign: self.foreign.clone(),
+        }
     }
 }
 
@@ -270,15 +371,28 @@ fn classify(on_watch: &Installed, target: &Target, recognised: Recognised) -> St
 /// Why this selection is not on offer, if it is not.
 ///
 /// Withdrawal comes first: it is a statement by whoever publishes the app, where
-/// supersession is something Kira worked out about a folder.
-const fn not_offered(target: &Target) -> Option<Status> {
+/// the other two are things Kira worked out — about the catalogue, and about the
+/// device in front of it.
+fn not_offered(target: &Target, blocking: Option<&Installed>) -> Option<Status> {
     if target.retired.is_some() {
         Some(Status::Retired)
     } else if target.superseded_by.is_some() {
         Some(Status::Superseded)
     } else {
-        None
+        blocking.map(|_| Status::FolderTaken)
     }
+}
+
+/// Whatever else is sitting in the folder this target would be written to.
+///
+/// Folder, not id: an app the catalogue has never heard of still owns the
+/// directory, and since installing clears other `.uapp` files from it, going
+/// ahead would delete that app. Nothing else in the planner keys on folders,
+/// which is exactly how this went unnoticed.
+fn occupant<'a>(target: &Target, installed: &'a [Installed]) -> Option<&'a Installed> {
+    installed.iter().find(|other| {
+        other.app_id != target.app_id && other.folder.eq_ignore_ascii_case(&target.folder)
+    })
 }
 
 /// Compare selected versions against what is installed.
@@ -293,13 +407,16 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
         .map(|target| {
             let on_watch = installed.iter().find(|i| i.app_id == target.app_id);
 
+            let blocking = occupant(target, installed);
+
             let Some(on_watch) = on_watch else {
                 return Entry {
                     app: target.clone(),
-                    status: not_offered(target).unwrap_or(Status::Install),
+                    status: not_offered(target, blocking).unwrap_or(Status::Install),
                     installed: None,
                     identical_payload: false,
                     recognised: Recognised::Unhashed,
+                    blocking: blocking.cloned(),
                 };
             };
 
@@ -307,8 +424,8 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
             // Whether it is on offer at all is decided before what state it is
             // in: a withdrawn app that happens to be installed must be named and
             // explained, not reported as up to date or offered as an update.
-            let status =
-                not_offered(target).unwrap_or_else(|| classify(on_watch, target, recognised));
+            let status = not_offered(target, blocking)
+                .unwrap_or_else(|| classify(on_watch, target, recognised));
 
             // Version moved but the code did not. Still offered, since installing
             // changes what the watch reports, but labelled rather than presented
@@ -325,6 +442,7 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
                 installed: Some(on_watch.clone()),
                 identical_payload,
                 recognised,
+                blocking: blocking.cloned(),
             }
         })
         .collect();
@@ -377,6 +495,7 @@ fn job_note(entry: &Entry) -> String {
         Status::Corrupt => "corrupt, reinstalling",
         Status::Superseded => "superseded",
         Status::Retired => "withdrawn",
+        Status::FolderTaken => "folder taken by another app",
     };
     if entry.identical_payload {
         format!("{status}; identical code, version stamp only")
@@ -672,8 +791,17 @@ mod tests {
         let mut on_watch = installed("1.2.0", 1000);
         on_watch.app_id = AppId::new(0x0123_4567_89AB_CDEF);
         let plan = build(&[target("1.3.0")], &[on_watch]);
-        assert_eq!(plan.entries[0].status, Status::Install);
+
+        // Still a separate app, and still foreign: identity is the id, never the
+        // folder name, so this is not an older version of the catalogue entry.
         assert_eq!(plan.foreign.len(), 1);
+        assert_ne!(plan.entries[0].status, Status::Update);
+
+        // But it is in the way. This used to plan a plain Install, which is how a
+        // real watch ended up with the install failing against an old build of the
+        // same app sitting under a placeholder id.
+        assert_eq!(plan.entries[0].status, Status::FolderTaken);
+        assert!(plan.entries[0].blocking.is_some());
     }
 
     #[test]
@@ -858,6 +986,116 @@ mod tests {
         app.retired = Some("the sensor it reads was removed in firmware 2.0".into());
         app.superseded_by = Some(AppId::new(0x8899_AABB_CCDD_EEFF));
         assert_eq!(build(&[app], &[]).entries[0].status, Status::Retired);
+    }
+
+    #[test]
+    fn the_vendors_own_binary_verifies_rather_than_reading_as_a_mismatch() {
+        // Once the store is populated the catalogue serves Kira's build, which
+        // differs byte for byte from the vendor's until the SDK carries the
+        // path-independence fix. A watch loaded from upstream's zip then holds
+        // every app in the "wrong" bytes -- reporting that as a mismatch would
+        // invite replacing binaries that are perfectly good.
+        let mut app = target("1.3.0");
+        app.upstream_sha256 = Some("v".repeat(64));
+
+        let mut on_watch = installed("1.3.0", app.size);
+        on_watch.sha256 = Some("v".repeat(64));
+        on_watch.crc_valid = Some(true);
+
+        let entry = &build(&[app.clone()], &[on_watch]).entries[0];
+        assert_eq!(entry.recognised, Recognised::UpstreamBuild);
+        assert_eq!(entry.verdict(), Verdict::VendorMatch);
+        assert!(!entry.is_actionable(), "nothing to do about it");
+
+        // Kira's own build is the plain match.
+        let mut ours = installed("1.3.0", app.size);
+        ours.sha256 = Some(app.sha256.clone());
+        ours.crc_valid = Some(true);
+        assert_eq!(build(&[app], &[ours]).entries[0].verdict(), Verdict::Match);
+    }
+
+    #[test]
+    fn verifying_separates_the_ways_a_file_can_be_wrong() {
+        let app = target("1.3.0");
+        let verdict = |f: &dyn Fn(&mut Installed)| {
+            let mut on_watch = installed("1.3.0", app.size);
+            on_watch.sha256 = Some(app.sha256.clone());
+            on_watch.crc_valid = Some(true);
+            f(&mut on_watch);
+            build(std::slice::from_ref(&app), &[on_watch]).entries[0].verdict()
+        };
+
+        assert_eq!(verdict(&|i| i.crc_valid = Some(false)), Verdict::Corrupt);
+        assert_eq!(verdict(&|i| i.sha256 = None), Verdict::Unchecked);
+        assert_eq!(
+            verdict(&|i| i.version = "1.2.0".parse().unwrap()),
+            Verdict::OtherVersion
+        );
+        assert_eq!(
+            verdict(&|i| i.sha256 = Some("z".repeat(64))),
+            Verdict::Unknown
+        );
+        assert_eq!(build(&[app], &[]).entries[0].verdict(), Verdict::Absent);
+    }
+
+    #[test]
+    fn an_uncatalogued_app_in_the_folder_blocks_the_install() {
+        // The real case: an older build of the same app under a different AppID,
+        // sitting in the folder the catalogue entry wants. Installing clears
+        // other .uapp files from that folder, so going ahead would delete it.
+        let app = target("1.3.0");
+        let mut squatter = installed("0.0.1", 1234);
+        squatter.app_id = AppId::new(0xDEAD_BEEF_DEAD_BEEF);
+        squatter.name = "Old PoC".into();
+        assert_eq!(squatter.folder, app.folder);
+
+        let plan = build(&[app], &[squatter]);
+        assert_eq!(plan.entries[0].status, Status::FolderTaken);
+        assert_eq!(plan.actionable().count(), 0, "never written over silently");
+        assert_eq!(plan.entries[0].blocking.as_ref().unwrap().name, "Old PoC");
+        assert!(plan.entries[0].describe().contains("not in this catalogue"));
+        // Still reported as foreign, since the catalogue does not know it.
+        assert_eq!(plan.foreign.len(), 1);
+    }
+
+    #[test]
+    fn the_same_app_in_its_own_folder_is_not_a_collision() {
+        let app = target("1.3.0");
+        let plan = build(&[app], &[installed("1.2.0", 100)]);
+        assert_eq!(plan.entries[0].status, Status::Update, "the ordinary case");
+        assert!(plan.entries[0].blocking.is_none());
+    }
+
+    #[test]
+    fn a_partial_selection_reaches_the_generated_installer() {
+        // "Update what is there, but do not add anything new" — the script has to
+        // do what the page said, not everything it could.
+        let mut new_app = target("1.3.0");
+        new_app.app_id = AppId::new(0x1111_2222_3333_4444);
+        new_app.name = "Brand New".into();
+        new_app.folder = "BrandNew".into();
+
+        let existing = target("1.3.0");
+        let plan = build(
+            &[existing.clone(), new_app.clone()],
+            &[installed("1.2.0", 9)],
+        );
+        assert_eq!(plan.actionable().count(), 2);
+
+        let chosen = BTreeSet::from([existing.app_id]);
+        let trimmed = plan.only(&chosen);
+        assert_eq!(trimmed.actionable().count(), 1);
+        assert_eq!(trimmed.actionable().next().unwrap().app.name, "Alarm");
+
+        let script = shell(&trimmed, &ScriptConfig::default());
+        assert!(
+            !script.contains("BrandNew"),
+            "the deselected app must not appear"
+        );
+        assert!(script.contains("Alarm"));
+
+        // Selecting nothing leaves nothing to write.
+        assert_eq!(plan.only(&BTreeSet::new()).actionable().count(), 0);
     }
 
     #[test]
