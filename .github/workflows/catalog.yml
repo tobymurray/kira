@@ -32,7 +32,7 @@ env:
   # Must match what the app-binaries workflow built with: the digest is part of
   # every recipe, so a mismatch means no artifact is found and everything falls
   # back to upstream's binaries.
-  TOOLCHAIN: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
+  TOOLCHAIN: ghcr.io/tobymurray/kira-toolchain@sha256:4d75a70b33b4c4fb8799bed5af2ebb03c9b6eb161ffed3049e316ad996461127
   BINARIES_TAG: app-binaries
 
 concurrency:

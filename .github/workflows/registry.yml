@@ -23,12 +23,13 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   CARGO_TERM_COLOR: always
   # Pinned by digest, so a submission builds under the same compiler as
   # everything else in the catalogue. Keep in step with app-binaries.yml.
-  TOOLCHAIN: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
+  TOOLCHAIN: ghcr.io/tobymurray/kira-toolchain@sha256:4d75a70b33b4c4fb8799bed5af2ebb03c9b6eb161ffed3049e316ad996461127
 
 jobs:
   check:
@@ -109,7 +110,15 @@ jobs:
     needs: check
     if: needs.check.outputs.builds != '0'
     runs-on: ubuntu-latest
-    container: xanderhendriks/stm32cubeide:16.0@sha256:7e07c508e3944def22eaabe822eaf902a2ba4fbb38a3ce24d6ff874f9f04c447
+    container:
+      image: ghcr.io/tobymurray/kira-toolchain@sha256:4d75a70b33b4c4fb8799bed5af2ebb03c9b6eb161ffed3049e316ad996461127
+      # A package published to GHCR starts private. Public is the better end
+      # state -- an image nobody else can pull makes the reproducibility claim
+      # unverifiable from outside -- but authenticating costs nothing and keeps
+      # this working either way.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Install build dependencies
         run: |
