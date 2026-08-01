@@ -612,15 +612,55 @@ pre.notes {
 
 .plan-row {
   display: flex;
-  justify-content: space-between;
+  align-items: baseline;
   gap: 12px;
   padding: 8px 0;
   border-top: 1px solid var(--line);
   font-size: 14px;
 }
 
-.plan-row:first-child {
+.plan-row:first-child,
+.plan-picks + .plan-row {
   border-top: 0;
+}
+
+/* Takes the slack, so the checkbox stays left and the size/download stay right. */
+.plan-row .plan-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.plan-row .pick-job {
+  flex: none;
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+/* Choosing what to install. Not a toolbar: it reads as a caption with verbs. */
+.plan-picks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 8px;
+  font-size: 13px;
+}
+
+.plan-picks button.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.plan-picks button.link:hover {
+  color: var(--ink);
 }
 
 .plan-row .what {
