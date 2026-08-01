@@ -27,7 +27,7 @@ pub(crate) struct Declared {
 ///
 /// Deliberately simplistic: enough for the flat `set(APP_ID "...")` declarations
 /// every app uses, and it ignores anything it does not understand rather than
-/// guessing. A trailing comment is understood, because CMake allows one and an
+/// guessing. A trailing comment is understood, because `CMake` allows one and an
 /// app that carries a note beside its id would otherwise be reported as
 /// declaring no id at all.
 fn cmake_scalars(text: &str) -> BTreeMap<String, String> {
