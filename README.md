@@ -81,9 +81,14 @@ release with the `apps-v*` tag, so all thirteen apps in apps-v1.3.0 report
 `1.3.0` whether or not their code changed — comparing the published binaries,
 six of those thirteen are byte-identical to their apps-v1.2.0 builds.
 
-Kira therefore hashes each version's payload (icons, service and GUI images, with
-the version stamp and CRC footer excluded) and compares it with the next older
-version. Each card says *"code changed in 1.3.0 (+17288 B)"* or *"code unchanged
+Kira therefore hashes each version's payload — the icons, the service image and
+the GUI image — and compares it with the next older version. That is everything
+between the 48-byte header and the CRC footer, so the whole header is out, not
+just the version stamp: the AppID, the LibC ABI version, the type and autostart
+flags, the display name and the icon lengths are all excluded too. Two builds
+that differ only in one of those therefore read as *"same code"*, which is
+accurate about the code and silent about the flag. No pair in the catalogue
+currently differs that way. Each card says *"code changed in 1.3.0 (+17288 B)"* or *"code unchanged
 since 1.2.0"*, and an update that is only a re-stamp is labelled *"version stamp
 only, identical code"* rather than presented as new work. That changelog comes
 from the binaries, not from prose.
@@ -213,8 +218,10 @@ a regression check. CI runs it against the two newest releases.
 
 ### Reproducible builds
 
-Every app Kira serves is built from source by a recipe that pins the SDK
-revision, the toolchain container digest, the stamped version and the flags. See
+Almost every app Kira serves is built from source by a recipe that pins the SDK
+revision, the toolchain container digest, the stamped version and the flags. The
+exceptions carry `origin: "upstream"` — a version Kira has no build for, or whose
+build was refused — and the card calls those the vendor's own build. See
 [docs/reproducibility.md](docs/reproducibility.md) for what that rests on, what
 has been verified, and the weak points — including the fact that reproducibility
 is not authenticity.

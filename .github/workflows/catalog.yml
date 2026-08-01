@@ -1,9 +1,11 @@
 name: Catalogue
 
-# Rebuilds the catalogue from the una-apps releases and publishes the site to
-# GitHub Pages. Apps are not rebuilt here: the UNA SDK's own CI already builds
-# every app in its ARM toolchain container and publishes the binaries as a
-# release asset, so Kira consumes that.
+# Rebuilds the catalogue and publishes the site to GitHub Pages. Nothing is
+# compiled here: app-binaries.yml builds every SDK app and registry.yml builds
+# every submission, both into the app-binaries store, and this run reads that
+# store back. Upstream's own release zips are still downloaded, because a
+# version with no Kira build falls back to the vendor's binary and because their
+# binaries are what `matchesUpstream` is compared against.
 #
 # Every published apps-v* release is included, not just the newest, because
 # upstream offers no way to fetch a specific older build.
