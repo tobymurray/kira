@@ -51,19 +51,22 @@ fn cmake_scalars(text: &str) -> BTreeMap<String, String> {
     found
 }
 
-/// Drop a `#` comment that follows the closing parenthesis.
+/// Drop a `#` comment, keeping any `#` inside a quoted value.
 ///
-/// Only after the last `)`, so a `#` inside a quoted value is left alone.
+/// Cuts at the first unquoted `#` rather than looking after the last `)`, which
+/// an earlier version did and which broke on a comment that itself contained
+/// parentheses -- a real case, and a silent one: the app was then reported as
+/// declaring no id at all.
 fn strip_trailing_comment(line: &str) -> &str {
-    let Some(close) = line.rfind(')') else {
-        return line;
-    };
-    let tail = line[close + 1..].trim_start();
-    if tail.is_empty() || tail.starts_with('#') {
-        line[..=close].trim_end()
-    } else {
-        line
+    let mut quoted = false;
+    for (at, ch) in line.char_indices() {
+        match ch {
+            '"' => quoted = !quoted,
+            '#' if !quoted => return line[..at].trim_end(),
+            _ => {}
+        }
     }
+    line
 }
 
 /// The single `*-CMake` project directory of an app.
@@ -391,6 +394,16 @@ set(APP_ID \"A159B1C005CFD2B7\")           # PoC id; regenerate for a real relea
         assert_eq!(scalars.get("APP_ID").unwrap(), "A159B1C005CFD2B7");
         assert_eq!(scalars.get("APP_TYPE").unwrap(), "Utility");
         assert_eq!(scalars.get("APP_NAME").unwrap(), "RustGuiPoc");
+    }
+
+    #[test]
+    fn a_comment_may_contain_parentheses() {
+        // The real case: an id annotated with how it was derived.
+        let text = "set(APP_ID \"0DA61D462A61222A\")   # sha256(\"https://x/y#z\")[0:8]";
+        assert_eq!(
+            cmake_scalars(text).get("APP_ID").unwrap(),
+            "0DA61D462A61222A"
+        );
     }
 
     #[test]
