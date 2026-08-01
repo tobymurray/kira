@@ -27,11 +27,13 @@ pub(crate) struct Declared {
 ///
 /// Deliberately simplistic: enough for the flat `set(APP_ID "...")` declarations
 /// every app uses, and it ignores anything it does not understand rather than
-/// guessing.
+/// guessing. A trailing comment is understood, because CMake allows one and an
+/// app that carries a note beside its id would otherwise be reported as
+/// declaring no id at all.
 fn cmake_scalars(text: &str) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     for line in text.lines() {
-        let line = line.trim();
+        let line = strip_trailing_comment(line.trim());
         let Some(rest) = line.strip_prefix("set(") else {
             continue;
         };
@@ -47,6 +49,21 @@ fn cmake_scalars(text: &str) -> BTreeMap<String, String> {
         }
     }
     found
+}
+
+/// Drop a `#` comment that follows the closing parenthesis.
+///
+/// Only after the last `)`, so a `#` inside a quoted value is left alone.
+fn strip_trailing_comment(line: &str) -> &str {
+    let Some(close) = line.rfind(')') else {
+        return line;
+    };
+    let tail = line[close + 1..].trim_start();
+    if tail.is_empty() || tail.starts_with('#') {
+        line[..=close].trim_end()
+    } else {
+        line
+    }
 }
 
 /// The single `*-CMake` project directory of an app.
@@ -359,6 +376,28 @@ pub(crate) fn run_build(args: &Args) -> Result<Built> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_note_beside_a_declaration_does_not_hide_it() {
+        // Real case: the Rust GUI proof of concept annotates its placeholder id,
+        // and the parser used to report the app as declaring no id at all.
+        let text = "\
+set(APP_NAME \"RustGuiPoc\")
+set(APP_TYPE \"Utility\")   # a comment
+set(APP_ID \"A159B1C005CFD2B7\")           # PoC id; regenerate for a real release
+# set(APP_ID \"DEADBEEFDEADBEEF\")
+";
+        let scalars = cmake_scalars(text);
+        assert_eq!(scalars.get("APP_ID").unwrap(), "A159B1C005CFD2B7");
+        assert_eq!(scalars.get("APP_TYPE").unwrap(), "Utility");
+        assert_eq!(scalars.get("APP_NAME").unwrap(), "RustGuiPoc");
+    }
+
+    #[test]
+    fn a_hash_inside_a_value_is_not_a_comment() {
+        let scalars = cmake_scalars("set(APP_USER_NAME \"Lap #1\")");
+        assert_eq!(scalars.get("APP_USER_NAME").unwrap(), "Lap #1");
+    }
 
     #[test]
     fn reads_flat_cmake_assignments() {
