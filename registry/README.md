@@ -144,7 +144,9 @@ afterwards stops the whole catalogue build rather than reaching a watch.
   recognised and told why, which is more use than being reported as something
   unknown. The reason is required: a bare flag tells that person nothing.
   Deleting a manifest outright is reserved for cases where the binaries must
-  genuinely stop being served, and is a maintainer's decision.
+  genuinely stop being served — see
+  [Getting an app removed](../SECURITY.md#getting-an-app-removed) for what those
+  are, how to ask, and what removal can and cannot do.
 - **Versions are yours to number.** Unlike UNA's apps, which are all stamped with
   the release tag they shipped in, a submission's version means whatever you
   intend it to mean.
