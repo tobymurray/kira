@@ -295,92 +295,142 @@ function describeEffect(effect) {
  * Rendered as text throughout, never as HTML or parsed Markdown: it is
  * third-party content from another project's releases.
  */
+/**
+ * How many releases stay in view before the rest are folded away.
+ *
+ * Three: the newest, which is the one anybody is deciding about, plus enough to
+ * see whether it is unusual. Past that it is history, and thirteen equal-weight
+ * rows made this the tallest thing on the page.
+ */
+const RELEASES_UPFRONT = 3;
+
+/**
+ * The one-line version of what a release did, for a row that is closed.
+ *
+ * `describeEffect` names the apps, which wraps a closed row onto two lines and
+ * then repeats itself down the page — seven consecutive releases here changed
+ * the very same six apps. Closed, the count is enough; the names are one click
+ * away.
+ */
+function summariseEffect(effect) {
+  const plural = (n) => (n === 1 ? '' : 's');
+  if (effect.changed.length > 0) {
+    return `${effect.changed.length} app${plural(effect.changed.length)} changed`;
+  }
+  if (effect.firstSeen > 0) {
+    return `${effect.firstSeen} app${plural(effect.firstSeen)} first published`;
+  }
+  if (effect.unchanged + effect.unknown > 0) return 'no app code changed';
+  return 'no apps in this release';
+}
+
+function renderRelease(release, open) {
+  const box = document.createElement('details');
+  box.className = 'release';
+  box.open = open;
+
+  const summary = document.createElement('summary');
+  const tag = document.createElement('strong');
+  tag.textContent = release.tag;
+  summary.appendChild(tag);
+  const when = document.createElement('span');
+  when.className = 'muted';
+  const date = release.publishedAt
+    ? new Date(release.publishedAt).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    : 'date unknown';
+  when.textContent =
+    ` ${date}${release.isPrerelease ? ' · pre-release' : ''} · ${summariseEffect(release.effect)}`;
+  summary.appendChild(when);
+  box.appendChild(summary);
+
+  // The full account, naming the apps, once the row is open — it is what the
+  // summary just abbreviated, so it comes first.
+  const effect = document.createElement('p');
+  effect.className = 'muted release-effect';
+  effect.textContent = describeEffect(release.effect);
+  box.appendChild(effect);
+
+  const { changes } = release;
+  if (changes.shipped.length > 0) {
+    box.appendChild(heading('Changes that reach the watch'));
+    box.appendChild(renderChanges(changes.shipped));
+  }
+
+  if (changes.other.length > 0) {
+    const rest = document.createElement('details');
+    rest.className = 'other';
+    const restSummary = document.createElement('summary');
+    restSummary.textContent = `Docs, simulator and tooling (${changes.other.length})`;
+    rest.appendChild(restSummary);
+    rest.appendChild(renderChanges(changes.other));
+    box.appendChild(rest);
+  }
+
+  if (changes.prose.length > 0) {
+    const extra = document.createElement('p');
+    extra.className = 'muted';
+    extra.textContent = changes.prose.join(' ');
+    box.appendChild(extra);
+  }
+
+  if (changes.shipped.length === 0 && changes.other.length === 0) {
+    const none = document.createElement('p');
+    none.className = 'muted';
+    none.textContent = 'No release notes published upstream.';
+    box.appendChild(none);
+  }
+
+  const footer = document.createElement('div');
+  footer.className = 'release-foot';
+  if (release.notes) {
+    const verbatim = document.createElement('details');
+    const vs = document.createElement('summary');
+    vs.textContent = 'Upstream notes, verbatim';
+    verbatim.appendChild(vs);
+    const body = document.createElement('pre');
+    body.className = 'notes';
+    body.textContent = release.notes;
+    verbatim.appendChild(body);
+    footer.appendChild(verbatim);
+  }
+  if (release.url) {
+    const link = document.createElement('a');
+    link.className = 'dl';
+    link.href = release.url;
+    link.rel = 'noopener noreferrer';
+    link.target = '_blank';
+    link.textContent = 'Upstream release →';
+    footer.appendChild(link);
+  }
+  box.appendChild(footer);
+
+  return box;
+}
+
 function renderReleaseNotes() {
   const root = el('release-notes');
   root.textContent = '';
 
   const releases = state.store.releases();
-  releases.forEach((release, index) => {
+  const upfront = releases.slice(0, RELEASES_UPFRONT);
+  const older = releases.slice(RELEASES_UPFRONT);
+
+  // Only the newest starts open; the two behind it are context, not reading.
+  upfront.forEach((release, index) => root.appendChild(renderRelease(release, index === 0)));
+
+  if (older.length > 0) {
     const box = document.createElement('details');
-    box.className = 'release';
-    // The newest release is the one anybody is deciding about; the rest are
-    // history and stay folded.
-    box.open = index === 0;
-
+    box.className = 'older-releases';
     const summary = document.createElement('summary');
-    const tag = document.createElement('strong');
-    tag.textContent = release.tag;
-    summary.appendChild(tag);
-    const when = document.createElement('span');
-    when.className = 'muted';
-    const date = release.publishedAt
-      ? new Date(release.publishedAt).toLocaleDateString(undefined, {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-        })
-      : 'date unknown';
-    when.textContent =
-      ` ${date}${release.isPrerelease ? ' · pre-release' : ''} · ${describeEffect(release.effect)}`;
-    summary.appendChild(when);
+    summary.textContent = `${older.length} older release${older.length === 1 ? '' : 's'}`;
     box.appendChild(summary);
-
-    const { changes } = release;
-    if (changes.shipped.length > 0) {
-      box.appendChild(heading('Changes that reach the watch'));
-      box.appendChild(renderChanges(changes.shipped));
-    }
-
-    if (changes.other.length > 0) {
-      const rest = document.createElement('details');
-      rest.className = 'other';
-      const restSummary = document.createElement('summary');
-      restSummary.textContent = `Docs, simulator and tooling (${changes.other.length})`;
-      rest.appendChild(restSummary);
-      rest.appendChild(renderChanges(changes.other));
-      box.appendChild(rest);
-    }
-
-    if (changes.prose.length > 0) {
-      const extra = document.createElement('p');
-      extra.className = 'muted';
-      extra.textContent = changes.prose.join(' ');
-      box.appendChild(extra);
-    }
-
-    if (changes.shipped.length === 0 && changes.other.length === 0) {
-      const none = document.createElement('p');
-      none.className = 'muted';
-      none.textContent = 'No release notes published upstream.';
-      box.appendChild(none);
-    }
-
-    const footer = document.createElement('div');
-    footer.className = 'release-foot';
-    if (release.notes) {
-      const verbatim = document.createElement('details');
-      const vs = document.createElement('summary');
-      vs.textContent = 'Upstream notes, verbatim';
-      verbatim.appendChild(vs);
-      const body = document.createElement('pre');
-      body.className = 'notes';
-      body.textContent = release.notes;
-      verbatim.appendChild(body);
-      footer.appendChild(verbatim);
-    }
-    if (release.url) {
-      const link = document.createElement('a');
-      link.className = 'dl';
-      link.href = release.url;
-      link.rel = 'noopener noreferrer';
-      link.target = '_blank';
-      link.textContent = 'Upstream release →';
-      footer.appendChild(link);
-    }
-    box.appendChild(footer);
-
+    for (const release of older) box.appendChild(renderRelease(release, false));
     root.appendChild(box);
-  });
+  }
 }
 
 function heading(text) {

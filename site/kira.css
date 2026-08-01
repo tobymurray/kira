@@ -346,15 +346,22 @@ button.ghost:hover:not(:disabled),
 }
 
 /* An invitation, not a warning — dashed and quiet, so it reads as an empty slot
-   at the end of the catalogue rather than something gone wrong. */
+   at the end of the catalogue rather than something gone wrong.
+
+   Centred, and centred within itself: left-aligned it read as a stray note
+   pinned to one corner of a much wider panel, with the 78ch cap wrapping it
+   raggedly against all that empty space. `balance` evens the lines out so the
+   last one is not a lone orphan word. */
 .submit-cta {
-  margin: 26px 0 0;
-  padding: 12px 14px;
+  margin: 26px auto 0;
+  padding: 16px 18px;
   border: 1px dashed var(--line);
   border-radius: var(--radius);
   font-size: 13px;
   color: var(--ink-soft);
   max-width: 78ch;
+  text-align: center;
+  text-wrap: balance;
 }
 
 .submit-cta strong {
@@ -531,6 +538,32 @@ details.release > summary {
 
 details.release > summary .muted {
   font-size: 13px;
+}
+
+/* The full effect line, which the closed summary abbreviates to a count. */
+.release-effect {
+  margin: 6px 0 0;
+}
+
+/* Everything past the first few releases. Reads as one row until opened, so
+   thirteen releases cost about the height of four. */
+details.older-releases {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+details.older-releases > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* The first release inside the fold would otherwise lose its rule to the
+   :first-of-type above and sit flush against the summary. */
+details.older-releases details.release:first-of-type {
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
 }
 
 .changes-head {
