@@ -87,7 +87,7 @@ the old ones to where they actually lived.
 | A published version's `subdir` never changes | The path is part of the recipe. Moving an app is fine; rewriting where an old version came from is not. |
 | `licence` is a recognised open licence | Source-accessible is the premise. If yours is missing from the list, add it in the same pull request. |
 | A published version's `rev` never changes | Somebody's watch may be carrying it. Change anything by publishing a new version. |
-| A manifest is retired, not deleted | An app that vanishes leaves every watch carrying it holding something the catalogue cannot name. |
+| A manifest is retired, not deleted, once published | An app that vanishes leaves every watch carrying it holding something the catalogue cannot name. A submission that never reached the catalogue can simply be withdrawn. |
 
 CI then fetches exactly that commit, builds it, and checks the result against what
 your own `CMakeLists.txt` declares: `AppID`, type, version, and the `.uapp`'s CRC.

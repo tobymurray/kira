@@ -410,11 +410,21 @@ pub(crate) fn validate(
 /// A version's source is fixed once it ships: changing the commit under a version
 /// already on someone's watch would make the published hash describe bytes nobody
 /// can rebuild. New versions are the way to change anything.
-pub(crate) fn check_unchanged(before: &[Manifest], after: &[Manifest]) -> Vec<Problem> {
+pub(crate) fn check_unchanged(
+    before: &[Manifest],
+    after: &[Manifest],
+    published: &BTreeMap<AppId, String>,
+) -> Vec<Problem> {
     let mut problems = Vec::new();
     let index: BTreeMap<&str, &Manifest> = after.iter().map(|m| (m.slug.as_str(), m)).collect();
 
     for old in before {
+        // Nothing to protect: this app has never reached the catalogue, so no
+        // watch can be carrying it and no published hash describes it. Accepting
+        // a manifest is not the same as having published it.
+        if !published.contains_key(&old.app_id) {
+            continue;
+        }
         let Some(new) = index.get(old.slug.as_str()) else {
             problems.push(Problem {
                 slug: old.slug.clone(),
@@ -571,6 +581,11 @@ sdk_rev = "apps-v1.3.0"
         parse("tide-clock", GOOD).unwrap()
     }
 
+    /// The catalogue already carrying the example app.
+    fn live() -> BTreeMap<AppId, String> {
+        BTreeMap::from([(good().app_id, "Tide Clock".to_owned())])
+    }
+
     fn checked(manifest: &Manifest) -> Vec<String> {
         let mut problems = Vec::new();
         check_one(manifest, &mut problems);
@@ -708,7 +723,7 @@ sdk_rev = "apps-v1.3.0"
         let before = vec![good()];
         let mut after = good();
         after.versions[0].rev = "0".repeat(40);
-        let problems = check_unchanged(&before, &[after]);
+        let problems = check_unchanged(&before, &[after], &live());
         assert_eq!(problems.len(), 1);
         assert!(problems[0].message.contains("publish a new version"));
     }
@@ -724,11 +739,11 @@ sdk_rev = "apps-v1.3.0"
             subdir: None,
             retired: None,
         });
-        assert!(check_unchanged(&before, &[after]).is_empty());
+        assert!(check_unchanged(&before, &[after], &live()).is_empty());
 
         let mut emptied = good();
         emptied.versions.clear();
-        let problems = check_unchanged(&before, &[emptied]);
+        let problems = check_unchanged(&before, &[emptied], &live());
         assert!(problems.iter().any(|p| p.message.contains("was removed")));
     }
 
@@ -736,7 +751,7 @@ sdk_rev = "apps-v1.3.0"
     fn a_manifest_cannot_be_deleted_or_have_its_identity_swapped() {
         let before = vec![good()];
         assert!(
-            check_unchanged(&before, &[])[0]
+            check_unchanged(&before, &[], &live())[0]
                 .message
                 .contains("was removed")
         );
@@ -744,7 +759,7 @@ sdk_rev = "apps-v1.3.0"
         let mut after = good();
         after.app_id = AppId::new(0xDEAD_BEEF_DEAD_BEEF);
         assert!(
-            check_unchanged(&before, &[after])
+            check_unchanged(&before, &[after], &live())
                 .iter()
                 .any(|p| p.message.contains("different app"))
         );
@@ -757,7 +772,7 @@ sdk_rev = "apps-v1.3.0"
         let before = vec![good()];
         let mut moved = good();
         moved.subdir = "apps/tide-clock".into();
-        let problems = check_unchanged(&before, &[moved]);
+        let problems = check_unchanged(&before, &[moved], &live());
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].message.contains("if the app moved"));
 
@@ -772,7 +787,7 @@ sdk_rev = "apps-v1.3.0"
             subdir: None,
             retired: None,
         });
-        assert!(check_unchanged(&before, &[after.clone()]).is_empty());
+        assert!(check_unchanged(&before, &[after.clone()], &live()).is_empty());
 
         // And each version builds from where it actually lived.
         let items = wanted(&[after], "sha256:abc");
@@ -794,7 +809,7 @@ sdk_rev = "apps-v1.3.0"
         // Withdrawing the app is an accepted change, unlike deleting it.
         let mut retired = good();
         retired.retired = Some("superseded by the Tide Clock 2 app".into());
-        assert!(check_unchanged(&before, &[retired.clone()]).is_empty());
+        assert!(check_unchanged(&before, &[retired.clone()], &live()).is_empty());
         assert_eq!(
             retired.retired_for(&retired.versions[0]),
             Some("superseded by the Tide Clock 2 app")
@@ -802,7 +817,7 @@ sdk_rev = "apps-v1.3.0"
 
         // Deleting it is still refused, so a watch carrying it stays nameable.
         assert!(
-            check_unchanged(&before, &[])[0]
+            check_unchanged(&before, &[], &live())[0]
                 .message
                 .contains("was removed")
         );
@@ -840,6 +855,22 @@ sdk_rev = "apps-v1.3.0"
         let mut manifest = good();
         manifest.retired = Some("the sensor it reads was removed in firmware 2.0".into());
         assert!(checked(&manifest).is_empty());
+    }
+
+    #[test]
+    fn an_app_that_never_reached_the_catalogue_can_be_withdrawn_outright() {
+        // Accepting a submission is not publishing it. Until an app is in the
+        // catalogue there is no watch carrying it and no hash describing it, so
+        // taking the manifest back out again costs nobody anything.
+        let before = vec![good()];
+        assert!(check_unchanged(&before, &[], &BTreeMap::new()).is_empty());
+
+        // Once published, it has to be retired instead.
+        assert!(
+            check_unchanged(&before, &[], &live())[0]
+                .message
+                .contains("was removed")
+        );
     }
 
     #[test]

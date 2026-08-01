@@ -273,6 +273,7 @@ fn run_registry(command: RegistryCommand) -> Result<()> {
                 problems.extend(registry::check_unchanged(
                     &registry::load_dir(base)?,
                     &manifests,
+                    &ids,
                 ));
             }
 
