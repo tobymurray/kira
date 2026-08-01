@@ -648,14 +648,25 @@ pub fn shell(plan: &Plan, config: &ScriptConfig) -> String {
         let _ = write!(
             out,
             "\n# {} {} ({})\n\
-             folder={}; file={}; sha={}\n\
+             folder={}; file={}; sha={}; size={}\n\
              echo \"  downloading $folder/$file\"\n\
              curl -fsSL \"$BASE_URL/{}\" -o \"$TMP/$file\"\n\
              got=$(sha256_of \"$TMP/$file\")\n\
              if [ \"$got\" != \"$sha\" ]; then echo \"$file: SHA-256 mismatch (expected $sha, got $got)\" >&2; exit 1; fi\n\
              mkdir -p \"$APPS/$folder\"\n\
              cp \"$TMP/$file\" \"$APPS/$folder/$file\"\n\
-             # New binary is in place, so stale .uapp files can go. The watch loads the\n\
+             # Read it back before deleting anything. cp exiting 0 does not mean the\n\
+             # bytes reached a removable FAT volume intact, and a .uapp that fails CRC\n\
+             # is dropped SILENTLY by the watch -- so a short write here, followed by\n\
+             # removing the working old binary, loses the app with no error anywhere.\n\
+             # This is the check the PowerShell installer has always done.\n\
+             wrote=$(wc -c < \"$APPS/$folder/$file\" | tr -d ' ')\n\
+             if [ \"$wrote\" != \"$size\" ]; then\n\
+             \x20 rm -f \"$APPS/$folder/$file\"\n\
+             \x20 echo \"$file: short write ($wrote/$size bytes); removed it, left the old binary alone\" >&2\n\
+             \x20 exit 1\n\
+             fi\n\
+             # Only now is it safe to remove stale .uapp files. The watch loads the\n\
              # FIRST .uapp in a folder, so leaving two can boot the old one.\n\
              for old in \"$APPS/$folder\"/*.uapp; do\n\
              \x20 [ -e \"$old\" ] || continue\n\
@@ -668,6 +679,7 @@ pub fn shell(plan: &Plan, config: &ScriptConfig) -> String {
             sh_quote(&app.folder),
             sh_quote(&app.file),
             sh_quote(&app.sha256),
+            app.size,
             app.download,
         );
     }
@@ -1152,6 +1164,30 @@ mod tests {
         assert!(script.contains("MOUNT=\"${1:-}\""));
         assert!(script.contains("Could not find a mounted volume"));
         assert!(powershell(&plan, &config()).contains("FileSystemLabel -eq $Label"));
+    }
+
+    #[test]
+    fn both_scripts_read_the_file_back_before_deleting_anything() {
+        // `cp` exiting 0 says nothing about whether the bytes reached a removable
+        // FAT volume, and a .uapp that fails CRC is dropped silently by the watch.
+        // Deleting the working old binary on the strength of a successful copy is
+        // how an app disappears with no error anywhere. PowerShell always checked;
+        // the shell script went straight from cp to rm.
+        let plan = build(&[target("1.3.0")], &[installed("1.2.0", 100)]);
+        let config = ScriptConfig::default();
+
+        let sh = shell(&plan, &config);
+        let copy = sh.find("cp \"$TMP/$file\"").expect("the shell script copies");
+        let check = sh.find("$wrote").expect("the shell script reads it back");
+        let remove = sh.find("removed stale").expect("the shell script clears stale files");
+        assert!(copy < check, "the read-back must come after the copy");
+        assert!(check < remove, "nothing may be deleted before the read-back");
+        assert!(sh.contains("size="), "the expected length has to reach the script");
+
+        let ps = powershell(&plan, &config);
+        let copy = ps.find("::Copy(").expect("powershell copies");
+        let check = ps.find(".Length -ne").expect("powershell reads it back");
+        assert!(copy < check);
     }
 
     #[test]
