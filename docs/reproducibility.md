@@ -144,3 +144,30 @@ kira build-app \
 Run it inside that container image, then compare `sha256sum` against the
 `sha256` the catalogue records for that version. Every input above is published
 in the catalogue's `builtFrom` for exactly this purpose.
+
+## The toolchain image
+
+Every binary is compiled in one container, pinned by digest, built from
+[`toolchain/Dockerfile`](../toolchain/Dockerfile) and published to
+`ghcr.io/tobymurray/kira-toolchain`.
+
+Kira used to point at a third party's image tag directly. Owning it fixes two
+things. Reproducibility no longer depends on someone else's tag staying
+available — the recipe names a digest in a registry this project controls, and
+the Dockerfile that produced it is in this repository. And an app needing a tool
+the image lacks can now be accommodated by adding it to the image rather than
+installing it inside the build job, which would leave the recipe's toolchain
+digest describing something other than what actually compiled the binary.
+
+It carries the ARM toolchain, CMake, Python for the app packer, and a pinned Rust
+with the `thumbv8m.main-none-eabihf` and `thumbv7em-none-eabihf` targets, because
+an app's sources are not necessarily all C.
+
+**Changing the image changes every recipe key**, so the next run rebuilds every
+artifact under a new identity. That is the intended behaviour: a different
+compiler is a different build, and the alternative is a cache that mixes them.
+
+One gap remains. Cargo fetches a crate's dependencies from the network, so they
+are not in the image. `Cargo.lock` pins each to an exact version and checksum, so
+the fetch is deterministic — but only for an app that commits its lock file. An
+app that does not is not reproducible here, whatever the image does.
