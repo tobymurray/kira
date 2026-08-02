@@ -298,11 +298,14 @@ issued the certificate.
 - **The WebAssembly module is ~58 kB gzipped** (152 kB raw), which is more than
   the JavaScript it replaced. The trade is one implementation instead of two.
   See [Module size](#module-size) before trying to shrink it further.
-- **No signing.** Integrity is SHA-256 (against this catalogue) plus the `.uapp`
-  CRC-32. That protects against corruption and truncation, not against a
-  malicious publisher — the hashes live in the same repository as the artifacts
-  they describe. Kira offers provenance and integrity, not authenticity, and
-  claims no review of the apps themselves.
+- **No signing of the apps themselves.** Integrity is SHA-256 (against this
+  catalogue) plus the `.uapp` CRC-32, which catches corruption and truncation,
+  not a malicious publisher. Every binary in the store does carry a GitHub
+  build-provenance attestation — `gh attestation verify <file> --repo
+  tobymurray/kira` — so it can be tied to the workflow run that produced it
+  without trusting this repository. That is still not authenticity: it says which
+  build emitted the bytes, not that the source was benign, and nothing here
+  reviews code.
 - **The kernel version cannot be checked over USB.** An app's `minKernelVersion`
   is a BLE/DIS check in the official mobile app. Kira surfaces the LibC ABI
   version from the header instead; matching it to your firmware is up to you.

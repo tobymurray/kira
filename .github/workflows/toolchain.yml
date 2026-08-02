@@ -55,6 +55,14 @@ jobs:
           load: true
           tags: ${{ env.IMAGE }}:latest
           # Reproducible-ish: a fixed source date keeps layer metadata stable.
+          #
+          # Off deliberately, and not the same gap as the artifacts have. Turning
+          # it on attaches a provenance manifest, which changes the image index
+          # digest -- and that digest is part of every recipe key, so every stored
+          # artifact would be orphaned and every app in every release rebuilt, in
+          # order to attest an image whose digest the recipes already pin. The
+          # `.uapp` files are attested instead, where the claim is about bytes
+          # nobody could otherwise trace back to a build.
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
