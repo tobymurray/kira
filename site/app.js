@@ -90,6 +90,20 @@ function detectScriptKind() {
   return /windows/i.test(navigator.userAgent) ? 'ps1' : 'sh';
 }
 
+/**
+ * How to eject, in the words of whatever they are running.
+ *
+ * Same signal as detectScriptKind(): `navigator.platform` is deprecated but is
+ * the one that actually answers in the browsers this has to serve.
+ */
+function ejectHint() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || '';
+  if (/^win/i.test(platform)) return 'right-click the drive → Eject, or Safely Remove Hardware';
+  if (/mac/i.test(platform)) return 'Finder → the eject arrow, or `diskutil eject "UNA WATCH"`';
+  if (/linux/i.test(platform)) return '`udisksctl unmount -b /dev/…`, or eject it in your file manager';
+  return "your file manager's eject or unmount — not just unplugging it";
+}
+
 const state = {
   /** Rust-side catalogue and version pins. */
   store: null,
@@ -1064,17 +1078,67 @@ async function installAll() {
 
   log('');
   log(
-    failed === 0 ? `${jobs.length} app(s) written.` : `${failed} of ${jobs.length} failed.`,
+    failed === 0
+      ? `${jobs.length} app(s) handed to the operating system.`
+      : `${failed} of ${jobs.length} failed.`,
     failed === 0 ? 'ok' : 'bad',
   );
-  log('NEXT: eject the watch, reconnect it, then press "Verify flash".');
-  log('Then reboot the watch — the launcher list is rebuilt only at boot.');
+  // "Written" here means the bytes reached the operating system, which is all a
+  // page can know. On a removable FAT volume they can sit in the write cache
+  // until the drive is ejected -- pull the cable instead and the watch still
+  // boots the old binary, with nothing anywhere reporting a problem. So the
+  // eject is not tidiness after the install; it is the last step *of* it, and
+  // saying "written" without saying so is how an install silently does nothing.
+  if (failed === 0) {
+    log('');
+    log('NOT DONE YET — the bytes are in the operating system, not in flash.', 'bad');
+    log(`  1. Eject the drive: ${ejectHint()}`, 'bad');
+    log('     Not "Forget this watch" here, and not unplugging it — those skip the flush.');
+    log('  2. Reconnect it, then press "Verify flash".');
+    log('  3. Reboot the watch. The launcher list is only rebuilt at boot.');
+  }
 
   await refreshInventory();
   setBusy(false);
 }
 
 // --------------------------------------------------------------------- verify
+
+/**
+ * Re-read the device, recovering from a handle that a reconnect invalidated.
+ *
+ * A reconnected volume is usually a new mount, so the stored handle resolves to
+ * nothing — which is exactly the state the page instructs you into, since it
+ * tells you to eject and reconnect before verifying. Telling you to go and press
+ * another button was better than the raw DOM error it replaced, but it is still
+ * two clicks to do the thing you already asked for. Verify is itself a click, so
+ * the activation the directory picker needs is normally still alive here.
+ *
+ * Returns false when the device could not be read and the reason has been logged.
+ */
+async function readDeviceForVerify() {
+  try {
+    await refreshInventory();
+    return true;
+  } catch (err) {
+    if (err?.name !== 'NotFoundError') throw err;
+  }
+
+  log('The watch was reconnected, so the stored handle no longer resolves.');
+  log('Pick the drive again to carry on.');
+  try {
+    if (!(await connectWithPicker())) {
+      log('Cancelled — press "Re-scan watch" when ready, then verify.', 'bad');
+      return false;
+    }
+  } catch (err) {
+    log(`Could not re-open it: ${err.message}`, 'bad');
+    log('Press "Re-scan watch" to pick it up again, then verify.', 'bad');
+    return false;
+  }
+  // connectWithPicker() re-scans through useRoot(), so the plan is already fresh.
+  return true;
+}
 
 /**
  * How a verified file reads, and whether it counts against the run.
@@ -1118,36 +1182,44 @@ async function verifyFlash() {
     }
 
     log('Verifying — this is only trustworthy if you ejected and reconnected the watch.');
-    try {
-      await refreshInventory();
-    } catch (err) {
-      // A reconnected volume is usually a new mount, which leaves the stored
-      // handle pointing at nothing. Say so, rather than surfacing the raw
-      // "a requested file or directory could not be found".
-      if (err?.name === 'NotFoundError') {
-        log('The watch was reconnected, so this page is holding a stale handle.', 'bad');
-        log('Press "Re-scan watch" to pick it up again, then verify.', 'bad');
-        return;
-      }
-      throw err;
-    }
+    if (!(await readDeviceForVerify())) return;
 
     let bad = 0;
+    let stale = 0;
     let checked = 0;
     for (const entry of state.plan.entries) {
       const { installed, verdict } = entry;
       if (!installed || verdict === 'absent') continue;
 
+      checked++;
+      if (verdict === 'other-version') {
+        // Worth naming both versions rather than saying "other": this is the
+        // line that tells you an install did not reach flash, and "0.1.0 on the
+        // watch, 0.2.0 selected" says that where "OTHER VERSION" does not.
+        stale++;
+        log(
+          `  [${entry.installed.version} on watch, ${entry.app.version} selected] ` +
+            `${installed.folder}/${installed.file}`,
+          'bad',
+        );
+        continue;
+      }
       const [text, cls, counts] = VERDICTS[verdict] ?? [verdict, 'bad', true];
       log(`  [${text}] ${installed.folder}/${installed.file}`, cls);
-      checked++;
       if (counts) bad++;
     }
 
     log('');
     if (checked === 0) log('Nothing from the catalogue is installed yet.');
-    else if (bad === 0) log(`All ${checked} file(s) verified against flash.`, 'ok');
-    else log(`${bad} of ${checked} file(s) failed — re-install, eject, reconnect, verify.`, 'bad');
+    else if (bad === 0 && stale === 0) log(`All ${checked} file(s) verified against flash.`, 'ok');
+    if (stale > 0) {
+      log(
+        `${stale} app(s) are not the version selected. If you have just installed them, ` +
+          'the write did not reach flash — eject the drive properly and install again.',
+        'bad',
+      );
+    }
+    if (bad > 0) log(`${bad} file(s) failed — re-install, eject, reconnect, verify.`, 'bad');
   } finally {
     setBusy(false);
   }
@@ -1479,15 +1551,17 @@ async function useRoot(root) {
   log(`Found ${state.installed.length} installed app(s) in Apps/.`);
 }
 
+/** Returns false when the picker was dismissed rather than a folder chosen. */
 async function connectWithPicker() {
   let root;
   try {
     root = await window.showDirectoryPicker({ id: 'una-watch', mode: 'readwrite' });
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError') return false;
     throw err;
   }
   await useRoot(root);
+  return true;
 }
 
 /**

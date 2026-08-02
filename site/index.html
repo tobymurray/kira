@@ -99,7 +99,14 @@
               </label>
 
               <button id="verify" class="ghost" type="button" hidden>Verify flash</button>
-              <button id="forget" class="ghost" type="button" hidden>Disconnect</button>
+              <!-- Named for what it does. "Disconnect" read like ejecting the drive,
+                   which it has never done -- it forgets the folder and the stored
+                   permission, and a user who pressed it and then pulled the cable
+                   lost the writes still sitting in the cache. -->
+              <button id="forget" class="ghost" type="button" hidden
+                title="Forgets this watch in the browser. It does not eject the drive — do that in your file manager.">
+                Forget this watch
+              </button>
             </div>
 
             <p id="readonly-note" class="note" hidden>
