@@ -7,6 +7,19 @@ folder     = "Barcode"
 licence    = "MIT"
 maintainer = "tobymurray"
 
+# The app reads its athlete id out of a file in its own folder, because the watch
+# has no keyboard to type one on. Kira fills that file in over USB. The app owns
+# the name, the schema number and the key; it validates the value again itself.
+[config]
+file   = "input.json"
+schema = 1
+
+[[config.fields]]
+path      = "values.id"
+title     = "Athlete id"
+help      = "The characters printed under the barcode on your parkrun card, e.g. A1234567."
+maxLength = 16
+
 [[versions]]
 version = "0.1.0"
 rev     = "2c0d6d89210ac51f91fef4fdf11c7a25cd8c8d94"

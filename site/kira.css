@@ -441,6 +441,106 @@ button.ghost:hover:not(:disabled),
   color: var(--accent);
 }
 
+/* Settings an app declares it reads from its own folder. Collapsed by default:
+   almost no app has any, and the ones that do are asking for something their
+   owner has to go and look up. */
+details.config {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+details.config > summary {
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+details.config > summary:hover {
+  color: var(--accent);
+}
+
+details.config .meta {
+  margin: 6px 0;
+}
+
+.config-field {
+  display: block;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.config-field > span {
+  display: block;
+  color: var(--ink-soft);
+}
+
+.config-field input {
+  display: block;
+  width: 100%;
+  margin-top: 3px;
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 13px;
+  /* An id gets read back character by character off a card or a screen, so the
+     unambiguous shapes are worth it. */
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.config-field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.config-field input:disabled {
+  color: var(--ink-soft);
+  cursor: not-allowed;
+}
+
+.config-help {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+button.config-save {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+button.config-save:hover:enabled {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.config-save:disabled {
+  color: var(--ink-soft);
+  cursor: not-allowed;
+}
+
+.config-status:empty {
+  display: none;
+}
+
+.config-status.ok {
+  color: var(--ok);
+}
+
+.config-status.bad {
+  color: var(--bad);
+}
+
 details.archive {
   margin-top: 26px;
   padding-top: 20px;

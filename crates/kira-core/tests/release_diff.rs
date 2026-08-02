@@ -126,6 +126,7 @@ fn catalog_from(fixtures: &[Fixture], tag: &str) -> Catalog {
                 icon_small: None,
                 superseded_by: None,
                 publisher: None,
+                config: None,
                 retired: None,
             }
         })

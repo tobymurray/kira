@@ -123,6 +123,16 @@ pub(crate) struct Manifest {
     pub maintainer: String,
     /// Every version to publish, in any order.
     pub versions: Vec<Entry>,
+    /// A settings file the app reads from its own folder on the watch.
+    ///
+    /// Everything else in the catalogue is derived from a binary Kira built
+    /// itself. This cannot be: nothing in a `.uapp` says what it reads. So it is
+    /// the submitter's word, and it is the one claim the page *acts* on rather
+    /// than merely displays — it names a file written to somebody's watch.
+    /// Checked by [`kira_core::config::check_spec`] on every catalogue build,
+    /// not only when the pull request was reviewed.
+    #[serde(default)]
+    pub config: Option<kira_core::config::Spec>,
     /// Why the whole app was withdrawn, if it was.
     ///
     /// This is how a listing comes down. Deleting the manifest is not: an app
@@ -264,6 +274,15 @@ fn check_one(manifest: &Manifest, problems: &mut Vec<Problem>) {
                 "subdir {subdir:?} must be a relative path inside the repository"
             ));
         }
+    }
+
+    // The one declaration that is acted on rather than displayed: it names a
+    // file the page writes into somebody's watch. Re-checked on every catalogue
+    // build, so tightening the rules later catches manifests already merged.
+    if let Some(config) = &manifest.config
+        && let Err(problem) = kira_core::config::check_spec(config)
+    {
+        say(format!("config: {problem}"));
     }
 
     check_folder(manifest, &mut say);
@@ -838,6 +857,52 @@ sdk_rev = "apps-v1.3.0"
         emptied.versions.clear();
         let problems = check_unchanged(&before, &[emptied], &live());
         assert!(problems.iter().any(|p| p.message.contains("was removed")));
+    }
+
+    /// A settings declaration is optional, and most manifests have none.
+    #[test]
+    fn a_manifest_without_settings_is_still_valid() {
+        assert!(good().config.is_none());
+        assert!(checked(&good()).is_empty());
+    }
+
+    /// The declaration names a file the page writes to a device, so a manifest
+    /// that would send it outside the app's own folder has to fail the same
+    /// check that everything else does — and fail it on every build, not only
+    /// on the pull request that introduced it.
+    #[test]
+    fn a_settings_file_that_escapes_the_app_folder_is_refused() {
+        let manifest = parse(
+            "tide-clock",
+            &GOOD.replace(
+                "[[versions]]",
+                "[config]\nfile = \"../../../evil.json\"\nschema = 1\n\n\
+                 [[config.fields]]\npath = \"values.id\"\ntitle = \"Id\"\nmaxLength = 8\n\n\
+                 [[versions]]",
+            ),
+        )
+        .expect("parses");
+        let problems = checked(&manifest);
+        assert!(
+            problems.iter().any(|p| p.contains("config:")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_well_formed_settings_declaration_passes() {
+        let manifest = parse(
+            "tide-clock",
+            &GOOD.replace(
+                "[[versions]]",
+                "[config]\nfile = \"input.json\"\nschema = 1\n\n\
+                 [[config.fields]]\npath = \"values.id\"\ntitle = \"Id\"\nmaxLength = 8\n\n\
+                 [[versions]]",
+            ),
+        )
+        .expect("parses");
+        assert!(checked(&manifest).is_empty());
+        assert_eq!(manifest.config.expect("declared").file, "input.json");
     }
 
     #[test]

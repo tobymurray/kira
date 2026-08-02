@@ -20,8 +20,11 @@ use crate::uapp::{AppId, Version};
 /// to what upstream published. 4 adds submissions: who publishes an app that is
 /// not upstream's, and why a listing or a single version is no longer offered.
 /// 5 lets a submitted version carry its own note, since the upstream release
-/// bodies say nothing about an app that does not ship in a release.
-pub const SCHEMA: u32 = 5;
+/// bodies say nothing about an app that does not ship in a release. 6 lets an
+/// app declare a settings file it reads from its own folder, so the page can
+/// fill it in over USB — the one route a user-specific value has onto a watch
+/// with four buttons and no keyboard.
+pub const SCHEMA: u32 = 6;
 
 /// A complete catalogue, as published to `data/catalog.json`.
 ///
@@ -108,6 +111,15 @@ pub struct App {
     /// submission, and it is deliberately not a rank: see `registry/README.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher: Option<Publisher>,
+    /// A settings file this app reads from `Apps/<Folder>/`, if it has one.
+    ///
+    /// The only thing on a card that cannot be derived from the binary: nothing
+    /// in a `.uapp` says what it reads, so this is the submitter's assertion.
+    /// It is also the only assertion Kira acts on rather than merely renders —
+    /// it decides a file name written to a device — which is why
+    /// [`crate::config::check_spec`] is stricter than the shape needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<crate::config::Spec>,
     /// Why the whole app is no longer offered, if it is not.
     ///
     /// A retired app stays listed and keeps its binaries, so a watch carrying it
@@ -671,6 +683,7 @@ mod tests {
             icon_small: None,
             superseded_by: None,
             publisher: None,
+            config: None,
             retired: None,
         }
     }

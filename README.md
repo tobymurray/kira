@@ -121,6 +121,7 @@ silently downgraded.
 | Browse the catalogue       | yes                   | yes              |
 | Read what's on the watch   | yes                   | yes              |
 | Install and update         | yes, in-page          | generated script |
+| Fill in an app's settings  | yes, in-page          | no               |
 | Remember the chosen folder | yes                   | no               |
 
 Writing to a removable drive needs the File System Access API, which only
@@ -140,6 +141,39 @@ lets Chromium offer to keep the permission across visits, which removes the clic
 too. Firefox and Safari read the drive through `<input webkitdirectory>`, which
 yields files rather than a handle, so there is nothing to persist and the folder
 has to be picked each visit.
+
+Settings have no script fallback, unlike installing, and that is a deliberate
+refusal rather than an omission. The installers reference files by name; a
+setting is a value the visitor types, which would have to be *embedded* in the
+generated shell and PowerShell — a sink that does not exist there today, in a
+file people are told to run on their own machine. Getting shell quoting, JSON
+escaping and their interaction right in two languages is not worth it for a
+convenience feature, so on Firefox and Safari the form says which file to type by
+hand instead. Commit `ad4482a` is why: a display name read out of a binary
+reached past a `#` comment and into a live statement in both installers.
+
+### Settings an app reads
+
+Some apps need a value only their owner knows — an athlete id, a transit pass, an
+account token. The watch has four buttons and no keyboard and the SDK offers no
+way to send one in, so the app reads it from a file in its own folder and Kira
+fills that file in over the same USB handle it installs through.
+
+**The app owns the format entirely.** Its manifest declares the file name, the
+schema number and every key; Kira assembles the document, refuses values the app
+could not read back, and writes it. Nothing about the convention is Kira's, which
+matters because it is nobody's standard yet: the SDK ships `SDK::Variant::Config`
+with exactly this shape — an exact `schema` major, an app-owned subtree the reader
+treats as opaque, a size ceiling checked before allocating, defaults on every
+failure — but only for configs the platform itself writes. See
+[UNAWatch/una-sdk#225](https://github.com/UNAWatch/una-sdk/issues/225).
+
+This is the one thing on a card that **cannot come from the binary**. Nothing in a
+`.uapp` says what it reads, so it is the submitter's assertion — and the only
+assertion Kira acts on rather than merely renders, since it names a file written
+to somebody's watch. It is checked on every catalogue build, not just at review:
+the name must be a plain file in the app's own folder, must not look like an app
+binary, and every key must be dot-separated plain segments.
 
 ### Installing safely
 
@@ -235,15 +269,21 @@ not make the recipe immutable; it makes a move impossible to miss.
 
 ### Module size
 
-The published `.wasm` is ~58 kB gzipped, and the whole page is ~100 kB:
+The published `.wasm` is ~78 kB gzipped:
 
 | | gzipped |
 | --- | --- |
 | scripts before the Rust rewrite (`app.js` + three shared modules) | 18.5 kB |
-| scripts now (`app.js` + bindgen glue + `.wasm`) | 74.4 kB |
-| ...of which the module itself | 58.2 kB |
+| the module at the time of the rewrite | 58.2 kB |
+| ...plus release notes, submissions and per-version notes since | 72.2 kB |
+| ...plus the settings form | 79.7 kB |
 | `catalog.json` (13 releases, 151 versions) | 20.6 kB |
 | one app install, e.g. Running 1.3.0 | 520 kB |
+
+The first two rows are the rewrite's own measurement, kept because the argument
+below is about it. The rest is drift since, measured the same way — the module
+has grown 21.5 kB across four features and nobody was watching, which is the
+usual way a budget goes.
 
 So the rewrite costs ~56 kB on first load, against a page that already transfers
 20 kB of catalogue and, the moment anyone does the thing the site exists for,

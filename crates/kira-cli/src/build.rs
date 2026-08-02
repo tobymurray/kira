@@ -491,6 +491,10 @@ fn process_release(
             // An SDK app's publisher is the catalogue's own source, and upstream
             // withdraws an app by dropping it from a release rather than saying so.
             publisher: None,
+            // Only a submission can declare one. An SDK app's would have to come
+            // from upstream, and nothing upstream publishes says what an app
+            // reads off its own folder.
+            config: None,
             retired: None,
         });
 
@@ -746,6 +750,7 @@ fn fold_registry(
                     repo: manifest.source.clone(),
                     maintainer: manifest.maintainer.clone(),
                 }),
+                config: manifest.config.clone(),
                 retired: manifest.retired.clone(),
             });
 
