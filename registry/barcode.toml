@@ -1,0 +1,14 @@
+# A parkrun-style Code 128 barcode for an athlete id the user supplies, read from
+# a JSON file written into the app's own folder over USB.
+app_id     = "865E8CB21BF7E1ED"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "Barcode"
+folder     = "Barcode"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+[[versions]]
+version = "0.1.0"
+rev     = "2c0d6d89210ac51f91fef4fdf11c7a25cd8c8d94"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build. Draws a Code 128 barcode for an id read from Apps/Barcode/input.json, which you write over USB — nothing is compiled in, so a fresh install tells you what to write rather than showing a placeholder that would scan as somebody else's number."
