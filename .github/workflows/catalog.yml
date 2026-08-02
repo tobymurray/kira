@@ -123,6 +123,60 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
           jq -r '.[] | "  \(.tag)\t\(.publishedAt)"' releases.json
 
+      # registry/README.md tells submitters that a tag can move, so a "pinned"
+      # source that can change makes the published recipe a lie -- and then pins
+      # UNA's apps to tags. The recipe key hashes the tag string, so if upstream
+      # moved one, nothing would rebuild and the catalogue would keep serving a
+      # binary whose stated provenance had quietly become false.
+      #
+      # Changing the recipe to name a commit would invalidate every stored
+      # artifact and force a full rebuild, so instead the commit each tag pointed
+      # at is recorded once and checked on every build. That does not make the
+      # recipe immutable; it makes a move impossible to miss.
+      - name: Check the SDK tags still point where they did
+        run: |
+          set -euo pipefail
+          git ls-remote --tags https://github.com/UNAWatch/una-sdk.git 'refs/tags/apps-v*' \
+            > upstream-tags.txt
+          python3 - <<'CHECK'
+          import json, pathlib, sys
+
+          direct, deref = {}, {}
+          for line in pathlib.Path("upstream-tags.txt").read_text().splitlines():
+              sha, ref = line.split()
+              tag = ref.removeprefix("refs/tags/")
+              # An annotated tag's own object is not the commit; ^{} is.
+              (deref if tag.endswith("^{}") else direct)[tag.removesuffix("^{}")] = sha
+          now = {t: deref.get(t, s) for t, s in direct.items()}
+
+          locked = json.loads(pathlib.Path("sdk-tags.lock.json").read_text())
+          moved, gone = [], []
+          for tag, sha in sorted(locked.items()):
+              if tag not in now:
+                  gone.append(tag)
+              elif now[tag] != sha:
+                  moved.append(f"{tag}: locked {sha}, upstream now {now[tag]}")
+
+          # Only releases this catalogue actually publishes from. Upstream also
+          # carries a -rcN tag for nearly every release, and noticing those would
+          # be permanent noise about tags nothing is ever built from.
+          published = {r["tag"] for r in json.loads(pathlib.Path("releases.json").read_text())}
+          for tag in sorted((published & set(now)) - set(locked)):
+              # A new release has never been built from, so nothing can have moved
+              # under it. Recorded on its first build rather than blocking it.
+              print(f"::notice::{tag} is not in sdk-tags.lock.json yet; "
+                    f'add "{tag}": "{now[tag]}" once it has been built')
+
+          for line in moved + [f"{t}: no longer exists upstream" for t in gone]:
+              print(f"::error::{line}")
+          if moved or gone:
+              print("::error::An SDK tag this catalogue publishes from has changed. Every "
+                    "recipe naming it now describes a source tree that is not what was "
+                    "built, and the recipe key will not notice. Resolve before publishing.")
+              sys.exit(1)
+          print(f"{len(locked)} SDK tags unchanged")
+          CHECK
+
       - name: Download the app binaries
         env:
           GH_TOKEN: ${{ github.token }}
