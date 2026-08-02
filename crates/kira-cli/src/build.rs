@@ -396,6 +396,10 @@ fn parse_release(tag: &str, binaries: Vec<Binary>) -> Result<Vec<Parsed>> {
                     crc.computed
                 );
             }
+            check_display_name(
+                &uapp.header().name,
+                &format_args!("{tag}/{}/{}", binary.folder, binary.file),
+            )?;
             Ok(Parsed {
                 header: uapp.header().clone(),
                 normal_icon: uapp.normal_icon().to_vec(),
@@ -539,6 +543,24 @@ fn process_release(
             .map(|n| n.trim().to_owned()),
         app_count: kept,
     }))
+}
+
+/// Refuse a display name carrying anything that is not printable text.
+///
+/// The name is fifteen bytes read straight out of the binary's header, so for a
+/// submission it is whatever the submitter's `CMakeLists.txt` declared — and it
+/// travels a long way: onto the card, into the on-device file name, and into the
+/// `#` comment at the head of every generated installer. A newline there ends the
+/// comment and turns the rest of the line into a command the user runs.
+///
+/// `plan::one_line` neutralises the sink as well; this stops it entering the
+/// catalogue at all, because a name with a control character in it is not a
+/// display name, it is someone trying something.
+fn check_display_name(name: &str, what: &std::fmt::Arguments<'_>) -> Result<()> {
+    if let Some(bad) = name.chars().find(|c| c.is_control()) {
+        bail!("{what}: display name {name:?} contains {bad:?}, which is not printable text");
+    }
+    Ok(())
 }
 
 /// Extract an app's icons, taking them from the newest version that has any.
@@ -699,6 +721,10 @@ fn fold_registry(
                 header.version,
                 entry.version
             );
+            check_display_name(
+                &header.name,
+                &format_args!("{} {}", manifest.slug, entry.version),
+            )?;
 
             let file = device_file_name(&header.name, header.version);
             let download = format!("apps/registry/{}/{}/{file}", manifest.slug, manifest.folder);
