@@ -1,0 +1,20 @@
+# A squash activity app, and the raw 100 Hz IMU recorder it is being built out
+# of: shot detection needs labelled court data that does not exist yet, so the
+# app ships the means to collect it before anything derived from it.
+app_id     = "A1E5C38B7D2F9046"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "Squash"
+folder     = "Squash"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# No [config] section. The recorder is enabled through the app's own
+# settings.json, which the app itself rewrites whenever a setting changes on the
+# watch — so anything this form wrote there would not survive. Shipping that
+# toggle properly means reading it from a dedicated input file, as Barcode does.
+
+[[versions]]
+version = "1.0.0"
+rev     = "90991fab1388630a16bb3dd1d0bf77e3129b0ad8"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build. Squash sessions recorded as FIT with sport=racket and sub_sport=squash, on the Workout app's session handling — HR and zones, calories, laps, crash recovery. It does not detect shots or count rallies: those need labelled squash recordings that do not exist yet, so what ships instead is the recorder that collects them, streaming the raw 100 Hz IMU to CSV in a format the SDK simulator can replay. That is off by default and there is no on-watch toggle for it. Untested on hardware."
