@@ -47,6 +47,62 @@ cargo run -p kira-cli -- registry validate --catalog site/data/catalog.json
 cargo run -p kira-cli -- registry plan --toolchain unpinned
 ```
 
+## If your app reads a settings file
+
+A watch with four buttons and no keyboard cannot be told an athlete id, a transit
+pass or an account token, and the SDK offers no way to send one in. If your app
+reads such a value from a file in its own folder, say so and the page will offer
+a form that writes it over USB:
+
+```toml
+[config]
+file   = "input.json"     # written into Apps/<folder>/ — a plain name, never a path
+schema = 1                # the document's top-level "schema", for apps that gate on it
+
+[[config.fields]]
+path      = "values.id"   # where the value goes, dot-separated
+title     = "Athlete id"  # the label
+help      = "The characters printed under the barcode on your parkrun card."
+maxLength = 16
+```
+
+which produces
+
+```json
+{
+  "schema": 1,
+  "values": {
+    "id": "A1234567"
+  }
+}
+```
+
+**You own the format; Kira only assembles it.** The file name, the schema number
+and every key come from here, so nothing about the convention is Kira's to
+change. Add a field and the form grows a row.
+
+Worth knowing before you rely on it:
+
+- **This is the one thing on a card that cannot come from your binary.** Nothing
+  in a `.uapp` says what it reads, so it is your word for it — and unlike
+  `notes`, which is only displayed, this is *acted on*: it names a file written
+  to somebody's watch. Expect the checks to be fussier than the shape needs, and
+  expect them to run on every catalogue build rather than only on your pull
+  request.
+- **Values are restricted to printable ASCII without `\` or `"`.** Not JSON's
+  rule — a reader built on coreJSON gets the raw slice with escapes undecoded, so
+  an escaped character would reach your app as the literal characters of its
+  escape sequence. A value that cannot survive the trip is refused in the form,
+  where there is somewhere to explain why.
+- **Over-long values are refused, never trimmed.** A shortened id is a wrong id.
+- **Validate again on the watch.** The form is a convenience; the file is a text
+  file on a mass-storage volume that anyone can edit with Notepad. Bound the read
+  before you allocate, gate on the schema number, and fall back to a default
+  rather than failing to start — `SDK::Variant::Config` in the SDK is the
+  reference for all three.
+- **Chromium desktop only**, like installing. The generated scripts carry no
+  settings, deliberately: see the README.
+
 ## One repository or several?
 
 **One repository holding all your apps is the better default.** `subdir` exists for
@@ -89,6 +145,8 @@ the old ones to where they actually lived.
 | `licence` is a recognised open licence | Source-accessible is the premise. If yours is missing from the list, add it in the same pull request. |
 | A published version's `rev` never changes | Somebody's watch may be carrying it. Change anything by publishing a new version. |
 | A manifest is retired, not deleted, once published | An app that vanishes leaves every watch carrying it holding something the catalogue cannot name. A submission that never reached the catalogue can simply be withdrawn. |
+| `config.file` is a plain name in the app's own folder, and not a `.uapp` | It is a path the page writes to a device. A name that escaped the folder would write anywhere on the volume; one ending in `.uapp` could be the file the watch boots. |
+| Every `config.fields[].path` is dot-separated plain segments, unique, and not nested inside another | The keys go straight into a document the app parses. Two fields writing the same place, or one inside another, cannot both be satisfied. |
 
 CI then fetches exactly that commit, builds it, and checks the result against what
 your own `CMakeLists.txt` declares: `AppID`, type, version, and the `.uapp`'s CRC.

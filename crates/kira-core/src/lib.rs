@@ -5,12 +5,14 @@
 //! - [`uapp`] reads the `.uapp` container, borrowing rather than copying.
 //! - [`icon`] decodes the ABGR2222 icons embedded in one.
 //! - [`catalog`] is the published schema, plus version selection.
+//! - [`config`] assembles the settings file an app reads from its own folder.
 //! - [`notes`] sorts upstream's release prose by what can reach a watch.
 //! - [`plan`] diffs a selection against a watch and generates installers.
 //!
 //! Nothing here does I/O, so it compiles to WebAssembly unchanged.
 
 pub mod catalog;
+pub mod config;
 pub mod icon;
 pub mod notes;
 pub mod plan;

@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 
 use kira_core::catalog::{self, Catalog, Release, Target};
+use kira_core::config;
 use kira_core::notes;
 use kira_core::plan::{self, Installed, Plan, ScriptConfig};
 use kira_core::uapp::{AppId, AppType, CRC_LEN, HEADER_LEN, Header, Uapp, Version};
@@ -149,6 +150,8 @@ struct AppView<'a> {
     /// Who publishes this app, when it is not upstream's. Its presence is what
     /// makes an entry a submission; it is not a rank.
     publisher: Option<&'a catalog::Publisher>,
+    /// A settings file the app reads from its own folder, if it declares one.
+    config: Option<&'a config::Spec>,
     /// Why the app is no longer offered, if it is not.
     retired: Option<&'a str>,
 }
@@ -359,6 +362,7 @@ impl Store {
                 ambiguous_name: self.ambiguous.contains(&app.name),
                 superseded_by: app.superseded_by,
                 publisher: app.publisher.as_ref(),
+                config: app.config.as_ref(),
                 retired: app.retired.as_deref(),
             })
             .collect();
@@ -481,6 +485,58 @@ impl Store {
                 "unknown script kind {other}: expected \"powershell\" or \"shell\""
             ))),
         }
+    }
+
+    /// Why one value is unusable, or nothing when it is fine.
+    ///
+    /// Separate from [`Self::config_document`] so the form can say what is wrong
+    /// beside the field it is wrong about, while it is being typed, rather than
+    /// only at the point of writing to a watch.
+    ///
+    /// # Errors
+    /// If the app is unknown, declares no config, or has no such field — all of
+    /// which are page bugs rather than anything the user did.
+    #[wasm_bindgen(js_name = configCheck)]
+    pub fn config_check(
+        &self,
+        app_id: &str,
+        path: &str,
+        value: &str,
+    ) -> Result<Option<String>, JsError> {
+        let spec = self.config_spec(app_id)?;
+        let field = spec
+            .fields
+            .iter()
+            .find(|f| f.path == path)
+            .ok_or_else(|| JsError::new(&format!("{app_id} declares no field {path}")))?;
+        Ok(config::check_value(field, value).err())
+    }
+
+    /// The finished file, ready to write into `Apps/<Folder>/`.
+    ///
+    /// Assembled here rather than in the page for the same reason the installers
+    /// are: it is the part where a mistake reaches a device, and here it is
+    /// covered by tests that run without a browser.
+    ///
+    /// # Errors
+    /// If the app declares no config, a value is missing or rejected, or the
+    /// result would be too large. The message is meant to be shown as-is.
+    #[wasm_bindgen(js_name = configDocument)]
+    pub fn config_document(&self, app_id: &str, values: JsValue) -> Result<String, JsError> {
+        let spec = self.config_spec(app_id)?;
+        let values: BTreeMap<String, String> =
+            serde_wasm_bindgen::from_value(values).map_err(js_err)?;
+        config::document(spec, &values).map_err(|problem| JsError::new(&problem))
+    }
+
+    fn config_spec(&self, app_id: &str) -> Result<&config::Spec, JsError> {
+        let id: AppId = app_id.parse().map_err(js_err)?;
+        self.catalog
+            .apps
+            .iter()
+            .find(|a| a.app_id == id)
+            .and_then(|a| a.config.as_ref())
+            .ok_or_else(|| JsError::new(&format!("{app_id} declares no settings file")))
     }
 
     fn resolve(&self) -> Vec<Target> {

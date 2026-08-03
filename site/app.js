@@ -125,6 +125,18 @@ const state = {
    * selected instead of silently sitting out the install.
    */
   excluded: new Set(),
+  /**
+   * What has been typed into each app's settings form, keyed by AppID.
+   *
+   * Held outside the DOM because a card is rebuilt whenever anything else on
+   * the page changes — pinning a version, re-scanning the watch — and losing a
+   * half-typed id to an unrelated re-render would be maddening.
+   */
+  configDraft: new Map(),
+  /** Which settings forms are expanded, for the same reason. */
+  configOpen: new Set(),
+  /** Apps whose existing settings file has already been read off the watch. */
+  configLoaded: new Set(),
 };
 
 // ---------------------------------------------------------------- utilities
@@ -727,8 +739,199 @@ function renderCard(app, entry) {
   dl.title = `${selected.file} → Apps/${app.folder}/`;
   body.appendChild(dl);
 
+  // Only a submission can declare one, and most do not.
+  if (app.config) {
+    body.appendChild(renderConfig(app));
+  }
+
   card.appendChild(body);
   return card;
+}
+
+// ------------------------------------------------------------------ settings
+
+/**
+ * Read the value a dotted path points at, or '' if the file does not have it.
+ *
+ * The file is somebody's hand-edited JSON as often as it is Kira's, so every
+ * step has to survive the wrong shape.
+ */
+function atPath(doc, path) {
+  let node = doc;
+  for (const key of path.split('.')) {
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) return '';
+    node = node[key];
+  }
+  return typeof node === 'string' ? node : '';
+}
+
+/** What is already in the app's settings file, or null if there is nothing usable. */
+async function readConfig(app) {
+  if (!state.appsDir) return null;
+  try {
+    const dir = await state.appsDir.getDirectoryHandle(app.folder);
+    const handle = await dir.getFileHandle(app.config.file);
+    const text = await (await handle.getFile()).text();
+    // JSON.parse, never eval — and the values only ever reach an input's
+    // .value, so a hostile file can misinform but cannot execute.
+    const doc = JSON.parse(text);
+    return doc && typeof doc === 'object' ? doc : null;
+  } catch {
+    // Absent, unreadable or not JSON. All three mean "nothing to prefill", and
+    // the app itself is what tells its owner which.
+    return null;
+  }
+}
+
+/** Write the assembled document, then read the length back. */
+async function writeConfig(app, text) {
+  const bytes = new TextEncoder().encode(text);
+  const dir = await state.appsDir.getDirectoryHandle(app.folder, { create: true });
+  const handle = await dir.getFileHandle(app.config.file, { create: true });
+  const writable = await handle.createWritable();
+  try {
+    await writable.write(bytes);
+    await writable.close();
+  } catch (err) {
+    await writable.abort?.();
+    throw err;
+  }
+  // Same caveat as installing: this reads the OS write cache, so it catches a
+  // short write and proves nothing about flash. Unlike a .uapp there is no CRC
+  // to fall back on, so the app's own parse is the real check.
+  const back = await handle.getFile();
+  if (back.size !== bytes.length) {
+    throw new Error(`short write (${back.size}/${bytes.length} bytes)`);
+  }
+}
+
+/**
+ * The per-app settings form.
+ *
+ * Chromium desktop only, like installing and for the same reason: writing to a
+ * removable drive needs the File System Access API. The generated scripts
+ * deliberately carry no settings — see the note in the summary.
+ */
+function renderConfig(app) {
+  const spec = app.config;
+  const draft = state.configDraft.get(app.appId) ?? {};
+  state.configDraft.set(app.appId, draft);
+
+  const box = document.createElement('details');
+  box.className = 'config';
+  box.open = state.configOpen.has(app.appId);
+  box.addEventListener('toggle', () => {
+    if (box.open) state.configOpen.add(app.appId);
+    else state.configOpen.delete(app.appId);
+  });
+
+  const summary = document.createElement('summary');
+  summary.textContent = 'Settings';
+  box.appendChild(summary);
+
+  const where = document.createElement('p');
+  where.className = 'meta';
+  where.textContent = `Written to Apps/${app.folder}/${spec.file} on the watch.`;
+  box.appendChild(where);
+
+  const writable = state.mode === 'write' && state.appsDir;
+  if (!writable) {
+    const note = document.createElement('p');
+    note.className = 'meta config-note';
+    note.textContent = CAN_WRITE
+      ? 'Connect a watch to fill this in.'
+      : 'This browser can read the watch but not write to it, so settings have to be ' +
+        `typed into Apps/${app.folder}/${spec.file} by hand. The generated install ` +
+        'script does not carry them.';
+    box.appendChild(note);
+  }
+
+  const status = document.createElement('p');
+  status.className = 'meta config-status';
+
+  const inputs = new Map();
+  for (const field of spec.fields) {
+    const label = document.createElement('label');
+    label.className = 'config-field';
+
+    const name = document.createElement('span');
+    name.textContent = field.title;
+    label.appendChild(name);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = field.maxLength;
+    input.spellcheck = false;
+    input.autocapitalize = 'off';
+    input.autocomplete = 'off';
+    input.disabled = !writable;
+    input.value = draft[field.path] ?? '';
+    input.addEventListener('input', () => {
+      draft[field.path] = input.value;
+      const problem = input.value === '' ? null : state.store.configCheck(app.appId, field.path, input.value);
+      input.setCustomValidity(problem ?? '');
+      status.textContent = problem ?? '';
+      status.className = problem ? 'meta config-status bad' : 'meta config-status';
+    });
+    label.appendChild(input);
+    inputs.set(field.path, input);
+
+    if (field.help) {
+      const help = document.createElement('span');
+      help.className = 'config-help';
+      help.textContent = field.help;
+      label.appendChild(help);
+    }
+    box.appendChild(label);
+  }
+
+  // Prefill from the watch once, and only for fields the user has not started
+  // typing into — a re-render must not overwrite what is being entered.
+  if (writable && !state.configLoaded.has(app.appId)) {
+    state.configLoaded.add(app.appId);
+    void readConfig(app).then((doc) => {
+      if (!doc) return;
+      for (const field of spec.fields) {
+        if (draft[field.path] !== undefined) continue;
+        const value = atPath(doc, field.path);
+        if (!value) continue;
+        draft[field.path] = value;
+        const input = inputs.get(field.path);
+        if (input && input.value === '') input.value = value;
+      }
+    });
+  }
+
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'config-save';
+  save.textContent = 'Save to watch';
+  save.disabled = !writable;
+  save.addEventListener('click', () => {
+    void (async () => {
+      save.disabled = true;
+      try {
+        const values = {};
+        for (const field of spec.fields) values[field.path] = draft[field.path] ?? '';
+        // Rust assembles and screens it: the same code the tests cover, and the
+        // only place that decides what reaches a device.
+        const text = state.store.configDocument(app.appId, values);
+        await writeConfig(app, text);
+        status.textContent = 'Saved. Eject the watch and reboot it to pick this up.';
+        status.className = 'meta config-status ok';
+        log(`${app.name} settings → Apps/${app.folder}/${spec.file}`, 'ok');
+      } catch (err) {
+        status.textContent = String(err.message ?? err);
+        status.className = 'meta config-status bad';
+      } finally {
+        save.disabled = !writable;
+      }
+    })();
+  });
+  box.appendChild(save);
+  box.appendChild(status);
+
+  return box;
 }
 
 function renderCatalogue() {
@@ -1538,6 +1741,9 @@ async function useRoot(root) {
   state.appsDir = await resolveAppsDir(root);
   state.mode = 'write';
   state.blobs.clear();
+  // A different watch has different settings on it, and the same watch may have
+  // been edited elsewhere since. Re-read rather than trust what was prefilled.
+  state.configLoaded.clear();
   await idbSet('watch', root);
 
   el('source').textContent = `${root.name} · read/write`;
@@ -1652,8 +1858,11 @@ function disconnect() {
   state.installed = [];
   state.plan = null;
   state.blobs.clear();
-  // Ticks belong to the watch that was connected, not to the next one.
+  // Ticks belong to the watch that was connected, not to the next one, and
+  // neither does anything read off it or typed for it.
   state.excluded.clear();
+  state.configDraft.clear();
+  state.configLoaded.clear();
   el('source').textContent = '';
   el('verify').hidden = true;
   el('forget').hidden = true;
