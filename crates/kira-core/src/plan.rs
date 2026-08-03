@@ -504,6 +504,23 @@ fn job_note(entry: &Entry) -> String {
     }
 }
 
+/// Collapse anything that could end a comment line.
+///
+/// The display name comes out of the app's own binary, so for a submission it is
+/// attacker-controlled — fifteen bytes of it, compiled from whatever the
+/// submitter's `CMakeLists.txt` declares. Both installers write it into a `#`
+/// comment, and a comment can be escaped exactly one way: a newline. Everything
+/// else in these scripts is `sh_quote`d; this field was not, because a comment
+/// looked like somewhere nothing could happen.
+///
+/// The scripts are the sharpest surface Kira has — a user runs them, outside the
+/// browser, where the page's CSP means nothing.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 /// Generate the Windows installer.
 ///
 /// Mirrors the ordering proven by `Update-Watch-Apps.ps1` in the UNA SDK: resolve
@@ -569,7 +586,7 @@ pub fn powershell(plan: &Plan, config: &ScriptConfig) -> String {
              \x20   Where-Object {{ $_.Name -ne $file }} |\n\
              \x20   ForEach-Object {{ [IO.File]::Delete($_.FullName); Write-Host \"    removed stale $($_.Name)\" }}\n\
              \x20 Write-Host \"  [ok] $folder -> $file\"\n",
-            app.name,
+            one_line(&app.name),
             app.version,
             job_note(entry),
             ps_quote(&app.folder),
@@ -673,7 +690,7 @@ pub fn shell(plan: &Plan, config: &ScriptConfig) -> String {
              \x20 case \"$(basename \"$old\")\" in \"$file\") ;; *) rm -f \"$old\"; echo \"    removed stale $(basename \"$old\")\";; esac\n\
              done\n\
              echo \"  [ok] $folder -> $file\"\n",
-            app.name,
+            one_line(&app.name),
             app.version,
             job_note(entry),
             sh_quote(&app.folder),
@@ -1198,6 +1215,48 @@ mod tests {
         let copy = ps.find("::Copy(").expect("powershell copies");
         let check = ps.find(".Length -ne").expect("powershell reads it back");
         assert!(copy < check);
+    }
+
+    #[test]
+    fn a_display_name_cannot_break_out_of_the_installer_comment() {
+        // The name is fifteen bytes from the binary's header, so a submission's
+        // is written by whoever wrote the app. It goes into a `#` comment in both
+        // installers, and a comment ends at a newline — so without this the rest
+        // of the line is a command, in a file the user runs by hand, outside the
+        // browser where none of the page's defences apply.
+        let mut app = target("1.3.0");
+        app.name = "\ntouch /tmp/PWNED #".into();
+        let plan = build(&[app], &[]);
+        let config = ScriptConfig::default();
+
+        for (kind, script) in [
+            ("sh", shell(&plan, &config)),
+            ("ps1", powershell(&plan, &config)),
+        ] {
+            // The words may survive -- they are someone's app name, and inside a
+            // comment they are inert. What must not survive is the newline that
+            // would make the rest of the line a statement.
+            let carrying: Vec<_> = script.lines().filter(|l| l.contains("PWNED")).collect();
+            assert_eq!(
+                carrying.len(),
+                1,
+                "{kind}: the name spread across lines: {carrying:?}"
+            );
+            assert!(
+                carrying[0].trim_start().starts_with('#'),
+                "{kind}: escaped the comment: {}",
+                carrying[0]
+            );
+        }
+    }
+
+    #[test]
+    fn a_harmless_display_name_is_left_alone() {
+        // "AVG / R HR" is a real one. Only control characters are touched.
+        let mut app = target("1.3.0");
+        app.name = "AVG / R HR".into();
+        let plan = build(&[app], &[]);
+        assert!(shell(&plan, &ScriptConfig::default()).contains("# AVG / R HR 1.3.0"));
     }
 
     #[test]
