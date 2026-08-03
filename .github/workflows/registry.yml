@@ -339,6 +339,18 @@ jobs:
           gh release view "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[].name' | sort -u > stored.txt
 
+          # GitHub's release-asset endpoint 500s on roughly one download in
+          # twenty. Failing here would abandon a merged submission halfway
+          # through publishing it, for no reason but bad luck.
+          retry() {
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              echo "::warning::attempt $attempt of 3 failed: $*"
+              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 3)); fi
+            done
+            return 1
+          }
+
           mkdir -p stored
           uploaded=0 skipped=0
           while read -r asset; do
@@ -354,7 +366,7 @@ jobs:
             # re-run stays idempotent -- and --clobber never appears, because the
             # case it silently handled is the case worth failing on.
             if grep -qxF -- "$asset" stored.txt; then
-              gh release download "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" \
+              retry gh release download "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" \
                 --pattern "$asset" --dir stored --clobber
               if cmp -s -- "stored/$asset" "$path"; then
                 echo "  = $asset already stored, byte-identical"

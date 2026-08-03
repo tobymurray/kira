@@ -117,6 +117,18 @@ jobs:
             echo "full=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # GitHub's release-asset endpoint 500s on roughly one download in
+          # twenty, and here the fallback is to skip the release — so without a
+          # retry a transient error silently decides a release has no assets and
+          # none of its binaries get built. Three tries before believing it.
+          retry() {
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 3)); fi
+            done
+            return 1
+          }
+
           # The version stamped into a release is not reliably the one in its tag:
           # apps-v0.1.9-rc1 ships binaries stamped 0.1.4. Since the version is part
           # of the recipe, guessing it from the tag produces artifacts the
@@ -125,7 +137,7 @@ jobs:
           while read -r tag; do
             [ -n "$tag" ] || continue
             rm -rf zip && mkdir -p zip/x
-            if ! gh release download "$tag" -R UNAWatch/una-sdk -D zip --clobber 2>/dev/null; then
+            if ! retry gh release download "$tag" -R UNAWatch/una-sdk -D zip --clobber 2>/dev/null; then
               echo "::warning::$tag has no downloadable assets, skipping"
               continue
             fi

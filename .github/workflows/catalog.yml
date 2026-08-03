@@ -182,10 +182,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          # GitHub's release-asset endpoint answers 500 to roughly one download
+          # in twenty (measured 1/20 on 2026-08-03, against one asset, from two
+          # machines). This loop runs once per published tag, so at thirteen tags
+          # a single try is a coin flip on the whole build, and `set -e` turned
+          # each 500 into a red run -- two Catalogue runs 29 seconds apart, one
+          # green one red, with no change in between. Three tries puts it around
+          # 1 in 600 builds. The asset is fine; only the request fails.
+          retry() {
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              echo "::warning::attempt $attempt of 3 failed: $*"
+              # Guarded rather than bare, so a false test is not the loop body's
+              # exit status under `set -e`.
+              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 3)); fi
+            done
+            return 1
+          }
+
           mkdir -p apps zips
           for tag in $(jq -r '.[].tag' releases.json); do
             mkdir -p "zips/$tag" "apps/$tag"
-            gh release download "$tag" -R UNAWatch/una-sdk -D "zips/$tag" --clobber
+            retry gh release download "$tag" -R UNAWatch/una-sdk -D "zips/$tag" --clobber
             zip=$(find "zips/$tag" -name '*.zip' | head -n 1)
             if [ -z "$zip" ]; then
               echo "::warning::$tag has no zip asset, skipping"
@@ -209,9 +228,24 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p built
+
+          # Retried for the reason given in the step above, but here a failure is
+          # worse than a red build: absence is a legitimate answer that sends the
+          # whole catalogue back to upstream's binaries, so one 500 would publish
+          # every app as the vendor's build and report that as normal. Three
+          # tries before believing it.
+          retry() {
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              echo "::warning::attempt $attempt of 3 failed: $*"
+              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 3)); fi
+            done
+            return 1
+          }
+
           # Absent release simply means nothing has been built yet, in which case
           # every version falls back to upstream's binary and says so.
-          if gh release download "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" -D built --clobber \
+          if retry gh release download "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" -D built --clobber \
                --pattern '*.uapp' 2>/dev/null; then
             echo "$(ls built | wc -l | tr -d ' ') built binaries available"
           else
