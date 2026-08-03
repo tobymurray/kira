@@ -56,10 +56,23 @@ jobs:
                      isPrerelease: .prerelease, notes: .body}' \
             | jq -s 'sort_by(.publishedAt) | reverse | .[:2]' > releases.json
 
+          # See catalog.yml for why: the asset endpoint 500s often enough that
+          # one try is not a test of anything.
+          retry() {
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              echo "::warning::attempt $attempt of 3 failed: $*"
+              # Guarded rather than bare, so a false test is not the loop body's
+              # exit status under `set -e`.
+              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 3)); fi
+            done
+            return 1
+          }
+
           mkdir -p apps
           for tag in $(jq -r '.[].tag' releases.json); do
             mkdir -p "zips/$tag" "apps/$tag"
-            gh release download "$tag" -R UNAWatch/una-sdk -D "zips/$tag" --clobber
+            retry gh release download "$tag" -R UNAWatch/una-sdk -D "zips/$tag" --clobber
             unzip -q "$(find "zips/$tag" -name '*.zip' | head -n 1)" -d "apps/$tag"
           done
 
