@@ -286,6 +286,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Signing the provenance attestation below. The identity comes from the
+      # workflow's OIDC token, which is why it cannot be forged by whatever the
+      # submitted CMakeLists did in the build job.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -372,3 +377,17 @@ jobs:
             echo
             sed 's/^/- `/; s/$/`/' wanted.txt
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Signed by GitHub's OIDC identity for this workflow, so it does not live in
+      # the repository it describes -- which is the gap README.md names when it
+      # says the hashes sit alongside the artifacts they vouch for. Anyone can
+      # check a stored binary really came out of this workflow, from this commit:
+      #
+      #   gh attestation verify <file.uapp> --repo tobymurray/kira
+      #
+      # The upload step has already refused anything the plan did not ask for, so
+      # by here artifacts/ holds exactly the recipes' own output.
+      - name: Attest what was published
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'artifacts/*.uapp'

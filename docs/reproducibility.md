@@ -119,10 +119,27 @@ prerequisite for relying on any of this publicly.
 **Reproducibility is not authenticity.** It shows a binary corresponds to a
 source tree. It says nothing about whether that source is benign, and there is no
 signing anywhere in this platform — the watch validates a CRC-32, which is a
-corruption check. Kira's hashes also live in the same repository as the artifacts
-they describe, so they cannot survive a compromised publisher. The honest claim is
-"built from this source by this recipe, and the bytes on your watch match what we
-published" — provenance and integrity, not authenticity.
+corruption check. The honest claim is "built from this source by this recipe, and
+the bytes on your watch match what we published" — provenance and integrity, not
+authenticity.
+
+**One part of that is no longer self-referential.** Every `.uapp` uploaded to the
+store carries a GitHub build-provenance attestation, signed by the OIDC identity
+of the workflow that produced it rather than stored beside the artifact it
+vouches for. So a stored binary can be traced to a workflow run and a commit
+without taking this repository's word for anything:
+
+```sh
+gh attestation verify Alarm-1.3.0-<recipe>.uapp --repo tobymurray/kira
+```
+
+That closes the weaker half of the sentence above — the hashes living alongside
+the artifacts — and none of the stronger half. An attestation says which workflow
+emitted the bytes. It cannot say the source was benign, and it is worth exactly as
+much as the account that ran the workflow: an attacker who controls the repository
+gets valid attestations for whatever they publish. It raises the cost of a
+compromise and makes one visible after the fact; it is not a signature over
+reviewed code, because nothing here reviews code.
 
 **Verification requires a rebuild**: the exact container digest, SDK revision and
 version string, and several minutes. Realistically a third party does that once,

@@ -314,6 +314,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # For the provenance attestation below; the identity is this workflow's
+      # OIDC token, so it is not something the build could mint for itself.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -338,6 +342,7 @@ jobs:
       - run: chmod +x /usr/local/bin/kira && kira --version
 
       - name: Upload
+        id: upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -346,6 +351,10 @@ jobs:
 
           shopt -s nullglob
           built=(artifacts/*.uapp)
+          # A fully cached run builds nothing, which is the normal case once the
+          # store is warm. Recorded so the attestation step can sit it out rather
+          # than failing for want of a subject.
+          echo "count=${#built[@]}" >> "$GITHUB_OUTPUT"
           if [ ${#built[@]} -eq 0 ]; then
             echo "nothing new to upload; every binary was already stored"
             exit 0
@@ -361,6 +370,18 @@ jobs:
           fi
           gh release upload "$BINARIES_TAG" "${built[@]}" --clobber
           echo "store now holds $(gh release view "$BINARIES_TAG" --json assets --jq '.assets | length') artifact(s)"
+
+      # Signed by GitHub's OIDC identity for this workflow rather than living in
+      # the repository it describes -- which is the gap README.md names when it
+      # says the hashes sit alongside the artifacts they vouch for. Anyone can
+      # check a stored binary came out of this workflow, at this commit:
+      #
+      #   gh attestation verify <file.uapp> --repo tobymurray/kira
+      - name: Attest what was built
+        if: steps.upload.outputs.count != '0'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'artifacts/*.uapp'
 
       # Artifacts are named by recipe key, so a toolchain change does not replace
       # them -- it adds a second generation alongside the first. Nothing else ever
