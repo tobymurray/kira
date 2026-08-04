@@ -476,11 +476,18 @@ pub(crate) fn validate(
     problems
 }
 
-/// Check that nothing already published has been rewritten.
+/// Check that nothing already published has been rewritten, from git history.
 ///
 /// A version's source is fixed once it ships: changing the commit under a version
 /// already on someone's watch would make the published hash describe bytes nobody
 /// can rebuild. New versions are the way to change anything.
+///
+/// This sees one comparison, `before` against `after`, so it is only as good as the
+/// base it was handed -- a pull request's own base says nothing about what landed
+/// on `main` in the meantime. [`check_against_published`] asks the same question of
+/// the served catalogue and does not depend on history at all; that is the one that
+/// holds regardless of how a manifest arrived, and this is the earlier, friendlier
+/// report that catches the ordinary edit while it is still a pull request.
 pub(crate) fn check_unchanged(
     before: &[Manifest],
     after: &[Manifest],
@@ -546,6 +553,114 @@ pub(crate) fn check_unchanged(
                     });
                 }
                 Some(_) => {}
+            }
+        }
+    }
+    problems
+}
+
+/// The slug a published entry was built under, read back from its download path.
+///
+/// `apps/registry/<slug>/<folder>/<file>`. Only used to label a message, so an
+/// unrecognised shape falls back to the display name rather than failing.
+fn slug_of(app: &kira_core::catalog::App) -> String {
+    app.versions
+        .first()
+        .and_then(|v| v.download.strip_prefix("apps/registry/"))
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or(&app.name)
+        .to_owned()
+}
+
+/// Check every manifest against what the catalogue has actually published.
+///
+/// [`check_unchanged`] asks the same question of git history, and can only see one
+/// pull request's base -- so it is blind to anything that reached `main` another
+/// way: a direct push, or a branch whose own review compared it against a base that
+/// already carried the change. This asks the published catalogue instead, which is
+/// where a watch got its binary from, so the answer does not depend on how a
+/// manifest arrived. It is also the only check that still works when there is no
+/// git history to hand, which is the case on every catalogue build.
+///
+/// Everything compared here is recorded per version in `builtFrom`, so this reads
+/// the recipe a published binary was actually built from rather than a claim about
+/// it. Only submissions have manifests; SDK apps are skipped.
+pub(crate) fn check_against_published(
+    manifests: &[Manifest],
+    published: &kira_core::catalog::Catalog,
+) -> Vec<Problem> {
+    let by_id: BTreeMap<AppId, &Manifest> = manifests.iter().map(|m| (m.app_id, m)).collect();
+    let mut problems = Vec::new();
+
+    for app in published.apps.iter().filter(|a| a.publisher.is_some()) {
+        let slug = slug_of(app);
+        let mut say = |message: String| {
+            problems.push(Problem {
+                slug: slug.clone(),
+                message,
+            });
+        };
+
+        let Some(manifest) = by_id.get(&app.app_id) else {
+            say(format!(
+                "{} is published under AppID {} but no manifest claims it any more; \
+                 retire an app by giving a reason, not by deleting it, so a watch \
+                 carrying it is still recognised",
+                app.name, app.app_id
+            ));
+            continue;
+        };
+
+        for version in &app.versions {
+            // Nothing to compare against: an upstream-origin binary carries no
+            // recipe of Kira's, and saying something anyway would be inventing it.
+            let Some(built) = &version.built_from else {
+                continue;
+            };
+            let Some(source) = kira_core::catalog::parse_source(&built.app_source) else {
+                continue;
+            };
+
+            let Some(entry) = manifest
+                .versions
+                .iter()
+                .find(|e| e.version == version.version)
+            else {
+                say(format!(
+                    "version {} is published and the manifest no longer lists it; \
+                     somebody's watch may be carrying it",
+                    version.version
+                ));
+                continue;
+            };
+
+            if source.repo != manifest.source {
+                say(format!(
+                    "version {} was published from {}, and the manifest now says {}",
+                    version.version, source.repo, manifest.source
+                ));
+            }
+            if source.rev != entry.rev {
+                say(format!(
+                    "version {} was published from commit {}, and the manifest now \
+                     says {}; publish a new version instead of repointing this one",
+                    version.version, source.rev, entry.rev
+                ));
+            }
+            let subdir = manifest.subdir_for(entry);
+            if source.subdir != subdir {
+                say(format!(
+                    "version {} was published from subdir {}, and the manifest now \
+                     says {}; set subdir on the new version and leave this one alone",
+                    version.version, source.subdir, subdir
+                ));
+            }
+            if built.sdk_rev != entry.sdk_rev {
+                say(format!(
+                    "version {} was published against SDK {}, and the manifest now \
+                     says {}",
+                    version.version, built.sdk_rev, entry.sdk_rev
+                ));
             }
         }
     }

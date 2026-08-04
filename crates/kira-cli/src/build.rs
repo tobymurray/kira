@@ -42,6 +42,13 @@ pub(crate) struct Args {
     /// Directory of third-party submission manifests, to publish beside the SDK's
     /// apps. Needs `--built`: a submission has no vendor binary to fall back on.
     pub registry: Option<PathBuf>,
+    /// The catalogue currently published, to check nothing already served has been
+    /// rewritten.
+    ///
+    /// Optional only so the first build of an empty site can happen at all. When it
+    /// is absent the immutability rules cannot be checked, and the build says so
+    /// rather than passing quietly -- see [`registry::check_against_published`].
+    pub published: Option<PathBuf>,
 }
 
 /// Release metadata as fetched from the GitHub API by the workflow.
@@ -606,7 +613,17 @@ fn record_icons(
 /// It also means nothing malformed is ever published, whatever route a manifest
 /// took onto `main`. The page links a submission's `source`, so "https and
 /// nothing else" has to hold at the point of publication, not only at review.
-fn refuse_bad_submissions(manifests: &[Manifest], upstream: &BTreeMap<AppId, App>) -> Result<()> {
+///
+/// `published` is the catalogue as it is currently served, and it carries the other
+/// half: the rules about what a manifest may no longer change. Those used to be
+/// checked only by the submission workflow, against one pull request's base, which
+/// left them enforced in exactly one place and blind to anything reaching `main`
+/// another way. Checked here they hold per publish rather than per review.
+fn refuse_bad_submissions(
+    manifests: &[Manifest],
+    upstream: &BTreeMap<AppId, App>,
+    published: Option<&Catalog>,
+) -> Result<()> {
     // No repo: these are the SDK's own apps, so a submission can never be
     // holding one of these identities already.
     let owner = |app: &App| registry::Owner {
@@ -619,16 +636,50 @@ fn refuse_bad_submissions(manifests: &[Manifest], upstream: &BTreeMap<AppId, App
         .map(|app| (app.folder.to_ascii_lowercase(), owner(app)))
         .collect();
 
-    let problems = registry::validate(manifests, &ids, &folders);
+    let mut problems = registry::validate(manifests, &ids, &folders);
+    match published {
+        Some(catalog) => problems.extend(registry::check_against_published(manifests, catalog)),
+        // Said out loud rather than passed over. Without it this build cannot tell
+        // a corrected typo from a rewritten recipe, and a silent "no problems"
+        // would read as though it had checked.
+        None => eprintln!(
+            "  ! no published catalogue given, so nothing is checked against what \
+             is already served: pass --published to enforce that a released \
+             version's source never moves"
+        ),
+    }
+
     ensure!(
         problems.is_empty(),
         "the registry cannot be published as it stands.\n{}\
          An identity an SDK app already holds risks the watch running the wrong \
-         app, so nothing here is published until it is resolved: retire the \
-         submission, or give it an identity of its own in a new version.",
+         app, and a published version whose source has moved makes the recipe on \
+         its card a lie -- so nothing here is published until it is resolved: \
+         retire the submission, or give it an identity of its own in a new version.",
         registry::report(&problems)
     );
     Ok(())
+}
+
+/// Read the catalogue that is currently published.
+///
+/// A schema behind is normal and not an error: this tool is deployed before the
+/// catalogue it goes on to build, so between a schema bump landing and the next
+/// publish the live catalogue is the older one. Everything read here -- `publisher`
+/// and each version's `builtFrom` -- is optional in the schema, so an older
+/// catalogue simply has less to check against. Newer is refused, since it may mean
+/// something this build does not understand.
+fn read_published(path: &Path) -> Result<Catalog> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let catalog: Catalog =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    ensure!(
+        catalog.schema <= SCHEMA,
+        "{} is schema {}, newer than the {SCHEMA} this build understands",
+        path.display(),
+        catalog.schema
+    );
+    Ok(catalog)
 }
 
 /// The name a submitted binary is written under on the watch.
@@ -669,9 +720,10 @@ fn fold_registry(
     apps: &mut BTreeMap<AppId, App>,
     total_bytes: &mut u64,
     built: &BuiltStore,
+    published: Option<&Catalog>,
 ) -> Result<RegistryCounts> {
     let manifests = registry::load_dir(dir)?;
-    refuse_bad_submissions(&manifests, apps)?;
+    refuse_bad_submissions(&manifests, apps, published)?;
 
     let mut counts = RegistryCounts {
         manifests: manifests.len(),
@@ -910,6 +962,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         bail!("no usable releases: nothing to publish");
     }
 
+    // What is already served, to check nothing published has been rewritten. Read
+    // before anything is built so a repointed recipe stops the build rather than
+    // being noticed after the fact.
+    let published = match &args.published {
+        Some(path) => Some(read_published(path)?),
+        None => None,
+    };
+
     // After the releases, so the collision check sees every upstream identity.
     let submissions = match &args.registry {
         Some(dir) => Some(fold_registry(
@@ -922,6 +982,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
             built
                 .as_ref()
                 .context("--registry requires --built and --toolchain")?,
+            published.as_ref(),
         )?),
         None => None,
     };
@@ -1203,6 +1264,19 @@ sdk_rev = "apps-v1.3.0"
         }
 
         fn build(&self) -> Result<Catalog> {
+            self.build_against(None)
+        }
+
+        /// Build, optionally checking against a catalogue said to be published.
+        ///
+        /// Passing one is what exercises the immutability rules: they compare the
+        /// manifests on disk against what a previous publish recorded.
+        fn build_against(&self, published: Option<&Catalog>) -> Result<Catalog> {
+            let published = published.map(|catalog| {
+                let path = self.root.join("published.json");
+                fs::write(&path, serde_json::to_string(catalog).unwrap()).unwrap();
+                path
+            });
             run(&Args {
                 src: self.root.join("src"),
                 out: self.root.join("site"),
@@ -1212,10 +1286,135 @@ sdk_rev = "apps-v1.3.0"
                 built: Some(self.root.join("store")),
                 toolchain: Some(TOOLCHAIN.to_owned()),
                 registry: Some(self.root.join("registry")),
+                published,
             })?;
             let text = fs::read_to_string(self.root.join("site/data/catalog.json"))?;
             Ok(serde_json::from_str(&text)?)
         }
+
+        /// Overwrite the manifest, to simulate an edit landing on `main`.
+        fn rewrite_manifest(&self, text: &str) {
+            let dir = self.root.join("registry");
+            let name = fs::read_dir(&dir)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .file_name();
+            fs::write(dir.join(name), text).unwrap();
+        }
+    }
+
+    /// The three rules a published version has to keep, checked against what a
+    /// previous publish recorded rather than against git history.
+    ///
+    /// This is the check that does not care how a manifest reached `main`. The
+    /// pull-request one compares against one base and is blind to a direct push,
+    /// or to a branch reviewed against a base that already carried the change.
+    #[test]
+    fn a_published_version_cannot_be_repointed() {
+        let repointed = MANIFEST.replace(
+            "3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d",
+            "0000000000000000000000000000000000000000",
+        );
+        let moved = MANIFEST.replace("[[versions]]", "subdir = \"elsewhere\"\n\n[[versions]]");
+        let resdk = MANIFEST.replace("apps-v1.3.0", "apps-v1.2.0");
+        let resourced = MANIFEST.replace("someone/una-tide-clock", "someone-else/una-tide-clock");
+
+        for (what, edited, expected) in [
+            ("rev", repointed, "published from commit"),
+            ("subdir", moved, "published from subdir"),
+            ("sdk_rev", resdk, "published against SDK"),
+            ("source", resourced, "published from https"),
+        ] {
+            let fixture = Fixture::new("repointed", MANIFEST);
+            let bytes = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22);
+            fixture.store(Version::new(1, 0, 0), &bytes);
+            let published = fixture.build().expect("the first publish is fine");
+
+            fixture.rewrite_manifest(&edited);
+            let err = fixture
+                .build_against(Some(&published))
+                .expect_err("repointing {what} should refuse to publish")
+                .to_string();
+            assert!(err.contains(expected), "{what}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_published_version_cannot_be_dropped_from_the_manifest() {
+        // Somebody's watch may be carrying it, and the catalogue is what names
+        // what they have.
+        let fixture = Fixture::new("dropped", MANIFEST);
+        let bytes = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22);
+        fixture.store(Version::new(1, 0, 0), &bytes);
+        let published = fixture.build().expect("the first publish is fine");
+
+        // Same app, but 1.0.0 replaced rather than added to.
+        fixture.rewrite_manifest(&MANIFEST.replace("1.0.0", "1.1.0"));
+        let err = fixture
+            .build_against(Some(&published))
+            .expect_err("dropping a published version should refuse to publish")
+            .to_string();
+        assert!(err.contains("no longer lists it"), "{err}");
+    }
+
+    #[test]
+    fn deleting_a_manifest_does_not_quietly_unpublish_an_app() {
+        let fixture = Fixture::new("deleted", MANIFEST);
+        let bytes = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22);
+        fixture.store(Version::new(1, 0, 0), &bytes);
+        let published = fixture.build().expect("the first publish is fine");
+
+        fs::remove_dir_all(fixture.root.join("registry")).unwrap();
+        fs::create_dir_all(fixture.root.join("registry")).unwrap();
+        let err = fixture
+            .build_against(Some(&published))
+            .expect_err("a deleted manifest should refuse to publish")
+            .to_string();
+        assert!(err.contains("no manifest claims it"), "{err}");
+    }
+
+    #[test]
+    fn an_unchanged_manifest_republishes_against_its_own_catalogue() {
+        // The rules must not fire on the ordinary case: every daily build re-reads
+        // the same manifests against the catalogue it published yesterday.
+        let fixture = Fixture::new("republish", MANIFEST);
+        let bytes = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22);
+        fixture.store(Version::new(1, 0, 0), &bytes);
+        let published = fixture.build().expect("the first publish is fine");
+        let again = fixture
+            .build_against(Some(&published))
+            .expect("republishing the same manifests is fine");
+        assert_eq!(again.apps.len(), published.apps.len());
+    }
+
+    #[test]
+    fn a_new_version_beside_a_published_one_is_allowed() {
+        // The rules protect what is published; they must not stop it moving on.
+        let fixture = Fixture::new("added", MANIFEST);
+        let bytes = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22);
+        fixture.store(Version::new(1, 0, 0), &bytes);
+        let published = fixture.build().expect("the first publish is fine");
+
+        let added = format!(
+            "{MANIFEST}\n[[versions]]\nversion = \"1.1.0\"\n\
+             rev = \"bb11cc22dd33ee44ff5566778899aabbccddeeff\"\n\
+             sdk_rev = \"apps-v1.3.0\"\n"
+        );
+        fixture.rewrite_manifest(&added);
+        let newer = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 1, 0), 0x23);
+        fixture.store(Version::new(1, 1, 0), &newer);
+
+        let catalog = fixture
+            .build_against(Some(&published))
+            .expect("adding a version is how anything changes");
+        let app = catalog
+            .apps
+            .iter()
+            .find(|a| a.app_id == TIDE_CLOCK)
+            .expect("still published");
+        assert_eq!(app.versions.len(), 2);
     }
 
     #[test]

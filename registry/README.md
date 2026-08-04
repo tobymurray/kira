@@ -177,6 +177,17 @@ ever checked against the catalogue as it stood at the time, and upstream can shi
 a colliding `AppID` or folder in any later release. A collision that appears
 afterwards stops the whole catalogue build rather than reaching a watch.
 
+The three rules about what a *published* version may no longer change are checked
+twice, in two different ways, because they are the ones a merge can slip past. Your
+pull request is compared against the commit it branched from, which catches the
+ordinary edit. The catalogue build then compares every manifest against the
+catalogue it is currently serving — the `builtFrom` recorded on each published
+version, which is the recipe the binary on somebody's watch actually came from.
+The second check needs no git history, so it holds however a manifest reached
+`main`: a direct push, or a branch whose own review compared it against a base that
+already carried the change. If the published source and the manifest disagree,
+nothing is published until they are reconciled.
+
 ## Things worth knowing
 
 - **Kira does not review your code**, and says so. What the catalogue offers is

@@ -11,10 +11,16 @@ on:
     paths:
       - "registry/**"
       - ".github/workflows/registry.yml"
-  # And again after merge: the pull-request run gates a contributor's code, this
-  # one keeps main honest, and it is where publishing happens. A run on main
-  # uploads what it built to the app-binaries store, which is where the catalogue
-  # build then finds it.
+  # And again after merge: the pull-request run gates a contributor's code, and
+  # this one is where publishing happens. A run on main uploads what it built to
+  # the app-binaries store, which is where the catalogue build then finds it.
+  #
+  # It re-checks the history too, against `github.event.before`. It used to resolve
+  # that base to the tip it was running on, so the comparison was main against
+  # itself and the immutability rules passed without testing anything -- which is
+  # why they are now also checked at catalogue build, against what is actually
+  # served. Neither run is the only thing standing between a repointed recipe and a
+  # publish.
   push:
     branches: [main]
     paths:
@@ -45,11 +51,36 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The base branch as well, to check that nothing already published has been
+      # Which commit to compare against, to catch a published version being
       # repointed at different source.
+      #
+      # Deliberately not `github.ref`: on a push that resolves to the tip that was
+      # just pushed, so the comparison was main against itself and every rule
+      # passed vacuously. `github.event.before` is what main was at beforehand,
+      # which is the only value that makes the comparison mean anything.
+      #
+      # A force-push or a first push has no predecessor, and the null sha is not
+      # checkoutable. That is not fatal: the catalogue build checks the same rules
+      # against the catalogue it is actually serving, which needs no git history.
+      # So skip, and say so, rather than fail a legitimate force-push.
+      - name: Resolve the comparison base
+        id: base
+        run: |
+          sha='${{ github.event.pull_request.base.sha || github.event.before }}'
+          case "$sha" in
+            '' | 0000000000000000000000000000000000000000)
+              echo "::warning::no predecessor commit for this event, so the \
+          history check is skipped; the catalogue build still checks the published \
+          catalogue"
+              sha=''
+              ;;
+          esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
+        if: steps.base.outputs.sha != ''
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.ref }}
+          ref: ${{ steps.base.outputs.sha }}
           path: base
 
       - uses: actions/cache@v6
@@ -89,10 +120,21 @@ jobs:
 
       - name: Validate
         run: |
-          "$KIRA" registry validate \
-            --dir registry \
-            --base base/registry \
-            --catalog catalog.json
+          set -euo pipefail
+          # --base only when there is a predecessor to compare against; see the
+          # step that resolved it. Spelled out twice rather than built up in an
+          # array, because an empty array under `set -u` is not portable and the
+          # empty case is exactly the one that must not break.
+          if [ -d base/registry ]; then
+            "$KIRA" registry validate \
+              --dir registry \
+              --base base/registry \
+              --catalog catalog.json
+          else
+            "$KIRA" registry validate \
+              --dir registry \
+              --catalog catalog.json
+          fi
 
       # Artifacts are named by recipe, so anything already stored is by
       # construction the binary that recipe produces. Re-running is then cheap,
