@@ -19,6 +19,9 @@ path      = "values.id"
 title     = "Athlete id"
 help      = "The characters printed under the barcode on your parkrun card, e.g. A1234567."
 maxLength = 16
+# Nothing is compiled in, so without this the app draws no barcode at all, only a
+# prompt saying what to write. Not a preference to be left for later.
+required  = true
 
 [[versions]]
 version = "0.1.0"

@@ -133,8 +133,14 @@ const state = {
    * half-typed id to an unrelated re-render would be maddening.
    */
   configDraft: new Map(),
-  /** Which settings forms are expanded, for the same reason. */
-  configOpen: new Set(),
+  /**
+   * Explicit open/closed choices for settings forms, for the same reason.
+   *
+   * A Map rather than a Set of the open ones, because absent has to mean "not
+   * chosen": a required form defaults to open, so "not in the set" cannot stand
+   * in for closed without wiping that default on the next re-render.
+   */
+  configOpen: new Map(),
   /** Apps whose existing settings file has already been read off the watch. */
   configLoaded: new Set(),
 };
@@ -739,9 +745,13 @@ function renderCard(app, entry) {
   dl.title = `${selected.file} → Apps/${app.folder}/`;
   body.appendChild(dl);
 
-  // Only a submission can declare one, and most do not.
+  // Only a submission can declare one, and most do not. A value the app cannot
+  // work without goes *above* the download: it is a precondition rather than an
+  // afterthought, and underneath the button is where it gets missed.
   if (app.config) {
-    body.appendChild(renderConfig(app));
+    const setup = renderConfig(app);
+    if (configIsRequired(app)) body.insertBefore(setup, dl);
+    else body.appendChild(setup);
   }
 
   card.appendChild(body);
@@ -763,6 +773,26 @@ function atPath(doc, path) {
     node = node[key];
   }
   return typeof node === 'string' ? node : '';
+}
+
+/**
+ * Whether this app declares a value it cannot work without.
+ *
+ * The submitter's word, and unverifiable against the binary, so it only ever
+ * changes how the page presents the form — never whether an install is allowed.
+ */
+function configIsRequired(app) {
+  return Boolean(app.config?.fields?.some((field) => field.required));
+}
+
+/**
+ * The required fields the watch has no value for, given what is on it.
+ *
+ * @param doc Parsed settings file, or null when there is no readable one — which
+ *            is itself the answer: every required field is missing.
+ */
+function missingRequired(spec, doc) {
+  return spec.fields.filter((field) => field.required && !(doc && atPath(doc, field.path)));
 }
 
 /** What is already in the app's settings file, or null if there is nothing usable. */
@@ -817,16 +847,20 @@ function renderConfig(app) {
   const draft = state.configDraft.get(app.appId) ?? {};
   state.configDraft.set(app.appId, draft);
 
+  const required = configIsRequired(app);
+
   const box = document.createElement('details');
-  box.className = 'config';
-  box.open = state.configOpen.has(app.appId);
+  box.className = required ? 'config config-required' : 'config';
+  // Collapsed hides the one thing the app cannot start without, and "Settings"
+  // reads as a preference. A required field opens by default; an explicit toggle
+  // still wins, so closing it stays closed across re-renders.
+  box.open = state.configOpen.get(app.appId) ?? required;
   box.addEventListener('toggle', () => {
-    if (box.open) state.configOpen.add(app.appId);
-    else state.configOpen.delete(app.appId);
+    state.configOpen.set(app.appId, box.open);
   });
 
   const summary = document.createElement('summary');
-  summary.textContent = 'Settings';
+  summary.textContent = required ? 'Setup' : 'Settings';
   box.appendChild(summary);
 
   const where = document.createElement('p');
@@ -890,14 +924,27 @@ function renderConfig(app) {
   if (writable && !state.configLoaded.has(app.appId)) {
     state.configLoaded.add(app.appId);
     void readConfig(app).then((doc) => {
-      if (!doc) return;
       for (const field of spec.fields) {
         if (draft[field.path] !== undefined) continue;
-        const value = atPath(doc, field.path);
+        const value = doc ? atPath(doc, field.path) : '';
         if (!value) continue;
         draft[field.path] = value;
         const input = inputs.get(field.path);
         if (input && input.value === '') input.value = value;
+      }
+
+      // Only claimed once the watch has actually been read: an install that
+      // succeeded and a value that was never written look identical otherwise,
+      // which is how somebody ends up with an app that does nothing and no idea
+      // why. Says nothing when there is nothing to chase.
+      const missing = missingRequired(spec, doc);
+      if (missing.length > 0 && !status.textContent) {
+        const names = missing.map((f) => f.title).join(', ');
+        status.textContent =
+          missing.length === 1
+            ? `${names} is not set on the watch yet, and the app needs it.`
+            : `Not set on the watch yet, and the app needs them: ${names}.`;
+        status.className = 'meta config-status warn';
       }
     });
   }
