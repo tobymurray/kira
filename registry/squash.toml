@@ -26,14 +26,7 @@ help      = "Type on to stream the raw 100 Hz accelerometer and gyroscope to a C
 maxLength = 8
 
 [[versions]]
-version = "1.0.0"
-rev     = "90991fab1388630a16bb3dd1d0bf77e3129b0ad8"
-sdk_rev = "apps-v1.3.0"
-retired = "the recorder cannot be switched on: 1.0.0 reads the flag from settings.json, which an install has no copy of and the app overwrites whole. 0.1.0 reads input.json. Recorded activities stay valid FIT."
-notes   = "First build. Squash sessions recorded as FIT with sport=racket and sub_sport=squash, on the Workout app's session handling — HR and zones, calories, laps, crash recovery. It does not detect shots or count rallies: those need labelled squash recordings that do not exist yet, so what ships instead is the recorder that collects them, streaming the raw 100 Hz IMU to CSV in a format the SDK simulator can replay. That is off by default and there is no on-watch toggle for it. Untested on hardware."
-
-[[versions]]
 version = "0.1.0"
 rev     = "49130de567edfb7ed78a338693ace5d884c3ebcd"
 sdk_rev = "apps-v1.3.0"
-notes   = "The first version that works. 1.0.0 took its flag from the app's own settings.json, a file a fresh install does not have and one the app rewrites whole on every settings change, so on an installed copy the recorder could not be switched on at all, and nothing said so. It now comes from input.json, which the tick box on this card writes. Numbered below 1.0.0 deliberately: nothing here is exposed to a user yet beyond the Workout screens it was cloned from."
+notes   = "First build. Squash sessions recorded as FIT with sport=racket and sub_sport=squash, on the Workout app's session handling: HR and zones, calories, laps, crash recovery. It does not detect shots or count rallies, because tuning that needs labelled squash recordings which do not exist yet -- so what ships is the recorder that collects them, streaming the raw 100 Hz IMU to CSV in a format the SDK simulator replays. Tick the box above to enable it. Untested on hardware."
