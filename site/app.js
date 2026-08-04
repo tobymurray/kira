@@ -511,6 +511,14 @@ function statusLabel(entry) {
       // Withdrawn by whoever publishes it. The reason is on the card; here it
       // matters most that a watch already carrying it is named, not nagged.
       return [entry.installed ? 'Withdrawn — installed' : 'Withdrawn', ''];
+    case 'folder-taken':
+      // Something Kira does not recognise is already in the folder this would be
+      // written to, and installing clears other .uapp files out of it. Naming the
+      // occupant is the only part of this a user can act on.
+      return [
+        entry.blocking ? `Folder used by ${entry.blocking.name}` : 'Folder used by another app',
+        '',
+      ];
     default:
       return [entry.status, ''];
   }
@@ -795,6 +803,40 @@ function missingRequired(spec, doc) {
   return spec.fields.filter((field) => field.required && !(doc && atPath(doc, field.path)));
 }
 
+/** This app's row in the current plan, if a watch is connected. */
+function planEntry(appId) {
+  return (state.plan?.entries ?? []).find((entry) => entry.app.appId === appId);
+}
+
+/**
+ * What owns `Apps/<Folder>/` instead of this app, or null when the folder is the
+ * app's own.
+ *
+ * The planner already works this out for installing, and refuses: it clears other
+ * `.uapp` files out of the folder it writes to, so going ahead would delete
+ * somebody's app. Writing a settings file is a smaller act with the same mistake
+ * underneath -- the directory belongs to another app, and the card has already
+ * said so. Nothing about a settings file makes that ownership different, and
+ * `Apps/<Folder>/<file>` is exactly where the other app's own config would live.
+ *
+ * Read from the live plan rather than the entry captured at render, so connecting
+ * or ejecting a watch cannot leave a stale answer behind a button.
+ *
+ * Withdrawal is deliberately not here. A retired app is not offered for
+ * installation, but the folder is still its own and a watch may be carrying it --
+ * whoever has it should be able to fix its settings.
+ */
+function configFolderOwner(app) {
+  if (app.supersededBy) {
+    return `AppID ${app.supersededBy}, which the catalogue lists in that folder with newer versions`;
+  }
+  const blocking = planEntry(app.appId)?.blocking;
+  if (blocking) {
+    return `${blocking.name} ${blocking.version}, which is in that folder on the watch now`;
+  }
+  return null;
+}
+
 /** What is already in the app's settings file, or null if there is nothing usable. */
 async function readConfig(app) {
   if (!state.appsDir) return null;
@@ -815,6 +857,13 @@ async function readConfig(app) {
 
 /** Write the assembled document, then read the length back. */
 async function writeConfig(app, text) {
+  // Checked here and not only where the button is disabled: this is the call that
+  // reaches a device, and the answer can change between rendering a card and
+  // pressing what is on it.
+  const foreign = configFolderOwner(app);
+  if (foreign) {
+    throw new Error(`Apps/${app.folder}/ belongs to ${foreign}`);
+  }
   const bytes = new TextEncoder().encode(text);
   const dir = await state.appsDir.getDirectoryHandle(app.folder, { create: true });
   const handle = await dir.getFileHandle(app.config.file, { create: true });
@@ -863,13 +912,27 @@ function renderConfig(app) {
   summary.textContent = required ? 'Setup' : 'Settings';
   box.appendChild(summary);
 
+  // A folder another app owns is not written to at all -- not the settings file,
+  // and not the read that prefills it either.
+  const foreign = configFolderOwner(app);
+  const writable = state.mode === 'write' && state.appsDir && !foreign;
+
   const where = document.createElement('p');
   where.className = 'meta';
-  where.textContent = `Written to Apps/${app.folder}/${spec.file} on the watch.`;
+  // Not "written to" when it will not be: the refusal below would contradict it.
+  where.textContent = foreign
+    ? `This app reads Apps/${app.folder}/${spec.file} on the watch.`
+    : `Written to Apps/${app.folder}/${spec.file} on the watch.`;
   box.appendChild(where);
 
-  const writable = state.mode === 'write' && state.appsDir;
-  if (!writable) {
+  if (foreign) {
+    const note = document.createElement('p');
+    note.className = 'meta config-note bad';
+    note.textContent =
+      `That folder belongs to ${foreign}, so Kira will not write to it — the ` +
+      'settings would land in another app\'s folder.';
+    box.appendChild(note);
+  } else if (!writable) {
     const note = document.createElement('p');
     note.className = 'meta config-note';
     note.textContent = CAN_WRITE
