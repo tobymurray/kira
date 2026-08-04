@@ -541,6 +541,25 @@ button.config-save:disabled {
   color: var(--bad);
 }
 
+/* Not an error: nothing has gone wrong, there is just a value the app is still
+   waiting for. Kept distinct from .bad so a fresh install does not read as a
+   failure. */
+.config-status.warn {
+  color: var(--warn-ink);
+}
+
+/* A value the app cannot work without. It sits above the download rather than
+   below, so it reads as part of installing; this keeps it from looking like the
+   optional panel it otherwise resembles. */
+details.config-required {
+  border-top-color: var(--warn-line);
+}
+
+details.config-required > summary {
+  color: var(--warn-ink);
+  font-weight: 600;
+}
+
 details.archive {
   margin-top: 26px;
   padding-top: 20px;

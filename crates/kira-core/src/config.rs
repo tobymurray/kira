@@ -53,6 +53,21 @@ pub struct Field {
     pub help: Option<String>,
     /// Longest value the app will accept.
     pub max_length: usize,
+    /// Whether the app does nothing useful until this is filled in.
+    ///
+    /// Presentation, not validation: every declared field already needs a value
+    /// before a document can be assembled, so this changes nothing about what
+    /// reaches a watch. What it changes is whether the page treats filling it in
+    /// as part of installing or as an optional preference — a distinction the
+    /// fields cannot carry on their own. `Barcode` scans as nothing until it has
+    /// an id; `Squash` records a perfectly good activity with its IMU flag left
+    /// alone, and pressing someone to set that would be wrong.
+    ///
+    /// Like everything else in a config declaration this is the submitter's word
+    /// and cannot be checked against the binary, so it is surfaced rather than
+    /// enforced: nothing here refuses an install.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 /// What an app says it reads, and from where.
@@ -319,6 +334,7 @@ mod tests {
             title: "Athlete id".to_owned(),
             help: None,
             max_length,
+            required: false,
         }
     }
 
@@ -485,5 +501,40 @@ mod tests {
         let map: BTreeMap<String, String> = pairs.into_iter().collect();
         let err = document(&spec(fields), &map).expect_err("too big");
         assert!(err.contains("over the"), "{err}");
+    }
+
+    #[test]
+    fn required_defaults_false_and_stays_out_of_the_catalogue() {
+        // A manifest written before `required` existed must still parse, and the
+        // catalogue must not grow a key for every field that does not use it.
+        let parsed: Field =
+            serde_json::from_str(r#"{"path":"values.id","title":"Athlete id","maxLength":16}"#)
+                .expect("parses without required");
+        assert!(!parsed.required);
+        let json = serde_json::to_string(&parsed).expect("serializes");
+        assert!(!json.contains("required"), "{json}");
+    }
+
+    #[test]
+    fn required_round_trips_when_set() {
+        let mut f = field("values.id", 16);
+        f.required = true;
+        let json = serde_json::to_string(&f).expect("serializes");
+        assert!(json.contains(r#""required":true"#), "{json}");
+        let back: Field = serde_json::from_str(&json).expect("parses");
+        assert_eq!(back, f);
+    }
+
+    #[test]
+    fn required_does_not_change_what_is_written() {
+        // The distinction is for the page, not for the document: a required and
+        // an optional field assemble to exactly the same bytes.
+        let map: BTreeMap<String, String> =
+            [("values.id".to_owned(), "A1234567".to_owned())].into();
+        let optional = document(&spec(vec![field("values.id", 16)]), &map).expect("writes");
+        let mut req = field("values.id", 16);
+        req.required = true;
+        let mandatory = document(&spec(vec![req]), &map).expect("writes");
+        assert_eq!(optional, mandatory);
     }
 }

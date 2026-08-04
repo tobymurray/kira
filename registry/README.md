@@ -64,7 +64,21 @@ path      = "values.id"   # where the value goes, dot-separated
 title     = "Athlete id"  # the label
 help      = "The characters printed under the barcode on your parkrun card."
 maxLength = 16
+required  = true          # optional: the app does nothing useful without it
 ```
+
+`required` changes how the page presents a field, not what gets written. A
+required field is shown above the download instead of in a collapsed panel
+underneath it, and once a watch is connected the card says when the value is not
+on it yet — because an install that worked and a value nobody wrote look
+identical otherwise, which is how somebody ends up holding an app that does
+nothing and no way to tell why. Leave it off when the app is fine either way:
+`Barcode` scans as nothing without an id, but `Squash` records a perfectly good
+activity with its IMU flag untouched, and nagging about that would be wrong.
+
+It is not enforced. Like everything else in this block it is your word and cannot
+be checked against a binary, so nothing refuses an install over it — somebody may
+want the `.uapp` now and the value later, or may write the file by hand.
 
 which produces
 
