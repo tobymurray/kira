@@ -6,6 +6,7 @@
 //! - [`icon`] decodes the ABGR2222 icons embedded in one.
 //! - [`catalog`] is the published schema, plus version selection.
 //! - [`config`] assembles the settings file an app reads from its own folder.
+//! - [`fat`] names the watch's volume, or a desktop, will not take literally.
 //! - [`notes`] sorts upstream's release prose by what can reach a watch.
 //! - [`plan`] diffs a selection against a watch and generates installers.
 //!
@@ -13,6 +14,7 @@
 
 pub mod catalog;
 pub mod config;
+pub mod fat;
 pub mod icon;
 pub mod notes;
 pub mod plan;

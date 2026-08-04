@@ -246,10 +246,29 @@ fn check_file_name(name: &str) -> Result<(), Problem> {
             "file name {name:?} may use only letters, digits, dot, dash and underscore"
         ));
     }
+    // Checked before the .uapp rule below, because it is what would let a name get
+    // past it: Windows drops a trailing dot when it creates the file, so
+    // "evil.uapp." is a request for "evil.uapp" wearing a disguise. Refuse the
+    // disguise rather than try to see through it -- the name that is checked has
+    // to be the name that is created.
+    if crate::fat::is_trimmed_by_host(name) {
+        return Err(format!(
+            "file name {name:?} ends in a dot or a space, which some systems drop \
+             when they create the file"
+        ));
+    }
     // The watch loads the first .uapp it finds in a folder, so a config file
     // claiming that extension could displace the app itself.
     if name.to_ascii_lowercase().ends_with(".uapp") {
         return Err(format!("file name {name:?} would look like an app binary"));
+    }
+    // A folder was already refused one of these; a file never was. On Windows the
+    // write goes to the device and not to the volume, so the file the app looks
+    // for is simply never there.
+    if crate::fat::is_reserved_device(name) {
+        return Err(format!(
+            "file name {name:?} is a reserved device name, which does not write to a file"
+        ));
     }
     Ok(())
 }
@@ -272,6 +291,16 @@ fn check_path(path: &str) -> Result<(), Problem> {
         {
             return Err(format!(
                 "path {path:?} may use only letters, digits, dash and underscore between dots"
+            ));
+        }
+        // A path is a key, and on the way here it is a key on a JavaScript object:
+        // the page collects values into one before handing them over. Assigning to
+        // `__proto__` there is silently dropped rather than stored, so the value
+        // would go missing between the form and this crate. These are spelled with
+        // the characters the rule above allows, so nothing else catches them.
+        if matches!(segment, "__proto__" | "constructor" | "prototype") {
+            return Err(format!(
+                "path {path:?} uses {segment:?}, which is not usable as a key"
             ));
         }
     }
@@ -447,6 +476,56 @@ mod tests {
         let mut s = spec(vec![field("values.id", 16)]);
         s.file = "Config.UAPP".to_owned();
         assert!(check_spec(&s).is_err());
+    }
+
+    #[test]
+    fn a_trailing_dot_cannot_smuggle_a_uapp_past_the_extension_rule() {
+        // Windows drops the trailing dot when it creates the file, so each of
+        // these asked for a name ending .uapp while not appearing to. The watch
+        // boots the first .uapp in a folder and a JSON file fails its CRC
+        // silently, so what this bought was an app that stopped launching with
+        // nothing anywhere saying why.
+        for bad in ["evil.uapp.", "evil.uapp..", "EVIL.UAPP.", "input.json."] {
+            let mut s = spec(vec![field("values.id", 16)]);
+            s.file = bad.to_owned();
+            assert!(check_spec(&s).is_err(), "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_config_file_cannot_be_named_after_a_device() {
+        // A folder was already refused these. A file was not, and on Windows the
+        // write lands on the device rather than the volume -- so the app looks for
+        // a file that was never created. The extension does not help: `nul.json`
+        // resolves to NUL too.
+        for bad in ["NUL", "con", "AUX", "COM1", "LPT9", "nul.json", "PRN.txt"] {
+            let mut s = spec(vec![field("values.id", 16)]);
+            s.file = bad.to_owned();
+            assert!(check_spec(&s).is_err(), "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_path_cannot_use_a_key_javascript_will_not_store() {
+        // The page collects values into a plain object keyed by path before this
+        // crate sees them, and assigning a string to `__proto__` there is dropped
+        // rather than stored -- so the value would vanish between the form and
+        // here. Spelled with letters and underscores, so the charset rule misses
+        // them.
+        for bad in [
+            "__proto__",
+            "values.__proto__",
+            "constructor",
+            "a.prototype.b",
+        ] {
+            let s = spec(vec![field(bad, 16)]);
+            assert!(check_spec(&s).is_err(), "accepted {bad:?}");
+        }
+        // Names that merely resemble them are fine.
+        for good in ["proto", "values.__proto", "constructors", "prototypes"] {
+            let s = spec(vec![field(good, 16)]);
+            assert!(check_spec(&s).is_ok(), "refused {good:?}");
+        }
     }
 
     #[test]
