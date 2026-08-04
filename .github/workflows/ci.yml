@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # rust-toolchain.toml pins the compiler and pulls in clippy, rustfmt and
       # the wasm target, so there is nothing to configure here.

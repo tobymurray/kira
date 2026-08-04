@@ -53,11 +53,24 @@ jobs:
     runs-on: ubuntu-latest
     # A failed submission run leaves the store as it was, so there is nothing new
     # to publish and no reason to redeploy.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    #
+    # The head_repository test is what makes the `branches: [main]` filter above
+    # mean what it looks like it means. That filter matches the *triggering run's*
+    # head branch, and for a pull request from a fork that is the fork's branch
+    # name -- which is very often `main`. So an outsider opening a pull request
+    # could set a full catalogue rebuild and Pages deploy going. It would deploy
+    # this repository's own content, so nothing false could be published; it is a
+    # stranger being able to start the machinery that is wrong.
+    if: >-
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     outputs:
       releases: ${{ steps.fetch.outputs.count }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # rust-toolchain.toml pins the compiler and pulls in the wasm target.
       - uses: actions/cache@v6
