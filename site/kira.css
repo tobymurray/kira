@@ -529,6 +529,13 @@ button.config-save:disabled {
   cursor: not-allowed;
 }
 
+/* Why nothing will be written: the folder belongs to another app. A refusal, not
+   a status, so it is styled with the form rather than with the outcome of using
+   it. */
+.config-note.bad {
+  color: var(--bad);
+}
+
 .config-status:empty {
   display: none;
 }
