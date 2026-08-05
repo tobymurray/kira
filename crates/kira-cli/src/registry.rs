@@ -55,11 +55,6 @@ const LICENCES: &[&str] = &[
 /// somewhere the launcher does not look, or overwrite shared state.
 const RESERVED_FOLDERS: &[&str] = &["SharedData", "ShareData", "System", "Activity"];
 
-/// Names MS-DOS reserved, which FAT still refuses as a directory name.
-const DOS_DEVICES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "LPT1", "LPT2", "LPT3",
-];
-
 /// One published version of a submitted app.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -308,7 +303,7 @@ fn check_folder(manifest: &Manifest, say: &mut impl FnMut(String)) {
     {
         say(format!("folder {folder:?} is reserved by the watch"));
     }
-    if DOS_DEVICES.iter().any(|r| r.eq_ignore_ascii_case(folder)) {
+    if kira_core::fat::is_reserved_device(folder) {
         say(format!("folder {folder:?} is not a usable name on FAT"));
     }
 }
