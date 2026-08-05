@@ -14,9 +14,14 @@
 //! is deliberately left alone: it is the identity read off a watch, and widening
 //! it to carry a stage would make it disagree with the device.
 //!
-//! So precedence lives here instead, keyed off the tag, which is the only place
-//! the distinction exists. The rule is semver's: a pre-release ranks below the
-//! release of the same version, and above everything below it.
+//! So precedence lives here instead, keyed off **upstream's own pre-release flag**
+//! — the tag only supplies the stage's name. Those are not the same thing and the
+//! difference bit once: `apps-v0.1.9-rc1`, `-rc2` and `-rc3` are *full releases*
+//! whose tags happen to read like candidates, so trusting the suffix labelled 21
+//! published entries as pre-releases and invented versions like `0.1.4-rc1`.
+//!
+//! The rule is semver's: a pre-release ranks below the release of the same
+//! version, and above everything below it.
 //!
 //! ```text
 //! 1.3.0  <  1.4.0-rc1  <  1.4.0-rc2  <  1.4.0
@@ -66,12 +71,30 @@ pub struct Precedence {
 pub struct PreRelease(String);
 
 impl PreRelease {
-    /// Read the suffix out of a tag, e.g. `rc1` from `apps-v1.4.0-rc1`.
+    /// Read the stage out of a release, when upstream says it has one.
     ///
-    /// `None` for a tag naming a full release. Keyed on the *last* `-`, since the
-    /// prefix convention (`apps-v…`) contains one of its own.
+    /// **`marked_prerelease` is what decides, not the tag.** Upstream published
+    /// `apps-v0.1.9-rc1`, `-rc2` and `-rc3` as *full releases* -- the tags carry an
+    /// `-rcN` suffix and the releases are final. Reading the suffix alone put a
+    /// false "pre-release" badge on 21 published entries and invented labels like
+    /// `0.1.4-rc1` for versions that shipped as plain `0.1.4`. The suffix supplies
+    /// the *name* of a stage; only the flag says whether there is one.
+    ///
+    /// That is also why this is the only constructor: the mistake was possible
+    /// because a tag-only one existed.
+    ///
+    /// Keyed on the *last* `-`, since the prefix convention (`apps-v…`) contains
+    /// one of its own.
     #[must_use]
-    pub fn from_tag(tag: &str) -> Option<Self> {
+    pub fn for_release(tag: &str, marked_prerelease: bool) -> Option<Self> {
+        if !marked_prerelease {
+            return None;
+        }
+        Self::label_in(tag)
+    }
+
+    /// The suffix a tag carries, whether or not it means anything.
+    fn label_in(tag: &str) -> Option<Self> {
         let (_, suffix) = tag.rsplit_once('-')?;
         // `apps-v1.4.0` splits to `v1.4.0`, which is a version and not a stage.
         // Anything starting with a digit or a `v` is part of the version.
@@ -135,25 +158,57 @@ mod tests {
     #[test]
     fn a_candidate_is_read_out_of_its_tag() {
         assert_eq!(
-            PreRelease::from_tag("apps-v1.4.0-rc1").map(|p| p.as_str().to_owned()),
+            PreRelease::for_release("apps-v1.4.0-rc1", true).map(|p| p.as_str().to_owned()),
             Some("rc1".to_owned())
         );
         assert_eq!(
-            PreRelease::from_tag("apps-v0.1.9-rc3").map(|p| p.as_str().to_owned()),
+            PreRelease::for_release("apps-v0.1.9-rc3", true).map(|p| p.as_str().to_owned()),
             Some("rc3".to_owned())
         );
         // A full release has no stage, and the `-` in the prefix is not one.
-        assert_eq!(PreRelease::from_tag("apps-v1.3.0"), None);
-        assert_eq!(PreRelease::from_tag("v1.3.0"), None);
-        assert_eq!(PreRelease::from_tag("1.3.0"), None);
+        assert_eq!(PreRelease::for_release("apps-v1.3.0", true), None);
+        assert_eq!(PreRelease::for_release("v1.3.0", true), None);
+        assert_eq!(PreRelease::for_release("1.3.0", true), None);
+    }
+
+    #[test]
+    fn a_tag_that_looks_like_a_candidate_but_is_a_full_release_has_no_stage() {
+        // Upstream published all three of these as full releases. Reading the
+        // suffix alone put a false "pre-release" badge on 21 published entries and
+        // invented labels like `0.1.4-rc1` for binaries that shipped as `0.1.4`.
+        for tag in ["apps-v0.1.9-rc1", "apps-v0.1.9-rc2", "apps-v0.1.9-rc3"] {
+            assert_eq!(
+                PreRelease::for_release(tag, false),
+                None,
+                "{tag} is a full release however its tag reads"
+            );
+        }
+        // The same tags, had upstream actually marked them pre-releases.
+        assert_eq!(
+            PreRelease::for_release("apps-v0.1.9-rc1", true).map(|p| p.as_str().to_owned()),
+            Some("rc1".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_full_release_never_carries_a_stage_whatever_its_tag() {
+        for tag in ["apps-v1.3.0", "apps-v1.4.0-rc1", "weird-tag-beta"] {
+            assert_eq!(PreRelease::for_release(tag, false), None, "{tag}");
+        }
     }
 
     #[test]
     fn a_candidate_ranks_below_the_release_it_becomes() {
         // The whole point, and the thing Version alone cannot express: both of
         // these binaries stamp themselves 1.4.0.
-        let rc1 = precedence(v("1.4.0"), PreRelease::from_tag("apps-v1.4.0-rc1").as_ref());
-        let rc2 = precedence(v("1.4.0"), PreRelease::from_tag("apps-v1.4.0-rc2").as_ref());
+        let rc1 = precedence(
+            v("1.4.0"),
+            PreRelease::for_release("apps-v1.4.0-rc1", true).as_ref(),
+        );
+        let rc2 = precedence(
+            v("1.4.0"),
+            PreRelease::for_release("apps-v1.4.0-rc2", true).as_ref(),
+        );
         let final_ = precedence(v("1.4.0"), None);
         assert!(rc1 < rc2, "rc1 should precede rc2");
         assert!(rc2 < final_, "a candidate should precede its release");
@@ -163,7 +218,10 @@ mod tests {
     fn a_candidate_still_outranks_every_earlier_release() {
         // The half of semver precedence that is easy to get backwards.
         let previous = precedence(v("1.3.0"), None);
-        let rc1 = precedence(v("1.4.0"), PreRelease::from_tag("apps-v1.4.0-rc1").as_ref());
+        let rc1 = precedence(
+            v("1.4.0"),
+            PreRelease::for_release("apps-v1.4.0-rc1", true).as_ref(),
+        );
         assert!(previous < rc1, "1.3.0 should precede 1.4.0-rc1");
     }
 
@@ -173,15 +231,18 @@ mod tests {
         // one that may supersede it.
         let beta = precedence(
             v("1.4.0"),
-            PreRelease::from_tag("apps-v1.4.0-beta").as_ref(),
+            PreRelease::for_release("apps-v1.4.0-beta", true).as_ref(),
         );
-        let rc1 = precedence(v("1.4.0"), PreRelease::from_tag("apps-v1.4.0-rc1").as_ref());
+        let rc1 = precedence(
+            v("1.4.0"),
+            PreRelease::for_release("apps-v1.4.0-rc1", true).as_ref(),
+        );
         assert!(beta < rc1);
     }
 
     #[test]
     fn a_label_distinguishes_builds_a_version_cannot() {
-        let pre = PreRelease::from_tag("apps-v1.4.0-rc1");
+        let pre = PreRelease::for_release("apps-v1.4.0-rc1", true);
         assert_eq!(label(v("1.4.0"), pre.as_ref()), "1.4.0-rc1");
         assert_eq!(label(v("1.4.0"), None), "1.4.0");
         assert_ne!(label(v("1.4.0"), pre.as_ref()), label(v("1.4.0"), None));
@@ -192,8 +253,8 @@ mod tests {
         let mut builds = [
             (v("1.4.0"), None),
             (v("1.3.0"), None),
-            (v("1.4.0"), PreRelease::from_tag("apps-v1.4.0-rc2")),
-            (v("1.4.0"), PreRelease::from_tag("apps-v1.4.0-rc1")),
+            (v("1.4.0"), PreRelease::for_release("apps-v1.4.0-rc2", true)),
+            (v("1.4.0"), PreRelease::for_release("apps-v1.4.0-rc1", true)),
         ];
         builds.sort_by_key(|(ver, pre)| precedence(*ver, pre.as_ref()));
         let order: Vec<String> = builds

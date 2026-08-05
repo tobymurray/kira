@@ -848,7 +848,7 @@ mod tests {
         let mut release = version_entry("1.4.0");
         release.sha256 = "release-bytes".into();
         let mut candidate = version_entry("1.4.0");
-        candidate.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        candidate.prerelease = PreRelease::for_release("apps-v1.4.0-rc1", true);
         candidate.tag = "apps-v1.4.0-rc1".into();
         candidate.sha256 = "candidate-bytes".into();
         app(vec![release, candidate, version_entry("1.3.0")])
@@ -869,7 +869,7 @@ mod tests {
         // at the head of the list -- it is selectable -- but 1.3.0 is what is
         // offered.
         let mut candidate = version_entry("1.4.0");
-        candidate.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        candidate.prerelease = PreRelease::for_release("apps-v1.4.0-rc1", true);
         let settled = app(vec![candidate, version_entry("1.3.0")]);
 
         assert!(settled.versions[0].is_prerelease(), "still ranked first");
@@ -881,7 +881,7 @@ mod tests {
         // Stopwatch's case, and the reason candidates are published at all: it
         // shipped for the first time in apps-v1.4.0-rc1.
         let mut only = version_entry("1.4.0");
-        only.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        only.prerelease = PreRelease::for_release("apps-v1.4.0-rc1", true);
         let fresh = app(vec![only]);
         assert_eq!(fresh.latest().label(), "1.4.0-rc1");
     }
@@ -937,14 +937,14 @@ mod tests {
         // apps-v1.4.0-rc1 -- naming the release as published when the candidate is
         // the whole reason the app is listed at all.
         let mut only = version_entry("1.4.0");
-        only.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        only.prerelease = PreRelease::for_release("apps-v1.4.0-rc1", true);
         let fresh = app(vec![only]);
         assert_eq!(fresh.describe_history(), "only 1.4.0-rc1 published");
 
         // And in the other arms: whichever build is named, it is named as
         // published, candidate or not.
         let mut newest = version_entry("1.4.0");
-        newest.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        newest.prerelease = PreRelease::for_release("apps-v1.4.0-rc1", true);
         newest.changed = None;
         let two = app(vec![newest, version_entry("1.3.0")]);
         assert_eq!(two.describe_history(), "code changed in 1.3.0");
@@ -955,10 +955,10 @@ mod tests {
         // No full release at all, so the candidate is both the default and the
         // subject of the history line.
         let mut newer = version_entry("1.4.0");
-        newer.prerelease = PreRelease::from_tag("apps-v1.4.0-rc2");
+        newer.prerelease = PreRelease::for_release("apps-v1.4.0-rc2", true);
         newer.delta_bytes = Some(512);
         let mut older = version_entry("1.4.0");
-        older.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        older.prerelease = PreRelease::for_release("apps-v1.4.0-rc1", true);
         older.changed = None;
 
         let a = app(vec![newer, older]);

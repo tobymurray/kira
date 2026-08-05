@@ -75,6 +75,17 @@ struct ReleaseDir {
     meta: Option<ReleaseMeta>,
 }
 
+impl ReleaseDir {
+    /// Whether upstream marked this a pre-release.
+    ///
+    /// Absent metadata means a locally-supplied directory rather than a fetched
+    /// release, and a full release is the safe reading: it is the one that claims
+    /// no stage the binaries cannot back up.
+    fn is_prerelease(&self) -> bool {
+        self.meta.as_ref().is_some_and(|m| m.is_prerelease)
+    }
+}
+
 impl ReleaseOrder for ReleaseDir {
     fn tag(&self) -> &str {
         &self.tag
@@ -511,7 +522,8 @@ fn process_release(
         // `apps-v1.4.0` both stamp 1.4.0 and are different builds -- dropping one
         // would also drop the hash that lets a watch on the candidate be offered
         // the release.
-        let prerelease = PreRelease::from_tag(&release.tag);
+        // Upstream's flag decides, not the tag: apps-v0.1.9-rcN are full releases.
+        let prerelease = PreRelease::for_release(&release.tag, release.is_prerelease());
         let label = prerelease::label(header.version, prerelease.as_ref());
         if entry.versions.iter().any(|v| v.label() == label) {
             continue;
@@ -1539,7 +1551,7 @@ sdk_rev = "apps-v1.3.0"
         VersionEntry {
             version: v,
             version_packed: v.packed(),
-            prerelease: PreRelease::from_tag(&format!("apps-v{version}-{rc}")),
+            prerelease: PreRelease::for_release(&format!("apps-v{version}-{rc}"), true),
             supersedes_sha256: Vec::new(),
             tag: format!("apps-v{version}-{rc}"),
             folder: "Stopwatch".into(),
