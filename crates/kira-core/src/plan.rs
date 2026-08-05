@@ -254,7 +254,7 @@ impl Entry {
         }
 
         let Some(installed) = &self.installed else {
-            return format!("install {}", self.app.version);
+            return format!("install {}", self.app.label());
         };
         match self.status {
             Status::Corrupt => format!("{} is corrupt, reinstall", installed.file),
@@ -626,7 +626,7 @@ pub fn powershell(plan: &Plan, config: &ScriptConfig) -> String {
              \x20   ForEach-Object {{ [IO.File]::Delete($_.FullName); Write-Host \"    removed stale $($_.Name)\" }}\n\
              \x20 Write-Host \"  [ok] $folder -> $file\"\n",
             one_line(&app.name),
-            app.version,
+            app.label(),
             job_note(entry),
             ps_quote(&app.folder),
             ps_quote(&app.file),
@@ -731,7 +731,7 @@ pub fn shell(plan: &Plan, config: &ScriptConfig) -> String {
              done\n\
              echo \"  [ok] $folder -> $file\"\n",
             one_line(&app.name),
-            app.version,
+            app.label(),
             job_note(entry),
             sh_quote(&app.folder),
             sh_quote(&app.file),

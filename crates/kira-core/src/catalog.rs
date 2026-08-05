@@ -361,6 +361,19 @@ impl VersionEntry {
     }
 }
 
+impl Target {
+    /// How this build is named to a reader: `1.4.0` or `1.4.0-rc1`.
+    ///
+    /// Anything naming a build *Kira publishes* uses this. The bare
+    /// [`Self::version`] is right only where the subject is a build read off a
+    /// watch, whose header cannot distinguish a candidate from the release it
+    /// became -- so claiming a stage there would be inventing one.
+    #[must_use]
+    pub fn label(&self) -> String {
+        prerelease::label(self.version, self.prerelease.as_ref())
+    }
+}
+
 impl App {
     /// The build offered by default: the newest full release, if there is one.
     ///
@@ -405,18 +418,22 @@ impl App {
     /// `changed` is computed at build time by comparing payload hashes, so this
     /// says whether the *code* moved, not whether the release tag did.
     #[must_use]
+    /// Every build here is named by [`VersionEntry::label`] rather than by its
+    /// version. "only 1.4.0 published" for an app whose one build is
+    /// `apps-v1.4.0-rc1` names a release that does not exist yet, which is the
+    /// opposite of what this line is for.
     pub fn describe_history(&self) -> String {
         let latest = self.latest();
         if self.versions.len() == 1 {
-            return format!("only {} published", latest.version);
+            return format!("only {} published", latest.label());
         }
 
         if latest.changed == Some(false) {
             // Walk back to the last version that actually changed the app.
             let last_real = self.versions.iter().find(|v| v.changed != Some(false));
             return match last_real {
-                Some(v) if v.version != latest.version => {
-                    format!("code unchanged since {}", v.version)
+                Some(v) if v.label() != latest.label() => {
+                    format!("code unchanged since {}", v.label())
                 }
                 _ => format!("code unchanged across {} releases", self.versions.len()),
             };
@@ -428,16 +445,16 @@ impl App {
             // "changed" here would be the false claim the build deliberately
             // avoided recording.
             return match self.versions.get(1) {
-                Some(older) => format!("not comparable with {}", older.version),
-                None => format!("only {} published", latest.version),
+                Some(older) => format!("not comparable with {}", older.label()),
+                None => format!("only {} published", latest.label()),
             };
         }
 
         match latest.delta_bytes {
             Some(delta) if delta != 0 => {
-                format!("code changed in {} ({delta:+} B)", latest.version)
+                format!("code changed in {} ({delta:+} B)", latest.label())
             }
-            _ => format!("code changed in {}", latest.version),
+            _ => format!("code changed in {}", latest.label()),
         }
     }
 }
@@ -912,6 +929,40 @@ mod tests {
         );
         assert!(targets[0].supersedes_sha256.is_empty());
         assert!(!targets[0].is_latest, "the release is the latest, not this");
+    }
+
+    #[test]
+    fn history_never_names_a_release_that_is_not_published() {
+        // The card said "only 1.4.0 published" for an app whose only build was
+        // apps-v1.4.0-rc1 -- naming the release as published when the candidate is
+        // the whole reason the app is listed at all.
+        let mut only = version_entry("1.4.0");
+        only.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        let fresh = app(vec![only]);
+        assert_eq!(fresh.describe_history(), "only 1.4.0-rc1 published");
+
+        // And in the other arms: whichever build is named, it is named as
+        // published, candidate or not.
+        let mut newest = version_entry("1.4.0");
+        newest.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        newest.changed = None;
+        let two = app(vec![newest, version_entry("1.3.0")]);
+        assert_eq!(two.describe_history(), "code changed in 1.3.0");
+    }
+
+    #[test]
+    fn history_names_a_candidate_when_the_candidate_is_what_moved() {
+        // No full release at all, so the candidate is both the default and the
+        // subject of the history line.
+        let mut newer = version_entry("1.4.0");
+        newer.prerelease = PreRelease::from_tag("apps-v1.4.0-rc2");
+        newer.delta_bytes = Some(512);
+        let mut older = version_entry("1.4.0");
+        older.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        older.changed = None;
+
+        let a = app(vec![newer, older]);
+        assert_eq!(a.describe_history(), "code changed in 1.4.0-rc2 (+512 B)");
     }
 
     #[test]
