@@ -49,7 +49,12 @@ jobs:
       # already in the store.
       builds: ${{ steps.plan.outputs.builds }}
     steps:
+      # Nothing here needs the credential checkout would otherwise leave in
+      # .git/config, so it is not left there. Uniform across every checkout in this
+      # repo; the one that matters is in the build job below.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Which commit to compare against, to catch a published version being
       # repointed at different source.
@@ -82,6 +87,7 @@ jobs:
         with:
           ref: ${{ steps.base.outputs.sha }}
           path: base
+          persist-credentials: false
 
       - uses: actions/cache@v6
         with:
@@ -199,6 +205,15 @@ jobs:
           # Tags included: each submission names the SDK revision to build with.
           fetch-depth: 0
           path: sdk
+          # This job runs the submitter's own CMakeLists, as root, in this
+          # workspace. checkout otherwise leaves a token in sdk/.git/config, which
+          # that code can read. It is read-only in every event this workflow runs
+          # on, so nothing is exploitable today -- but that is the permissions block
+          # above being right rather than anything here stopping it, and the day
+          # somebody adds `contents: write` for an unrelated reason the token
+          # becomes worth stealing. Nothing below needs it: the SDK is public and
+          # already fetched, so the later `git -C sdk checkout` works offline.
+          persist-credentials: false
 
       - name: Install packer requirements
         run: python3 -m pip install --break-system-packages -r sdk/Utilities/Scripts/app_packer/requirements.txt
