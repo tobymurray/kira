@@ -104,6 +104,8 @@ fn catalog_from(fixtures: &[Fixture], tag: &str) -> Catalog {
                 versions: vec![VersionEntry {
                     version: header.version,
                     version_packed: header.version.packed(),
+                    prerelease: None,
+                    supersedes_sha256: Vec::new(),
                     tag: tag.to_owned(),
                     folder: fixture.folder.clone(),
                     file: fixture.file.clone(),

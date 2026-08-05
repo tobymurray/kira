@@ -89,7 +89,7 @@ jobs:
 
           test -s site/data/catalog.json
           # Deliberately hardcoded: a schema bump should require updating this.
-          jq -e '.schema == 6 and (.releases | length) == 2' site/data/catalog.json > /dev/null
+          jq -e '.schema == 7 and (.releases | length) == 2' site/data/catalog.json > /dev/null
           # Provenance must actually be populated, not just declared in the types.
           jq -e '[.apps[].versions[] | select(.origin == null)] | length == 0' \
             site/data/catalog.json > /dev/null

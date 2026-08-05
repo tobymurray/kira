@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::prerelease::{self, PreRelease, Precedence};
 pub use crate::uapp::AppType;
 use crate::uapp::{AppId, Version};
 
@@ -23,8 +24,12 @@ use crate::uapp::{AppId, Version};
 /// bodies say nothing about an app that does not ship in a release. 6 lets an
 /// app declare a settings file it reads from its own folder, so the page can
 /// fill it in over USB — the one route a user-specific value has onto a watch
-/// with four buttons and no keyboard.
-pub const SCHEMA: u32 = 6;
+/// with four buttons and no keyboard. 7 publishes upstream's release candidates,
+/// which needs two fields a version number cannot carry: which stage a build is
+/// (`prerelease`, since the binary stamps `1.4.0` for both `apps-v1.4.0-rc1` and
+/// `apps-v1.4.0`), and the hashes of the candidates a release supersedes, so a
+/// watch carrying one is offered the release rather than reported as a stranger.
+pub const SCHEMA: u32 = 7;
 
 /// A complete catalogue, as published to `data/catalog.json`.
 ///
@@ -178,6 +183,17 @@ pub struct VersionEntry {
     pub version: Version,
     /// The same value packed, retained for schema compatibility.
     pub version_packed: u32,
+    /// Which stage of [`Self::version`] this build is, when it is not the release.
+    ///
+    /// `rc1` for `apps-v1.4.0-rc1`. Absent for a full release, which is why it is
+    /// absent from almost every entry.
+    ///
+    /// It has to be stored rather than derived from [`Self::version`], because the
+    /// packer stamps the version it parses out of the tag: a candidate's binary
+    /// reports itself as `1.4.0` exactly as the release does. The tag is the only
+    /// place the difference survives. See [`crate::prerelease`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prerelease: Option<PreRelease>,
     /// Release this build came from.
     pub tag: String,
     /// On-device folder for this build.
@@ -219,6 +235,20 @@ pub struct VersionEntry {
     /// coming out true on its own afterwards, with no special-casing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches_upstream: Option<bool>,
+    /// Hashes of builds this entry displaced at the *same* version number.
+    ///
+    /// The release candidates Kira used to publish for this version, and no longer
+    /// does: only the newest candidate is listed at a time, and a full release
+    /// displaces it entirely, so the entries themselves are gone. Their hashes stay
+    /// because they are the only way to recognise a watch still carrying one — a
+    /// candidate stamps the version it is a candidate for, so `1.4.0-rc1` and
+    /// `1.4.0` are indistinguishable by version and tell apart only by hash.
+    ///
+    /// Without this the catalogue would forget, and whoever took a candidate would
+    /// be told they had an unrecognised build of the current version: reported,
+    /// never offered, stuck until they deleted it by hand.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supersedes_sha256: Vec<String>,
     /// Why this particular version is no longer offered, if it is not.
     ///
     /// Independent of the app's own [`App::retired`]: a submitter can withdraw
@@ -262,6 +292,18 @@ pub struct Target {
     pub file: String,
     /// Chosen version.
     pub version: Version,
+    /// Which stage of [`Self::version`] this is, when it is not the release.
+    pub prerelease: Option<PreRelease>,
+    /// Hashes of published builds this one supersedes at the *same* version.
+    ///
+    /// Only ever the candidates a release replaces. It exists because nothing else
+    /// can tell them apart: `apps-v1.4.0-rc1` and `apps-v1.4.0` both stamp `1.4.0`,
+    /// so a watch carrying the candidate reports the same version as the release
+    /// and the planner would call it an unrecognised build of the current version —
+    /// reported, never offered, leaving whoever took the candidate stranded on it.
+    /// Matching the installed hash against this list is what makes the release an
+    /// update. See [`crate::plan::Recognised::CandidateBuild`].
+    pub supersedes_sha256: Vec<String>,
     /// `LibC` ABI this build needs.
     pub libc_version: Version,
     /// Whether it starts at boot.
@@ -295,22 +337,67 @@ pub struct Target {
     pub retired: Option<String>,
 }
 
+impl VersionEntry {
+    /// This build's ordering key: version, then stage within it.
+    #[must_use]
+    pub fn precedence(&self) -> Precedence {
+        prerelease::precedence(self.version, self.prerelease.as_ref())
+    }
+
+    /// How this build is named, and how a selection refers to it.
+    ///
+    /// `1.4.0` or `1.4.0-rc1`. Unique within an app, which [`Self::version`] is not
+    /// once candidates are published: two entries would both read `1.4.0` and a
+    /// version picker could not tell a reader which was which.
+    #[must_use]
+    pub fn label(&self) -> String {
+        prerelease::label(self.version, self.prerelease.as_ref())
+    }
+
+    /// Whether this build is a release candidate rather than a full release.
+    #[must_use]
+    pub fn is_prerelease(&self) -> bool {
+        self.prerelease.is_some()
+    }
+}
+
 impl App {
-    /// The newest version. Version lists are stored newest first.
+    /// The build offered by default: the newest full release, if there is one.
+    ///
+    /// **Not simply the head of the list.** Version lists are stored highest
+    /// precedence first, and a release candidate outranks every earlier release —
+    /// so taking the head would move every app in the catalogue onto a candidate
+    /// the moment upstream tagged one, which is a stability regression nobody asked
+    /// for. A candidate is the default only for an app that has no full release at
+    /// all, which is exactly the case it exists to serve: `Stopwatch` first shipped
+    /// in `apps-v1.4.0-rc1` and is otherwise unreachable.
+    ///
+    /// Every candidate stays selectable in the version picker either way.
     ///
     /// # Panics
     /// If the app has no versions, which the builder never emits.
     #[must_use]
     pub fn latest(&self) -> &VersionEntry {
+        let newest = || {
+            self.versions
+                .first()
+                .expect("catalogue apps always have at least one version")
+        };
+        // The list is precedence-ordered, so the first full release in it is the
+        // newest one.
         self.versions
-            .first()
-            .expect("catalogue apps always have at least one version")
+            .iter()
+            .find(|v| !v.is_prerelease())
+            .unwrap_or_else(newest)
     }
 
-    /// Look up a specific version.
+    /// Look up a specific build by its [`VersionEntry::label`].
+    ///
+    /// By label rather than by version, because a version stopped being unique the
+    /// moment candidates were published.
     #[must_use]
-    pub fn find(&self, version: Version) -> Option<&VersionEntry> {
-        self.versions.iter().find(|v| v.version == version)
+    pub fn find(&self, label: &str) -> Option<&VersionEntry> {
+        self.versions.iter().find(|v| v.label() == label)
     }
 
     /// A one-line history, derived from bytes rather than prose.
@@ -434,9 +521,9 @@ pub fn changed_in(apps: &[App], tag: &str) -> ReleaseEffect {
 /// and must not be offered for installation, since writing them would put a
 /// second `.uapp` in a folder the watch resolves by taking the first it finds.
 pub fn mark_superseded(apps: &mut [App]) {
-    let mut best: BTreeMap<String, (Version, AppId)> = BTreeMap::new();
+    let mut best: BTreeMap<String, (Precedence, AppId)> = BTreeMap::new();
     for app in apps.iter() {
-        let newest = app.latest().version;
+        let newest = app.latest().precedence();
         let folder = app.folder.clone();
         // Ties broken by id so the outcome does not depend on iteration order.
         let candidate = (newest, app.app_id);
@@ -462,14 +549,14 @@ pub fn mark_superseded(apps: &mut [App]) {
 /// version that is no longer published, uses the newest available rather than
 /// becoming unresolvable.
 #[must_use]
-pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, Version>) -> Vec<Target> {
+pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, String>) -> Vec<Target> {
     catalog
         .apps
         .iter()
         .map(|app| {
             let chosen = pinned
                 .get(&app.app_id)
-                .and_then(|&v| app.find(v))
+                .and_then(|label| app.find(label))
                 .unwrap_or_else(|| app.latest());
 
             Target {
@@ -481,6 +568,8 @@ pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, Version>) -> 
                 folder: chosen.folder.clone(),
                 file: chosen.file.clone(),
                 version: chosen.version,
+                prerelease: chosen.prerelease.clone(),
+                supersedes_sha256: chosen.supersedes_sha256.clone(),
                 libc_version: chosen.libc_version,
                 autostart: chosen.autostart,
                 size: chosen.size,
@@ -489,7 +578,7 @@ pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, Version>) -> 
                 download: chosen.download.clone(),
                 tag: chosen.tag.clone(),
                 changed: chosen.changed,
-                is_latest: chosen.version == app.latest().version,
+                is_latest: chosen.precedence() == app.latest().precedence(),
                 superseded_by: app.superseded_by,
                 origin: chosen.origin,
                 built_from: chosen.built_from.clone(),
@@ -652,6 +741,8 @@ mod tests {
         VersionEntry {
             version,
             version_packed: version.packed(),
+            prerelease: None,
+            supersedes_sha256: Vec::new(),
             tag: format!("apps-v{v}"),
             folder: "GlanceHR".into(),
             file: format!("Live_HR_{v}.uapp"),
@@ -734,12 +825,101 @@ mod tests {
         }
     }
 
+    /// A candidate and the release it became, as the catalogue holds them: same
+    /// version number, different builds, the release first.
+    fn app_with_candidate() -> App {
+        let mut release = version_entry("1.4.0");
+        release.sha256 = "release-bytes".into();
+        let mut candidate = version_entry("1.4.0");
+        candidate.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        candidate.tag = "apps-v1.4.0-rc1".into();
+        candidate.sha256 = "candidate-bytes".into();
+        app(vec![release, candidate, version_entry("1.3.0")])
+    }
+
+    #[test]
+    fn a_release_outranks_its_own_candidate_at_the_same_version() {
+        let a = app_with_candidate();
+        assert_eq!(a.latest().label(), "1.4.0");
+        assert!(!a.latest().is_prerelease(), "the release must win the tie");
+        assert!(a.versions[1].is_prerelease());
+    }
+
+    #[test]
+    fn a_candidate_does_not_become_the_default_for_an_app_that_has_a_release() {
+        // Upstream tagging apps-v1.4.0-rc1 must not move every settled app in the
+        // catalogue onto a candidate. The candidate outranks 1.3.0 and still sits
+        // at the head of the list -- it is selectable -- but 1.3.0 is what is
+        // offered.
+        let mut candidate = version_entry("1.4.0");
+        candidate.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        let settled = app(vec![candidate, version_entry("1.3.0")]);
+
+        assert!(settled.versions[0].is_prerelease(), "still ranked first");
+        assert_eq!(settled.latest().label(), "1.3.0", "but not offered");
+    }
+
+    #[test]
+    fn a_candidate_is_the_default_when_it_is_the_only_build_there_is() {
+        // Stopwatch's case, and the reason candidates are published at all: it
+        // shipped for the first time in apps-v1.4.0-rc1.
+        let mut only = version_entry("1.4.0");
+        only.prerelease = PreRelease::from_tag("apps-v1.4.0-rc1");
+        let fresh = app(vec![only]);
+        assert_eq!(fresh.latest().label(), "1.4.0-rc1");
+    }
+
+    #[test]
+    fn a_build_is_found_by_label_since_versions_no_longer_identify_one() {
+        let a = app_with_candidate();
+        assert_eq!(
+            a.find("1.4.0").map(|v| v.sha256.clone()),
+            Some("release-bytes".into())
+        );
+        assert_eq!(
+            a.find("1.4.0-rc1").map(|v| v.sha256.clone()),
+            Some("candidate-bytes".into())
+        );
+        assert!(a.find("1.4.0-rc2").is_none());
+    }
+
+    #[test]
+    fn a_chosen_build_carries_its_recorded_supersedes_list() {
+        // Recorded at build time by `collapse_candidates`, since the entries it
+        // names are deliberately no longer in the catalogue. resolve_targets only
+        // has to carry it through to the planner intact.
+        let mut a = app_with_candidate();
+        a.versions.retain(|v| !v.is_prerelease());
+        a.versions[0].supersedes_sha256 = vec!["candidate-bytes".into()];
+
+        let c = catalog(vec![a]);
+        let targets = resolve_targets(&c, &BTreeMap::new());
+        assert_eq!(targets[0].version, Version::new(1, 4, 0));
+        assert_eq!(targets[0].prerelease, None);
+        assert_eq!(targets[0].supersedes_sha256, ["candidate-bytes"]);
+    }
+
+    #[test]
+    fn a_candidate_supersedes_nothing_and_says_so() {
+        // Pinned to a candidate that displaced nothing: overwriting a build on the
+        // strength of an empty list must not be possible.
+        let c = catalog(vec![app_with_candidate()]);
+        let pinned = BTreeMap::from([(c.apps[0].app_id, "1.4.0-rc1".to_owned())]);
+        let targets = resolve_targets(&c, &pinned);
+        assert_eq!(
+            targets[0].prerelease.as_ref().map(PreRelease::as_str),
+            Some("rc1")
+        );
+        assert!(targets[0].supersedes_sha256.is_empty());
+        assert!(!targets[0].is_latest, "the release is the latest, not this");
+    }
+
     #[test]
     fn latest_is_the_head_of_the_list() {
         let a = app(vec![version_entry("1.3.0"), version_entry("1.2.0")]);
         assert_eq!(a.latest().version, Version::new(1, 3, 0));
-        assert!(a.find(Version::new(1, 2, 0)).is_some());
-        assert!(a.find(Version::new(9, 9, 9)).is_none());
+        assert!(a.find("1.2.0").is_some());
+        assert!(a.find("9.9.9").is_none());
     }
 
     #[test]
@@ -760,7 +940,7 @@ mod tests {
             version_entry("1.3.0"),
             version_entry("1.2.0"),
         ])]);
-        let pinned = BTreeMap::from([(c.apps[0].app_id, Version::new(1, 2, 0))]);
+        let pinned = BTreeMap::from([(c.apps[0].app_id, "1.2.0".to_owned())]);
         let targets = resolve_targets(&c, &pinned);
         assert_eq!(targets[0].version, Version::new(1, 2, 0));
         assert!(!targets[0].is_latest);
@@ -770,7 +950,7 @@ mod tests {
     #[test]
     fn a_pin_to_an_unpublished_version_falls_back_to_newest() {
         let c = catalog(vec![app(vec![version_entry("1.3.0")])]);
-        let pinned = BTreeMap::from([(c.apps[0].app_id, Version::new(0, 9, 0))]);
+        let pinned = BTreeMap::from([(c.apps[0].app_id, "0.9.0".to_owned())]);
         assert_eq!(
             resolve_targets(&c, &pinned)[0].version,
             Version::new(1, 3, 0)
@@ -956,8 +1136,9 @@ mod tests {
         let c = catalog(vec![retired]);
 
         for pin in [None, Some(Version::new(1, 0, 0))] {
-            let pinned =
-                pin.map_or_else(BTreeMap::new, |v| BTreeMap::from([(c.apps[0].app_id, v)]));
+            let pinned = pin.map_or_else(BTreeMap::new, |v: Version| {
+                BTreeMap::from([(c.apps[0].app_id, v.to_string())])
+            });
             let targets = resolve_targets(&c, &pinned);
             assert_eq!(
                 targets[0].retired.as_deref(),
@@ -977,7 +1158,7 @@ mod tests {
         // lands on -- and it must still say so rather than being offered.
         assert!(resolve_targets(&c, &BTreeMap::new())[0].retired.is_some());
 
-        let pinned = BTreeMap::from([(c.apps[0].app_id, Version::new(1, 0, 0))]);
+        let pinned = BTreeMap::from([(c.apps[0].app_id, "1.0.0".to_owned())]);
         assert_eq!(resolve_targets(&c, &pinned)[0].retired, None);
     }
 
