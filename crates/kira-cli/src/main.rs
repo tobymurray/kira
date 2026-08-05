@@ -78,6 +78,11 @@ enum Command {
         /// fall back on, so a version with nothing in the store is left out.
         #[arg(long)]
         registry: Option<PathBuf>,
+        /// The catalogue currently published, so a version already served cannot
+        /// have its source repointed. Without it those rules go unchecked, and
+        /// the build says so.
+        #[arg(long)]
+        published: Option<PathBuf>,
     },
 
     /// Print what a .uapp says about itself, as JSON.
@@ -366,6 +371,7 @@ fn main() -> Result<()> {
             built,
             toolchain,
             registry,
+            published,
         } => build::run(&build::Args {
             src,
             out,
@@ -375,6 +381,7 @@ fn main() -> Result<()> {
             built,
             toolchain,
             registry,
+            published,
         }),
         Command::BuildApp {
             app,

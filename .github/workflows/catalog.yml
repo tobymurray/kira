@@ -252,20 +252,51 @@ jobs:
             echo "no $BINARIES_TAG release; publishing upstream binaries throughout"
           fi
 
+      # What is served right now, which is where a watch got its binary from. The
+      # build compares the manifests against it so a published version cannot have
+      # its source repointed -- a rule the submission workflow can only check from
+      # one pull request's base, and so cannot check at all for anything that
+      # reached main another way.
+      #
+      # Absence is legitimate exactly once, on the first publish of an empty site,
+      # and the build says out loud that it checked nothing. Anything else -- a 404
+      # from a bad deploy, a transient 500 -- would silently drop the rule, so it is
+      # retried and then trusted.
+      - name: Fetch the published catalogue
+        run: |
+          set -euo pipefail
+          if curl -fsSL --retry 3 -o published.json \
+               https://kira.technicallyrural.com/data/catalog.json; then
+            echo "checking against $(jq '.apps | length' published.json) published apps"
+          else
+            echo "::warning::no published catalogue reachable, so nothing is checked against what is already served"
+            rm -f published.json
+          fi
+
       - name: Build the catalogue
         run: |
+          set -euo pipefail
           # --registry folds the submitted apps in beside the SDK's, from the same
           # store. It also re-runs the submission checks against the catalogue as
           # it stands now, so a collision upstream introduced later stops the
           # build rather than reaching a watch.
-          cargo run --release -p kira-cli -- build \
-            --src apps \
-            --out site \
-            --releases releases.json \
-            --repo UNAWatch/una-sdk \
-            --built built \
-            --toolchain "$TOOLCHAIN" \
-            --registry registry
+          #
+          # --published adds the rules about what a manifest may no longer change,
+          # so they hold per publish rather than per review. Its absence is the
+          # first-publish case and the build says so; the file is present or it is
+          # not, rather than an empty variable spliced into the command line.
+          if [ -f published.json ]; then
+            cargo run --release -p kira-cli -- build \
+              --src apps --out site --releases releases.json \
+              --repo UNAWatch/una-sdk --built built \
+              --toolchain "$TOOLCHAIN" --registry registry \
+              --published published.json
+          else
+            cargo run --release -p kira-cli -- build \
+              --src apps --out site --releases releases.json \
+              --repo UNAWatch/una-sdk --built built \
+              --toolchain "$TOOLCHAIN" --registry registry
+          fi
 
       - uses: actions/upload-pages-artifact@v5
         with:
