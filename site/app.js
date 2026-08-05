@@ -485,8 +485,8 @@ function statusLabel(entry) {
       // A version-only bump is not a neutral "update" — saying so would imply
       // new code that is not there. Deliberately not styled as attention-worthy.
       return entry.identicalPayload
-        ? [`${entry.installed.version} → ${entry.app.version} · same code`, '']
-        : [`Update ${entry.installed.version} → ${entry.app.version}`, 'update'];
+        ? [`${entry.installed.version} → ${versionLabel(entry.app)} · same code`, '']
+        : [`Update ${entry.installed.version} → ${versionLabel(entry.app)}`, 'update'];
     case 'current':
       // Which build it is matters: the vendor's binary for the same version is
       // equivalent, not stale.
@@ -603,7 +603,7 @@ function renderProvenance(app, selected) {
     differs.textContent = ' · not the vendor’s bytes';
     differs.title =
       `This is Kira's build of the same source, not the binary UNA ships.\n` +
-      `UNA's build of ${selected.version} hashes ${(selected.upstreamSha256 ?? '').slice(0, 16)}…\n` +
+      `UNA's build of ${versionLabel(selected)} hashes ${(selected.upstreamSha256 ?? '').slice(0, 16)}…\n` +
       'The two are expected to converge once the SDK carries its path-independence fix.';
     provenance.appendChild(differs);
   } else if (selected.matchesUpstream === true) {
@@ -692,7 +692,7 @@ function renderCard(app, entry) {
     note.textContent = `withdrawn — ${withdrawn}`;
     note.title = app.retired
       ? 'This app is no longer offered for installation.'
-      : `Version ${selected.version} is no longer offered for installation.`;
+      : `Version ${versionLabel(selected)} is no longer offered for installation.`;
     body.appendChild(note);
   }
 
@@ -704,6 +704,9 @@ function renderCard(app, entry) {
     const note = document.createElement('div');
     note.className = 'meta prerelease';
     note.textContent = `pre-release · ${selected.tag}`;
+    // The only place a bare version is deliberate: both of these name the release
+    // this candidate is *for*, which is the thing that does not exist yet.
+    // versionLabel here would say "replaced by 1.4.0-rc1 proper".
     note.title =
       `UNA published this as a release candidate, not a full release. It is their ` +
       `own build of ${selected.version}, offered here so you do not have to wait ` +
@@ -1352,7 +1355,7 @@ async function fetchVerified(app) {
 
 async function installOne(entry) {
   const { app } = entry;
-  log(`${app.name} ${app.version} → Apps/${app.folder}/${app.file}`);
+  log(`${app.name} ${versionLabel(app)} → Apps/${app.folder}/${app.file}`);
 
   const bytes = await fetchVerified(app);
   const dir = await state.appsDir.getDirectoryHandle(app.folder, { create: true });
@@ -1548,7 +1551,7 @@ async function verifyFlash() {
         // watch, 0.2.0 selected" says that where "OTHER VERSION" does not.
         stale++;
         log(
-          `  [${entry.installed.version} on watch, ${entry.app.version} selected] ` +
+          `  [${entry.installed.version} on watch, ${versionLabel(entry.app)} selected] ` +
             `${installed.folder}/${installed.file}`,
           'bad',
         );
