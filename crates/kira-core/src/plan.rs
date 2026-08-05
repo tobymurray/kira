@@ -477,10 +477,24 @@ impl Default for ScriptConfig {
     }
 }
 
+/// Quote a value into a `sh` single-quoted literal.
+///
+/// Every catalogue value that reaches either script goes through one of these two,
+/// including the download path -- which used to be interpolated bare into a
+/// double-quoted URL, where `sh` and PowerShell both still perform command
+/// substitution. It happened to be safe, because the three things it is built from
+/// are separately charset-limited, but the safety was three validators away from
+/// the place it mattered and nothing here said so. A quoted value needs no such
+/// argument.
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
+/// Quote a value into a PowerShell single-quoted literal. See [`sh_quote`].
+///
+/// Single quotes are the literal form: no `$`, no `$(...)`, no backtick escape. So
+/// interpolating the *variable* into `"$BaseUrl/$path"` afterwards is safe, because
+/// expansion reads the double-quoted source and not the value it substitutes.
 fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -566,7 +580,8 @@ pub fn powershell(plan: &Plan, config: &ScriptConfig) -> String {
             out,
             "\n  # {} {} ({})\n\
              \x20 $folder = {}; $file = {}; $sha = {}\n\
-             \x20 $url = \"$BaseUrl/{}\"\n\
+             \x20 $path = {}\n\
+             \x20 $url = \"$BaseUrl/$path\"\n\
              \x20 $dl = Join-Path $tmp $file\n\
              \x20 Write-Host \"  downloading $folder/$file\"\n\
              \x20 Invoke-WebRequest -Uri $url -OutFile $dl -UseBasicParsing\n\
@@ -592,7 +607,7 @@ pub fn powershell(plan: &Plan, config: &ScriptConfig) -> String {
             ps_quote(&app.folder),
             ps_quote(&app.file),
             ps_quote(&app.sha256),
-            app.download,
+            ps_quote(&app.download),
         );
     }
 
@@ -666,8 +681,9 @@ pub fn shell(plan: &Plan, config: &ScriptConfig) -> String {
             out,
             "\n# {} {} ({})\n\
              folder={}; file={}; sha={}; size={}\n\
+             path={}\n\
              echo \"  downloading $folder/$file\"\n\
-             curl -fsSL \"$BASE_URL/{}\" -o \"$TMP/$file\"\n\
+             curl -fsSL \"$BASE_URL/$path\" -o \"$TMP/$file\"\n\
              got=$(sha256_of \"$TMP/$file\")\n\
              if [ \"$got\" != \"$sha\" ]; then echo \"$file: SHA-256 mismatch (expected $sha, got $got)\" >&2; exit 1; fi\n\
              mkdir -p \"$APPS/$folder\"\n\
@@ -697,7 +713,7 @@ pub fn shell(plan: &Plan, config: &ScriptConfig) -> String {
             sh_quote(&app.file),
             sh_quote(&app.sha256),
             app.size,
-            app.download,
+            sh_quote(&app.download),
         );
     }
 
@@ -1306,6 +1322,36 @@ mod tests {
         let plan = build(&[app], &[]);
         assert!(powershell(&plan, &config()).contains("'Bob''s App'"));
         assert!(shell(&plan, &config()).contains(r"'Bob'\''s App'"));
+    }
+
+    #[test]
+    fn a_download_path_cannot_run_a_command() {
+        // This was the one catalogue value interpolated bare, and it went into a
+        // double-quoted URL -- where sh takes both $(...) and backticks, and
+        // PowerShell takes $(...). Nothing reachable could get those characters
+        // into it, but that rested on three unrelated charset rules rather than on
+        // anything here, so it is pinned at the sink instead.
+        let mut app = target("1.0.0");
+        app.download = "apps/$(id)/`id`/'x'/a.uapp".into();
+        let plan = build(&[app], &[]);
+
+        let sh = shell(&plan, &config());
+        assert!(
+            sh.contains(r"path='apps/$(id)/`id`/'\''x'\''/a.uapp'"),
+            "download not sh-quoted: {sh}"
+        );
+        assert!(sh.contains(r#"curl -fsSL "$BASE_URL/$path""#));
+        // The substitution must not survive anywhere outside a single-quoted
+        // literal, which is the only place these characters are inert.
+        assert!(!sh.contains(r#""$BASE_URL/apps/$(id)"#), "{sh}");
+
+        let ps = powershell(&plan, &config());
+        assert!(
+            ps.contains("$path = 'apps/$(id)/`id`/''x''/a.uapp'"),
+            "download not ps-quoted: {ps}"
+        );
+        assert!(ps.contains(r#"$url = "$BaseUrl/$path""#));
+        assert!(!ps.contains(r#""$BaseUrl/apps/$(id)"#), "{ps}");
     }
 
     #[test]
