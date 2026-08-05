@@ -597,6 +597,20 @@ details.archive .card {
   margin: 0 0 6px;
 }
 
+/* Upstream's own release candidate. Shares the warning treatment with a
+   superseded entry: both are "this is offered, with a caveat you should read"
+   rather than an error. */
+.meta.prerelease {
+  font-size: 11px;
+  color: var(--warn-ink);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  border-radius: 6px;
+  padding: 1px 6px;
+  display: inline-block;
+  margin: 0 0 6px;
+}
+
 .meta.provenance {
   font-size: 11px;
   opacity: 0.75;

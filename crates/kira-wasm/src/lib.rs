@@ -140,7 +140,11 @@ struct AppView<'a> {
     /// Byte-derived summary, e.g. "code unchanged since 1.2.0".
     history: String,
     /// Version currently selected for this app.
-    selected: Version,
+    /// The chosen build's label, e.g. `1.4.0` or `1.4.0-rc1`.
+    selected: String,
+    /// The build offered by default, which is not always the highest-precedence
+    /// one: see `App::latest`. The page marks this rather than re-deriving it.
+    latest_label: String,
     /// True when another catalogue entry shares this display name, so the UI can
     /// disambiguate by id instead of showing identical-looking cards.
     ambiguous_name: bool,
@@ -275,7 +279,7 @@ impl<'a> PlanView<'a> {
 #[wasm_bindgen]
 pub struct Store {
     catalog: Catalog,
-    pinned: BTreeMap<AppId, Version>,
+    pinned: BTreeMap<AppId, String>,
     ambiguous: Vec<String>,
 }
 
@@ -356,9 +360,10 @@ impl Store {
                 selected: self
                     .pinned
                     .get(&app.app_id)
-                    .copied()
-                    .filter(|v| app.find(*v).is_some())
-                    .unwrap_or_else(|| app.latest().version),
+                    .filter(|label| app.find(label).is_some())
+                    .cloned()
+                    .unwrap_or_else(|| app.latest().label()),
+                latest_label: app.latest().label(),
                 ambiguous_name: self.ambiguous.contains(&app.name),
                 superseded_by: app.superseded_by,
                 publisher: app.publisher.as_ref(),
@@ -402,20 +407,21 @@ impl Store {
             None => {
                 self.pinned.remove(&id);
             }
-            Some(raw) => {
-                let version: Version = raw.parse().map_err(js_err)?;
-                if app.find(version).is_none() {
+            Some(label) => {
+                // A label, not a version: `1.4.0-rc1` and `1.4.0` are different
+                // builds stamping the same version number.
+                if app.find(&label).is_none() {
                     return Err(JsError::new(&format!(
-                        "{} has no version {version}",
+                        "{} has no version {label}",
                         app.name
                     )));
                 }
                 // Following the newest is the absence of a pin, so a stale pin
                 // cannot survive a release that makes it the latest.
-                if version == app.latest().version {
+                if label == app.latest().label() {
                     self.pinned.remove(&id);
                 } else {
-                    self.pinned.insert(id, version);
+                    self.pinned.insert(id, label);
                 }
             }
         }

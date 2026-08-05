@@ -114,6 +114,13 @@ pub enum Verdict {
     VendorMatch,
     /// A different version from the one selected.
     OtherVersion,
+    /// The release candidate of the version selected, not the release itself.
+    ///
+    /// Reported apart from [`Self::OtherVersion`] because the version numbers are
+    /// equal -- a candidate stamps the version it is a candidate for -- so saying
+    /// "other version" beside two identical numbers would read as a bug in Kira
+    /// rather than as a watch still carrying the earlier build.
+    CandidateBuild,
     /// Intact and the right version, but neither published build.
     Unknown,
     /// Fails its own CRC, so the watch is silently ignoring it.
@@ -130,6 +137,15 @@ pub enum Recognised {
     KiraBuild,
     /// Byte-identical to what upstream published for this version.
     UpstreamBuild,
+    /// A release candidate of the version now selected.
+    ///
+    /// Its own published build, and genuinely older -- but the header cannot say
+    /// so, because a candidate stamps the same version as the release it became.
+    /// Only the hash tells them apart, which is why
+    /// [`crate::catalog::Target::supersedes_sha256`] exists. Without this a watch
+    /// that took `1.4.0-rc1` would report an unrecognised build of the current
+    /// version and never be offered `1.4.0`.
+    CandidateBuild,
     /// Intact, but matches neither. Worth telling the user about.
     Unrecognised,
     /// Not hashed yet, so unknown.
@@ -185,6 +201,7 @@ impl Entry {
         match self.recognised {
             Recognised::KiraBuild => Verdict::Match,
             Recognised::UpstreamBuild => Verdict::VendorMatch,
+            Recognised::CandidateBuild => Verdict::CandidateBuild,
             Recognised::Unrecognised => Verdict::Unknown,
             Recognised::Unhashed => Verdict::Unchecked,
         }
@@ -331,6 +348,9 @@ fn recognise(on_watch: &Installed, target: &Target) -> Recognised {
     {
         // The vendor's own binary for this version. Equivalent, not stale.
         Recognised::UpstreamBuild
+    } else if target.supersedes_sha256.iter().any(|old| old == installed) {
+        // A candidate of the same version. Stale, despite the version matching.
+        Recognised::CandidateBuild
     } else {
         Recognised::Unrecognised
     }
@@ -358,6 +378,10 @@ fn classify(on_watch: &Installed, target: &Target, recognised: Recognised) -> St
             )]
             match recognised {
                 Recognised::KiraBuild | Recognised::UpstreamBuild => Status::Current,
+                // The version is equal but the build is not: this is the candidate
+                // the selected release replaces, so it is an update in everything
+                // but the number the header carries.
+                Recognised::CandidateBuild => Status::Update,
                 Recognised::Unrecognised => Status::DifferentBuild,
                 // Without a hash, fall back to what a header scan can see. A
                 // size difference at the same version means something is wrong.
@@ -744,6 +768,8 @@ mod tests {
             folder: "Alarm".into(),
             file: format!("Alarm_{version}.uapp"),
             version,
+            prerelease: None,
+            supersedes_sha256: Vec::new(),
             libc_version: Version::new(0, 0, 3),
             autostart: true,
             size: 210_628,
@@ -1352,6 +1378,65 @@ mod tests {
         );
         assert!(ps.contains(r#"$url = "$BaseUrl/$path""#));
         assert!(!ps.contains(r#""$BaseUrl/apps/$(id)"#), "{ps}");
+    }
+
+    #[test]
+    fn a_watch_carrying_a_candidate_is_offered_the_release() {
+        // The case the whole pre-release feature turns on. Both binaries stamp
+        // 1.4.0, so version comparison says Equal and the hash says "not the build
+        // I publish" -- which without supersedes_sha256 reads as DifferentBuild:
+        // reported, never offered, leaving whoever took the candidate stuck on it.
+        let mut target = target("1.4.0");
+        target.sha256 = "f".repeat(64);
+        target.supersedes_sha256 = vec!["c".repeat(64)];
+
+        let mut on_watch = installed("1.4.0", 210_628);
+        on_watch.sha256 = Some("c".repeat(64));
+        on_watch.crc_valid = Some(true);
+
+        let plan = build(&[target], &[on_watch]);
+        assert_eq!(plan.entries[0].recognised, Recognised::CandidateBuild);
+        assert_eq!(plan.entries[0].status, Status::Update);
+        assert_eq!(
+            plan.actionable().count(),
+            1,
+            "it must be offered, not just named"
+        );
+        assert_eq!(plan.entries[0].verdict(), Verdict::CandidateBuild);
+    }
+
+    #[test]
+    fn the_candidate_itself_still_reads_as_current() {
+        // Before the release exists, the candidate is what Kira publishes, and a
+        // watch carrying it is up to date rather than perpetually out of date.
+        let mut target = target("1.4.0");
+        target.sha256 = "c".repeat(64);
+        target.supersedes_sha256 = Vec::new();
+
+        let mut on_watch = installed("1.4.0", 210_628);
+        on_watch.sha256 = Some("c".repeat(64));
+        on_watch.crc_valid = Some(true);
+
+        let plan = build(&[target], &[on_watch]);
+        assert_eq!(plan.entries[0].status, Status::Current);
+        assert_eq!(plan.entries[0].verdict(), Verdict::Match);
+    }
+
+    #[test]
+    fn an_unrelated_build_at_the_same_version_is_still_not_offered() {
+        // supersedes_sha256 must not become a blanket excuse to overwrite: a build
+        // Kira does not recognise is still somebody's own, and still only reported.
+        let mut target = target("1.4.0");
+        target.sha256 = "f".repeat(64);
+        target.supersedes_sha256 = vec!["c".repeat(64)];
+
+        let mut on_watch = installed("1.4.0", 210_628);
+        on_watch.sha256 = Some("9".repeat(64));
+        on_watch.crc_valid = Some(true);
+
+        let plan = build(&[target], &[on_watch]);
+        assert_eq!(plan.entries[0].status, Status::DifferentBuild);
+        assert_eq!(plan.actionable().count(), 0);
     }
 
     #[test]

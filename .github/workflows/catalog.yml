@@ -112,13 +112,57 @@ jobs:
           set -euo pipefail
           # Stream one object per release and slurp: with --paginate, a --jq that
           # builds an array emits one array PER PAGE, which is not valid JSON.
+          #
+          # Pre-releases are fetched rather than filtered out here, and narrowed
+          # below: an app can ship for the first time in a candidate -- Stopwatch
+          # and Timer did, in apps-v1.4.0-rc1 -- and dropping every candidate makes
+          # it unreachable until the final lands, which was weeks for 1.2.0.
           gh api --paginate repos/UNAWatch/una-sdk/releases \
             --jq '.[]
-                  | select(.prerelease == false)
                   | select(.tag_name | startswith("apps-v"))
                   | {tag: .tag_name, publishedAt: .published_at, url: .html_url,
                      isPrerelease: .prerelease, notes: .body}' \
-            | jq -s 'sort_by(.publishedAt) | reverse' > all-releases.json
+            | jq -s 'sort_by(.publishedAt) | reverse' > every-release.json
+
+          # Kira is not an archive of every tag upstream ever pushed. Keep the
+          # candidates for the version in flight -- the newest is what gets listed
+          # and the rest only lend it their hashes, which is how a watch that took
+          # an earlier one is still recognised -- and drop the candidates of every
+          # version that already has a full release. Upstream has ~19 of those.
+          #
+          # Once the release for the version in flight lands, its own candidates
+          # fall below the floor and leave on the next build, which is what makes
+          # "the stable version displaces the most recent RC" happen by itself.
+          python3 - <<'NARROW'
+          import json, pathlib, re
+
+          releases = json.loads(pathlib.Path("every-release.json").read_text())
+
+          def version(tag):
+              m = re.search(r"v(\d+)\.(\d+)\.(\d+)", tag)
+              return tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
+
+          finals = [r for r in releases if not r["isPrerelease"]]
+          floor = max((version(r["tag"]) for r in finals), default=(0, 0, 0))
+
+          kept, dropped = [], []
+          for r in releases:
+              # At-or-above, not strictly above: the candidates of the version
+              # that has just shipped are still needed for one build, so the
+              # release can inherit their hashes before they stop being listed.
+              # They cost their hashes, not a catalogue entry.
+              if r["isPrerelease"] and version(r["tag"]) < floor:
+                  dropped.append(r["tag"])
+              else:
+                  kept.append(r)
+
+          pathlib.Path("all-releases.json").write_text(json.dumps(kept))
+          print(f"newest full release is {'.'.join(map(str, floor))}")
+          print(f"{len(kept)} release(s) kept, {len(dropped)} superseded candidate(s) dropped")
+          for r in kept:
+              if r["isPrerelease"]:
+                  print(f"  candidate kept: {r['tag']}")
+          NARROW
 
           if [ -n "$ONLY_TAG" ]; then
             jq --arg t "$ONLY_TAG" '[.[] | select(.tag == $t)]' all-releases.json > releases.json

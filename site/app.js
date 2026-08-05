@@ -620,8 +620,20 @@ function renderProvenance(app, selected) {
   return provenance;
 }
 
+/**
+ * How a build is named, and how a selection refers to it: `1.4.0` or `1.4.0-rc1`.
+ *
+ * Mirrors `prerelease::label` in kira-core, which is the source of truth. The
+ * version alone stopped identifying a build once release candidates were
+ * published: `apps-v1.4.0-rc1` and `apps-v1.4.0` both stamp 1.4.0, so two entries
+ * would read the same and this picker could not tell a reader them apart.
+ */
+function versionLabel(version) {
+  return version.prerelease ? `${version.version}-${version.prerelease}` : version.version;
+}
+
 function renderCard(app, entry) {
-  const selected = app.versions.find((v) => v.version === app.selected) ?? app.versions[0];
+  const selected = app.versions.find((v) => versionLabel(v) === app.selected) ?? app.versions[0];
 
   const card = document.createElement('div');
   card.className = 'card';
@@ -684,6 +696,21 @@ function renderCard(app, entry) {
     body.appendChild(note);
   }
 
+  // A candidate, published so an app that ships in one is reachable before the
+  // release lands — Stopwatch and Timer first appeared in apps-v1.4.0-rc1. Stated
+  // on the card and not only in the version picker, which is absent entirely when
+  // the candidate is the only build there is.
+  if (selected.prerelease) {
+    const note = document.createElement('div');
+    note.className = 'meta prerelease';
+    note.textContent = `pre-release · ${selected.tag}`;
+    note.title =
+      `UNA published this as a release candidate, not a full release. It is their ` +
+      `own build of ${selected.version}, offered here so you do not have to wait ` +
+      `for the final or build it yourself. Expect it to be replaced by ${selected.version} proper.`;
+    body.appendChild(note);
+  }
+
   // Upstream reassigned AppIDs: three Glances carry one id up to apps-v0.1.9-rc1
   // and a different one after. Those are separate identities to the watch and the
   // phone, so they stay separate entries — but say which is which.
@@ -717,17 +744,22 @@ function renderCard(app, entry) {
     picker.setAttribute('aria-label', `Version of ${app.name}`);
     for (const version of app.versions) {
       const option = document.createElement('option');
-      option.value = version.version;
+      const label = versionLabel(version);
+      option.value = label;
       const tags = [];
-      if (version.version === app.versions[0].version) tags.push('latest');
+      // From the store, not from the head of the list: a candidate outranks an
+      // earlier release but is not what gets offered. See `App::latest`.
+      if (label === app.latestLabel) tags.push('latest');
+      // Upstream's own candidate, published so an app that ships in one is
+      // reachable before the release lands. Said on every entry, not just the
+      // newest, because the number alone does not show it.
+      if (version.prerelease) tags.push('pre-release');
       if (version.changed === false) tags.push('same code');
       // Still selectable and still downloadable — a watch carrying it has to be
       // able to find out what it has — but never offered for installation.
       if (version.retired) tags.push('withdrawn');
-      option.textContent = tags.length
-        ? `${version.version} · ${tags.join(' · ')}`
-        : version.version;
-      option.selected = version.version === app.selected;
+      option.textContent = tags.length ? `${label} · ${tags.join(' · ')}` : label;
+      option.selected = label === app.selected;
       picker.appendChild(option);
     }
     picker.addEventListener('change', () => void pinVersion(app.appId, picker.value));
@@ -748,7 +780,9 @@ function renderCard(app, entry) {
   const dl = document.createElement('a');
   dl.className = 'dl';
   dl.href = `${DATA_BASE}/${selected.download}`;
-  dl.textContent = `Download ${selected.version}`;
+  // The label, not the bare version: a candidate's button must not read as
+  // though it offers the release.
+  dl.textContent = `Download ${versionLabel(selected)}`;
   dl.setAttribute('download', selected.file);
   dl.title = `${selected.file} → Apps/${app.folder}/`;
   body.appendChild(dl);
@@ -1465,6 +1499,9 @@ const VERDICTS = {
   match: ['ok', 'ok', false],
   'vendor-match': ['ok · vendor build', 'ok', false],
   'other-version': ['OTHER VERSION', 'bad', true],
+  // The version numbers match -- a candidate stamps the version it is a candidate
+  // for -- so this says which build rather than which version.
+  'candidate-build': ['PRE-RELEASE BUILD — reinstall for the release', 'bad', true],
   unknown: ['UNRECOGNISED', 'bad', true],
   corrupt: ['CORRUPT — the watch is ignoring this', 'bad', true],
   unchecked: ['not read', '', false],

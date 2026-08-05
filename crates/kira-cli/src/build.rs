@@ -1,6 +1,6 @@
 //! Building the published catalogue from unzipped releases.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +11,7 @@ use kira_core::catalog::{
     VersionEntry, partition_unique, sort_newest_first,
 };
 use kira_core::icon;
+use kira_core::prerelease::{self, PreRelease};
 use kira_core::uapp::{AppId, Header, Uapp, Version};
 
 use crate::build_app::flags_id;
@@ -505,14 +506,21 @@ fn process_release(
             retired: None,
         });
 
-        // Same version published under two tags: keep the newer release's.
-        if entry.versions.iter().any(|v| v.version == header.version) {
+        // Same *build* published under two tags: keep the newer release's. Keyed
+        // on the label rather than the version, because `apps-v1.4.0-rc1` and
+        // `apps-v1.4.0` both stamp 1.4.0 and are different builds -- dropping one
+        // would also drop the hash that lets a watch on the candidate be offered
+        // the release.
+        let prerelease = PreRelease::from_tag(&release.tag);
+        let label = prerelease::label(header.version, prerelease.as_ref());
+        if entry.versions.iter().any(|v| v.label() == label) {
             continue;
         }
 
         entry.versions.push(VersionEntry {
             version: header.version,
             version_packed: header.version.packed(),
+            prerelease,
             tag: release.tag.clone(),
             folder: binary.folder.clone(),
             file: binary.file.clone(),
@@ -522,6 +530,9 @@ fn process_release(
             sha256: sha256_hex(&chosen.bytes),
             payload_sha256: chosen.payload_sha256,
             download,
+            // Filled by collapse_candidates when a build displaces another at the
+            // same version; empty for everything else.
+            supersedes_sha256: Vec::new(),
             // Filled once every version is known.
             changed: None,
             delta_bytes: None,
@@ -864,6 +875,9 @@ fn submitted_version(built: SubmittedBuild<'_>) -> VersionEntry {
     VersionEntry {
         version: header.version,
         version_packed: header.version.packed(),
+        // A submission names its own versions and publishes them when it likes, so
+        // there is no candidate stage to be in.
+        prerelease: None,
         // A submission ships on its own schedule, so there is no upstream release
         // it came from; its own manifest is what published it.
         tag: manifest.slug.clone(),
@@ -875,6 +889,8 @@ fn submitted_version(built: SubmittedBuild<'_>) -> VersionEntry {
         sha256,
         payload_sha256,
         download,
+        // A submission has no candidate stage, so it displaces nothing.
+        supersedes_sha256: Vec::new(),
         // Filled once every version is known.
         changed: None,
         delta_bytes: None,
@@ -989,8 +1005,19 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 
     let mut apps: Vec<App> = apps.into_values().collect();
     for app in &mut apps {
+        // Before the history walk, so it never compares against an entry that is
+        // not published.
+        collapse_candidates(app);
         annotate_history(app);
     }
+    // Binaries were written as each release was folded, before it was known which
+    // entries would survive the collapse above, so the displaced candidates left
+    // files nothing points at. Publishing them would be dead weight in a payload
+    // every visitor's browser can reach and no page can name.
+    // Subtracted from the running total, so the size reported at the end is what
+    // the site actually carries rather than what was written on the way there.
+    total_bytes = total_bytes.saturating_sub(prune_unreferenced(&data, &apps)?);
+
     // Two apps cannot share an on-device folder, and upstream's reassigned ids
     // leave three pairs that do. Decided after history, since it compares the
     // newest version of each.
@@ -1099,10 +1126,100 @@ fn report(
     println!("{mib:.2} MiB of binaries -> {}", data.display());
 }
 
+/// Delete published binaries no catalogue entry names.
+///
+/// Only ever the release candidates [`collapse_candidates`] displaced: their bytes
+/// were written while the release they lost to was still being folded. Everything
+/// under `apps/` is either named by a version's `download` or is one of those.
+///
+/// # Errors
+/// If the directory cannot be walked or a file cannot be removed.
+fn prune_unreferenced(data: &Path, apps: &[App]) -> Result<u64> {
+    let referenced: BTreeSet<PathBuf> = apps
+        .iter()
+        .flat_map(|app| app.versions.iter())
+        .map(|v| data.join(&v.download))
+        .collect();
+
+    let root = data.join("apps");
+    if !root.is_dir() {
+        return Ok(0);
+    }
+
+    let mut removed = 0usize;
+    let mut bytes = 0u64;
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if !referenced.contains(&path) {
+                bytes += fs::metadata(&path).map_or(0, |m| m.len());
+                fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+                removed += 1;
+            }
+        }
+    }
+
+    if removed > 0 {
+        #[allow(clippy::cast_precision_loss)]
+        let mib = bytes as f64 / 1024.0 / 1024.0;
+        println!("{removed} displaced candidate binaries dropped ({mib:.2} MiB)");
+    }
+    Ok(bytes)
+}
+
+/// Leave one release candidate listed at most, and remember what it replaced.
+///
+/// Kira is not an archive of everything upstream ever tagged. A candidate exists
+/// to make an app reachable before its release lands -- `Stopwatch` first shipped
+/// in `apps-v1.4.0-rc1` -- so one is enough: `rc2` displaces `rc1`, and the full
+/// release displaces the candidate entirely.
+///
+/// What survives is the *hashes*. A candidate stamps the version it is a candidate
+/// for, so `1.4.0-rc1` and `1.4.0` are one number and tell apart only by hash.
+/// Drop the entry and forget the hash, and a watch still carrying the candidate
+/// reports an unrecognised build of the current version: reported, never offered,
+/// stuck until somebody deletes it by hand. So each displaced build's hash moves
+/// onto whatever displaced it, and the chain carries forward.
+///
+/// Runs before [`annotate_history`], so the code-moved comparison never sees an
+/// entry that is not published.
+fn collapse_candidates(app: &mut App) {
+    app.versions
+        .sort_by_key(|entry| std::cmp::Reverse(entry.precedence()));
+
+    // One entry per version number, which is the invariant the catalogue held
+    // before candidates existed and still holds now. Highest precedence wins the
+    // group: a release over its candidates, `rc2` over `rc1`.
+    let mut kept: Vec<VersionEntry> = Vec::with_capacity(app.versions.len());
+    for entry in app.versions.drain(..) {
+        match kept.last_mut() {
+            // Sorted by precedence, so a same-version predecessor is the winner of
+            // this group and this entry is something it displaced.
+            Some(winner) if winner.version == entry.version => {
+                winner.supersedes_sha256.push(entry.sha256);
+                winner.supersedes_sha256.extend(entry.supersedes_sha256);
+            }
+            _ => kept.push(entry),
+        }
+    }
+
+    for entry in &mut kept {
+        entry.supersedes_sha256.sort_unstable();
+        entry.supersedes_sha256.dedup();
+        // A build never supersedes itself, however the tags were arranged.
+        let own = entry.sha256.clone();
+        entry.supersedes_sha256.retain(|hash| *hash != own);
+    }
+    app.versions = kept;
+}
+
 /// Annotate each version against the next older one: did the code move?
 fn annotate_history(app: &mut App) {
     app.versions
-        .sort_by_key(|entry| std::cmp::Reverse(entry.version));
+        .sort_by_key(|entry| std::cmp::Reverse(entry.precedence()));
     for index in 0..app.versions.len() {
         // None, not Some(false): with no predecessor published here it is
         // unknown, which the UI reports differently.
@@ -1417,6 +1534,125 @@ sdk_rev = "apps-v1.3.0"
         assert_eq!(app.versions.len(), 2);
     }
 
+    fn a_candidate_entry(version: &str, rc: &str, sha: &str) -> VersionEntry {
+        let v: Version = version.parse().unwrap();
+        VersionEntry {
+            version: v,
+            version_packed: v.packed(),
+            prerelease: PreRelease::from_tag(&format!("apps-v{version}-{rc}")),
+            supersedes_sha256: Vec::new(),
+            tag: format!("apps-v{version}-{rc}"),
+            folder: "Stopwatch".into(),
+            file: format!("Stopwatch_{version}.uapp"),
+            libc_version: Version::new(0, 0, 3),
+            autostart: false,
+            size: 100,
+            sha256: sha.to_owned(),
+            payload_sha256: format!("p-{sha}"),
+            download: format!("apps/apps-v{version}-{rc}/Stopwatch/x.uapp"),
+            changed: None,
+            delta_bytes: None,
+            origin: Origin::Upstream,
+            built_from: None,
+            upstream_sha256: None,
+            matches_upstream: None,
+            retired: None,
+            notes: None,
+        }
+    }
+
+    fn a_release_entry(version: &str, sha: &str) -> VersionEntry {
+        let mut entry = a_candidate_entry(version, "rc1", sha);
+        entry.prerelease = None;
+        entry.tag = format!("apps-v{version}");
+        entry.sha256 = sha.to_owned();
+        entry
+    }
+
+    fn collapsed(versions: Vec<VersionEntry>) -> App {
+        let mut app = App {
+            app_id: TIDE_CLOCK,
+            name: "Stopwatch".into(),
+            app_type: kira_core::catalog::AppType::Utility,
+            folder: "Stopwatch".into(),
+            versions,
+            icon: None,
+            icon_small: None,
+            superseded_by: None,
+            publisher: None,
+            config: None,
+            retired: None,
+        };
+        collapse_candidates(&mut app);
+        app
+    }
+
+    #[test]
+    fn a_newer_candidate_displaces_the_last_and_inherits_its_hash() {
+        // Kira lists one candidate at a time rather than archiving every tag, so
+        // rc2 replaces rc1 -- but it has to remember rc1's bytes, or a watch that
+        // took rc1 becomes an unrecognised build of the same version number.
+        let app = collapsed(vec![
+            a_candidate_entry("1.4.0", "rc1", "rc1-bytes"),
+            a_candidate_entry("1.4.0", "rc2", "rc2-bytes"),
+        ]);
+
+        assert_eq!(app.versions.len(), 1, "one candidate is listed, not both");
+        assert_eq!(app.versions[0].label(), "1.4.0-rc2");
+        assert_eq!(app.versions[0].supersedes_sha256, ["rc1-bytes"]);
+    }
+
+    #[test]
+    fn the_release_displaces_the_candidate_and_inherits_the_whole_chain() {
+        // The end state: 1.4.0 ships, every candidate for it goes, and the release
+        // can still recognise a watch carrying any of them.
+        let app = collapsed(vec![
+            a_candidate_entry("1.4.0", "rc1", "rc1-bytes"),
+            a_candidate_entry("1.4.0", "rc2", "rc2-bytes"),
+            a_release_entry("1.4.0", "final-bytes"),
+            a_release_entry("1.3.0", "old-bytes"),
+        ]);
+
+        let labels: Vec<String> = app.versions.iter().map(VersionEntry::label).collect();
+        assert_eq!(labels, ["1.4.0", "1.3.0"], "no candidate is left listed");
+        assert_eq!(
+            app.versions[0].supersedes_sha256,
+            ["rc1-bytes", "rc2-bytes"],
+            "both candidates are remembered"
+        );
+        assert!(app.versions[1].supersedes_sha256.is_empty());
+    }
+
+    #[test]
+    fn a_candidate_for_a_later_version_is_left_alone() {
+        // 1.5.0-rc1 is the newest thing published and is nothing to do with the
+        // 1.4.0 release below it.
+        let app = collapsed(vec![
+            a_candidate_entry("1.5.0", "rc1", "next-bytes"),
+            a_release_entry("1.4.0", "final-bytes"),
+        ]);
+        let labels: Vec<String> = app.versions.iter().map(VersionEntry::label).collect();
+        assert_eq!(labels, ["1.5.0-rc1", "1.4.0"]);
+        assert!(app.versions.iter().all(|v| v.supersedes_sha256.is_empty()));
+    }
+
+    #[test]
+    fn a_build_never_supersedes_itself() {
+        // A candidate promoted to a release without a rebuild: same bytes under two
+        // tags. Listing its own hash would make the planner call a correct install
+        // an update, forever.
+        let app = collapsed(vec![
+            a_candidate_entry("1.4.0", "rc1", "same-bytes"),
+            a_release_entry("1.4.0", "same-bytes"),
+        ]);
+        assert_eq!(app.versions.len(), 1);
+        assert!(
+            app.versions[0].supersedes_sha256.is_empty(),
+            "its own hash must not appear: {:?}",
+            app.versions[0].supersedes_sha256
+        );
+    }
+
     #[test]
     fn a_submitted_app_is_published_beside_the_sdk_apps() {
         let fixture = Fixture::new("submitted", MANIFEST);
@@ -1532,7 +1768,7 @@ sdk_rev = "apps-v1.3.0"
         assert_eq!(app.latest().version, Version::new(1, 1, 0));
         assert_eq!(app.latest().retired, None);
         assert_eq!(
-            app.find(Version::new(1, 0, 0)).unwrap().retired.as_deref(),
+            app.find("1.0.0").unwrap().retired.as_deref(),
             Some("writes a corrupt .fit on long runs")
         );
     }
