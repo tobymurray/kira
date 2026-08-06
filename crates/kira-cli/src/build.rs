@@ -642,6 +642,32 @@ fn record_icons(
 /// checked only by the submission workflow, against one pull request's base, which
 /// left them enforced in exactly one place and blind to anything reaching `main`
 /// another way. Checked here they hold per publish rather than per review.
+/// `AppID`s the published catalogue already lists, which is what "first" means.
+fn published_ids(published: Option<&Catalog>) -> BTreeSet<AppId> {
+    published
+        .map(|c| c.apps.iter().map(|a| a.app_id).collect())
+        .unwrap_or_default()
+}
+
+/// Whether an upstream app is the newcomer to a folder a published submission holds.
+///
+/// Case-insensitive, because FAT is: `Squash` and `squash` are one directory on the
+/// watch, and a collision that only a case difference hides is still a collision.
+fn yields_folder_to_incumbent(
+    app: &App,
+    manifests: &[Manifest],
+    incumbents: &BTreeSet<AppId>,
+) -> bool {
+    // An upstream app that is itself already published is not a newcomer, so it
+    // keeps its own folder and a submission arriving into it is still refused.
+    if incumbents.contains(&app.app_id) {
+        return false;
+    }
+    manifests
+        .iter()
+        .any(|m| incumbents.contains(&m.app_id) && m.folder.eq_ignore_ascii_case(&app.folder))
+}
+
 fn refuse_bad_submissions(
     manifests: &[Manifest],
     upstream: &BTreeMap<AppId, App>,
@@ -654,8 +680,24 @@ fn refuse_bad_submissions(
         repo: None,
     };
     let ids = upstream.iter().map(|(id, app)| (*id, owner(app))).collect();
+
+    // An AppID clash stays fatal and is not negotiable. The catalogue is a map
+    // keyed by AppID, so two apps sharing one do not compete for a slot -- they
+    // merge into a single entry carrying both sets of versions, which is nonsense
+    // no display rule can rescue.
+    //
+    // A folder clash is different: the entries stay distinct and only one may be
+    // offered, which `mark_superseded` already expresses. So when an upstream app
+    // arrives into a folder a *published* submission already holds, first come
+    // first served applies -- the incumbent keeps it, the newcomer is listed but
+    // never offered, and the build carries on. This used to be a hard failure with
+    // no way out: the submission could not be retired (retiring does not release
+    // the folder) and could not be deleted (a published manifest may not vanish),
+    // so one collision stopped the whole catalogue publishing indefinitely.
+    let incumbents = published_ids(published);
     let folders = upstream
         .values()
+        .filter(|app| !yields_folder_to_incumbent(app, manifests, &incumbents))
         .map(|app| (app.folder.to_ascii_lowercase(), owner(app)))
         .collect();
 
@@ -1033,7 +1075,8 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // Two apps cannot share an on-device folder, and upstream's reassigned ids
     // leave three pairs that do. Decided after history, since it compares the
     // newest version of each.
-    kira_core::catalog::mark_superseded(&mut apps);
+    // Incumbency decides a contested folder: see `yields_folder_to_incumbent`.
+    kira_core::catalog::mark_superseded(&mut apps, &published_ids(published.as_ref()));
 
     // Case-insensitive, then exact, so the order is stable across machines.
     // JavaScript's localeCompare depends on the host locale, which made the
@@ -1300,6 +1343,17 @@ mod tests {
     const TIDE_CLOCK: AppId = AppId::new(0xA7C3_1F0E_9B48_2D65);
     const ALARM: AppId = AppId::new(0xA19C_2A7E_4F8B_6D31);
 
+    /// A catalogue that has published nothing, so no submission is an incumbent.
+    fn empty_catalog() -> Catalog {
+        Catalog {
+            schema: SCHEMA,
+            generated: "2026-08-06T00:00:00.000Z".into(),
+            source: Source { repo: None },
+            releases: Vec::new(),
+            apps: Vec::new(),
+        }
+    }
+
     /// A valid `.uapp`, so these tests need no vendor binaries.
     ///
     /// Icons are left zero-filled, which real Glance builds do too, so nothing
@@ -1377,6 +1431,20 @@ sdk_rev = "apps-v1.3.0"
             Self { root }
         }
 
+        /// Add an app to the upstream release, as UNA shipping something new.
+        ///
+        /// Exists to model the case the folder rule is about: a folder is free
+        /// when a submission takes it, and occupied by upstream months later.
+        fn add_upstream_app(&self, folder: &str, app_id: AppId, name: &str) {
+            let dir = self.root.join("src/apps-v1.3.0").join(folder);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join(format!("{name}_1.3.0.uapp")),
+                uapp(app_id, name, Version::new(1, 3, 0), 0x33),
+            )
+            .unwrap();
+        }
+
         /// Put a built binary in the store under the name its recipe gives it,
         /// which is how the catalogue build finds it.
         fn store(&self, version: Version, bytes: &[u8]) {
@@ -1440,6 +1508,79 @@ sdk_rev = "apps-v1.3.0"
     /// This is the check that does not care how a manifest reached `main`. The
     /// pull-request one compares against one base and is blind to a direct push,
     /// or to a branch reviewed against a base that already carried the change.
+    #[test]
+    fn upstream_taking_a_published_submissions_folder_no_longer_stops_the_build() {
+        // The deadlock: a published submission cannot be retired out of the way
+        // (retiring does not release the folder) and cannot be deleted (a published
+        // manifest may not vanish), so one collision used to stop the entire
+        // catalogue publishing, for every app, with no way out.
+        //
+        // Published first, while `TideClock` is nobody's, which is the only way to
+        // become an incumbent.
+        let fixture = Fixture::new("incumbent-folder", MANIFEST);
+        let bytes = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22);
+        fixture.store(Version::new(1, 0, 0), &bytes);
+        let published = fixture.build().expect("publishes while the folder is free");
+
+        // Months later, UNA ships their own app into the same folder.
+        let intruder = AppId::new(0x5555_6666_7777_8888);
+        fixture.add_upstream_app("TideClock", intruder, "TideClock");
+
+        let catalog = fixture
+            .build_against(Some(&published))
+            .expect("a contested folder must not stop the catalogue publishing");
+
+        let by_id = |id: AppId| catalog.apps.iter().find(|a| a.app_id == id).unwrap();
+        assert_eq!(
+            by_id(TIDE_CLOCK).superseded_by,
+            None,
+            "first come, first served: the incumbent keeps the folder"
+        );
+        assert_eq!(
+            by_id(intruder).superseded_by,
+            Some(TIDE_CLOCK),
+            "upstream's newer app is listed but never offered"
+        );
+        // Both are still described, which is the point of not failing.
+        assert!(catalog.apps.iter().any(|a| a.app_id == ALARM));
+    }
+
+    #[test]
+    fn a_new_submission_still_cannot_take_a_folder_upstream_holds() {
+        // The other side of first come, first served. Nothing is published here,
+        // so the submission is the newcomer and upstream's Alarm keeps `Alarm`.
+        let squatting = MANIFEST.replace("folder = \"TideClock\"", "folder = \"Alarm\"");
+        let fixture = Fixture::new("newcomer", &squatting);
+        let bytes = uapp(TIDE_CLOCK, "Tide Clock", Version::new(1, 0, 0), 0x22);
+        fixture.store(Version::new(1, 0, 0), &bytes);
+
+        let err = fixture
+            .build_against(Some(&empty_catalog()))
+            .expect_err("a newcomer must not take a folder that is already held")
+            .to_string();
+        assert!(err.contains("folder"), "{err}");
+    }
+
+    #[test]
+    fn an_appid_collision_is_still_fatal() {
+        // Not negotiable however long a submission has been published: the
+        // catalogue is keyed by AppID, so two apps sharing one do not compete for
+        // a folder, they merge into a single entry carrying both sets of versions.
+        let clashing = MANIFEST.replace(
+            "app_id = \"A7C31F0E9B482D65\"",
+            &format!("app_id = \"{ALARM}\""),
+        );
+        let fixture = Fixture::new("idclash", &clashing);
+        let bytes = uapp(ALARM, "Tide Clock", Version::new(1, 0, 0), 0x22);
+        fixture.store(Version::new(1, 0, 0), &bytes);
+
+        let err = fixture
+            .build()
+            .expect_err("an AppID an SDK app holds must never publish")
+            .to_string();
+        assert!(err.contains("AppID"), "{err}");
+    }
+
     #[test]
     fn a_published_version_cannot_be_repointed() {
         let repointed = MANIFEST.replace(
