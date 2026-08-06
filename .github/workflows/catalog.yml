@@ -214,10 +214,22 @@ jobs:
               elif now[tag] != sha:
                   moved.append(f"{tag}: locked {sha}, upstream now {now[tag]}")
 
-          # Only releases this catalogue actually publishes from. Upstream also
-          # carries a -rcN tag for nearly every release, and noticing those would
-          # be permanent noise about tags nothing is ever built from.
-          published = {r["tag"] for r in json.loads(pathlib.Path("releases.json").read_text())}
+          # Only the full releases this catalogue publishes from. Candidates are
+          # excluded for two reasons, and the second is the load-bearing one.
+          #
+          # They are noise: upstream carries a -rcN tag for nearly every release.
+          # This used to fall out for free because releases.json held no candidates
+          # at all; once it did, five notices appeared telling a maintainer to lock
+          # tags for builds that are about to be displaced.
+          #
+          # And following that advice would be a mistake. A locked tag that vanishes
+          # upstream is a hard failure below, so locking a candidate takes a
+          # permanent dependency on upstream never tidying up an -rcN tag after the
+          # release ships. A candidate's provenance is guarded by its hash in the
+          # catalogue, which is what a watch is checked against; the lock exists for
+          # the tags whose recipes have to stay reproducible forever.
+          releases = json.loads(pathlib.Path("releases.json").read_text())
+          published = {r["tag"] for r in releases if not r.get("isPrerelease")}
           for tag in sorted((published & set(now)) - set(locked)):
               # A new release has never been built from, so nothing can have moved
               # under it. Recorded on its first build rather than blocking it.
