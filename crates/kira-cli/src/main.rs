@@ -355,6 +355,11 @@ fn inspect(file: &std::path::Path) -> Result<()> {
             "guiLen": uapp.gui_len(),
             "crcValid": crc.is_valid(),
             "sha256": sha256_hex(&bytes),
+            // The code alone: icons, service and GUI, with the whole header and
+            // the CRC footer excluded. Two builds of the same source under
+            // different release tags share this and differ in "sha256", which is
+            // what lets a caller tell a real change from a version re-stamp.
+            "payloadSha256": sha256_hex(uapp.payload()),
         }))?
     );
     Ok(())
