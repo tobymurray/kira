@@ -4,6 +4,8 @@
 install or update over the USB cable — from a static web page, with no backend.
 Every published version of every app is downloadable, with release notes, and
 each version is marked according to whether the app's code actually changed.
+Upstream's [release candidates](#release-candidates) are carried too, so an app
+that ships in one is reachable before the release lands.
 
 > Unofficial. Not affiliated with, endorsed or sponsored by UNA Watch Ltd.
 > See [THIRD-PARTY.md](THIRD-PARTY.md).
@@ -109,10 +111,39 @@ app's name, e.g. `fix(hrmonitor): make the GCC/Linux simulator build`.
 Every string is rendered as **text, never as HTML** — it is third-party Markdown,
 and it is not going anywhere near `innerHTML`.
 
-Any published version can be selected per app; the newest is the default.
-Selecting an older one re-targets both the download and the installer, so a watch
-already on the newest build correctly reports `newer-on-watch` rather than being
-silently downgraded.
+Any published version can be selected per app; the newest **full release** is the
+default. Selecting an older one re-targets both the download and the installer, so
+a watch already on the newest build correctly reports `newer-on-watch` rather than
+being silently downgraded.
+
+### Release candidates
+
+Upstream tags an `apps-v*-rcN` release candidate weeks before the release —
+eighteen days for apps-v1.2.0, two for apps-v1.3.0 — and an app can ship for the
+first time in one. `Stopwatch`, `Timer` and `Walking` all appeared in
+apps-v1.4.0-rc1 and exist in no full release, so without candidates the only ways
+to get them are building from source or waiting.
+
+So Kira publishes them, with three constraints:
+
+- **A candidate never becomes the default for an app that has a full release.** It
+  ranks *above* the older release — semver's rule, `1.3.0 < 1.4.0-rc1 < 1.4.0` —
+  and is selectable in the version picker, but `Alarm` still offers 1.3.0. A
+  candidate is the default only where there is nothing else, which is the case it
+  exists for.
+- **One candidate is listed at a time.** `rc2` displaces `rc1`; the full release
+  displaces the candidate entirely. This is a catalogue, not an archive of every
+  tag upstream ever pushed. What survives a displacement is the *hash*, carried
+  onto whatever displaced it — otherwise a watch still holding a candidate would
+  report an unrecognised build of the current version and never be offered the
+  release.
+- **Candidates are the vendor's binaries, not Kira's.** Nothing builds candidate
+  tags, so they carry `origin: "upstream"`, no recipe, and no attestation. The
+  card says so.
+
+Whether a build is a candidate comes from upstream's own pre-release flag, never
+from the tag text: `apps-v0.1.9-rc1`, `-rc2` and `-rc3` are *full releases* whose
+tags merely read like candidates.
 
 ### Two capability tiers
 
@@ -347,15 +378,22 @@ issued the certificate.
   See [Module size](#module-size) before trying to shrink it further.
 - **No signing of the apps themselves.** Integrity is SHA-256 (against this
   catalogue) plus the `.uapp` CRC-32, which catches corruption and truncation,
-  not a malicious publisher. Every binary in the store does carry a GitHub
+  not a malicious publisher. Every binary Kira *built* carries a GitHub
   build-provenance attestation — `gh attestation verify <file> --repo
   tobymurray/kira` — so it can be tied to the workflow run that produced it
-  without trusting this repository. That is still not authenticity: it says which
-  build emitted the bytes, not that the source was benign, and nothing here
-  reviews code.
-- **The kernel version cannot be checked over USB.** An app's `minKernelVersion`
-  is a BLE/DIS check in the official mobile app. Kira surfaces the LibC ABI
-  version from the header instead; matching it to your firmware is up to you.
+  without trusting this repository. A version served as the vendor's own build
+  has none, and `gh attestation verify` on one will simply fail; that is every
+  release candidate and any version Kira has no build for. Attestation is also
+  still not authenticity: it says which build emitted the bytes, not that the
+  source was benign, and nothing here reviews code.
+- **The kernel version cannot be checked over USB, and nothing warns you.** An
+  app's `minKernelVersion` is a BLE/DIS check in the official mobile app, and it
+  is not in the `.uapp` at all, so Kira cannot read it. The nearest thing the
+  binary carries is the LibC ABI version, which Kira records in `catalog.json` but
+  does **not** show on a card or compare against anything — matching a build to
+  your firmware is entirely up to you. The LibC exports are absolute flash
+  addresses, so a mismatch is not a graceful refusal. Only one ABI (0.0.3) exists
+  so far, so there is nothing to get wrong yet.
 - **A reboot is required** after installing, and it is not automatable.
 - **Release notes are upstream's, not per-app.** A tag's notes cover the whole
   release, so they may describe apps other than the one you are looking at. The

@@ -154,9 +154,11 @@
              docs/reproducibility.md — none of which the person about to write an
              executable to their watch has any reason to open. -->
         <p class="what-this-is-not note">
-          <strong>Nobody reviews these apps.</strong> Kira compiles each one from a named commit
-          and publishes the recipe, so you can check that a binary came from the source it claims.
-          It cannot tell you whether that source is any good, or safe. There is no code signing on
+          <strong>Nobody reviews these apps.</strong> Kira compiles most of them from a named
+          commit and publishes the recipe, so you can check that a binary came from the source it
+          claims. It cannot tell you whether that source is any good, or safe. Anything marked
+          <em>pre-release</em> is UNA’s own unreleased build, republished as-is with no recipe of
+          Kira’s. There is no code signing on
           this watch, so integrity here is a SHA-256 against this catalogue plus the file’s own
           CRC — that catches corruption, not a hostile publisher.
           <a href="https://github.com/tobymurray/kira/blob/main/docs/reproducibility.md"
