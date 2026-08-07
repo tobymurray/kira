@@ -190,6 +190,15 @@ account token. The watch has four buttons and no keyboard and the SDK offers no
 way to send one in, so the app reads it from a file in its own folder and Kira
 fills that file in over the same USB handle it installs through.
 
+**What lands there is plain text, and nothing about it is private.** The watch
+presents its storage as a USB drive, so the file is readable by anything on any
+computer it is plugged into, and by any other app on the watch. There is no
+encryption, no keystore and nowhere to put one — the app has to read the value
+back with a bounded JSON parser and four buttons. That is fine for an id or a
+preference, which is what these fields are for. It is not somewhere to put a
+password or an account token you would mind somebody else having, and the form
+says so where the value is typed rather than only here.
+
 **The app owns the format entirely.** Its manifest declares the file name, the
 schema number and every key; Kira assembles the document, refuses values the app
 could not read back, and writes it. Nothing about the convention is Kira's, which
