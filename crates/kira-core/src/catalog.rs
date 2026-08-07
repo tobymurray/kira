@@ -7,7 +7,7 @@
 //! [`resolve_targets`] flattens a catalogue down to one chosen version per app —
 //! the shape [`crate::plan`] consumes — so version selection lives here alone.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -537,14 +537,29 @@ pub fn changed_in(apps: &[App], tag: &str) -> ReleaseEffect {
 /// Within a folder the app with the newest version wins; the rest are superseded
 /// and must not be offered for installation, since writing them would put a
 /// second `.uapp` in a folder the watch resolves by taking the first it finds.
-pub fn mark_superseded(apps: &mut [App]) {
-    let mut best: BTreeMap<String, (Precedence, AppId)> = BTreeMap::new();
+pub fn mark_superseded(apps: &mut [App], incumbents: &BTreeSet<AppId>) {
+    // First come, first served. `incumbents` are the apps the published catalogue
+    // already lists, and one of those keeps its folder against any newcomer --
+    // including an upstream app that has only just claimed the name. Whoever is
+    // already installed on somebody's watch is the one Kira must go on describing,
+    // and displacing them to make room would break exactly the people who took the
+    // app when it was the only thing on offer.
+    //
+    // Ranked rather than branched, so the rule is one comparison: incumbency
+    // first, then the newest build, then the id to keep the outcome independent of
+    // iteration order.
+    let rank = |app: &App| {
+        (
+            incumbents.contains(&app.app_id),
+            app.latest().precedence(),
+            app.app_id,
+        )
+    };
+
+    let mut best: BTreeMap<String, (bool, Precedence, AppId)> = BTreeMap::new();
     for app in apps.iter() {
-        let newest = app.latest().precedence();
-        let folder = app.folder.clone();
-        // Ties broken by id so the outcome does not depend on iteration order.
-        let candidate = (newest, app.app_id);
-        best.entry(folder)
+        let candidate = rank(app);
+        best.entry(app.folder.clone())
             .and_modify(|current| {
                 if candidate > *current {
                     *current = candidate;
@@ -554,7 +569,7 @@ pub fn mark_superseded(apps: &mut [App]) {
     }
 
     for app in apps {
-        if let Some(&(_, winner)) = best.get(&app.folder) {
+        if let Some(&(_, _, winner)) = best.get(&app.folder) {
             app.superseded_by = (winner != app.app_id).then_some(winner);
         }
     }
@@ -1146,6 +1161,53 @@ mod tests {
     }
 
     #[test]
+    fn an_incumbent_keeps_its_folder_against_a_newer_arrival() {
+        // First come, first served. The newcomer has the newer version and would
+        // win on that alone, but somebody already installed the incumbent when it
+        // was the only thing offering that folder, and displacing it would break
+        // exactly those people.
+        let mut incumbent = app(vec![version_entry("0.1.0")]);
+        incumbent.app_id = AppId::new(0xA1E5_C38B_7D2F_9046);
+        let mut newcomer = app(vec![version_entry("1.4.0")]);
+        newcomer.app_id = AppId::new(0x1111_2222_3333_4444);
+        assert_eq!(incumbent.folder, newcomer.folder);
+
+        let mut apps = vec![newcomer, incumbent];
+        mark_superseded(
+            &mut apps,
+            &BTreeSet::from([AppId::new(0xA1E5_C38B_7D2F_9046)]),
+        );
+
+        let by_id = |id: u64| apps.iter().find(|a| a.app_id == AppId::new(id)).unwrap();
+        assert_eq!(
+            by_id(0xA1E5_C38B_7D2F_9046).superseded_by,
+            None,
+            "incumbent keeps it"
+        );
+        assert_eq!(
+            by_id(0x1111_2222_3333_4444).superseded_by,
+            Some(AppId::new(0xA1E5_C38B_7D2F_9046)),
+            "the newer arrival is listed but never offered"
+        );
+    }
+
+    #[test]
+    fn incumbency_only_settles_a_contest_it_is_part_of() {
+        // Two newcomers in one folder, neither published: the older rule still
+        // applies, so this must not silently become a coin toss.
+        let mut a1 = app(vec![version_entry("1.0.0")]);
+        a1.app_id = AppId::new(0xAAAA);
+        let mut a2 = app(vec![version_entry("1.3.0")]);
+        a2.app_id = AppId::new(0xBBBB);
+
+        let mut apps = vec![a1, a2];
+        mark_superseded(&mut apps, &BTreeSet::from([AppId::new(0xCCCC)]));
+        let by_id = |id: u64| apps.iter().find(|a| a.app_id == AppId::new(id)).unwrap();
+        assert_eq!(by_id(0xBBBB).superseded_by, None, "newest still wins");
+        assert_eq!(by_id(0xAAAA).superseded_by, Some(AppId::new(0xBBBB)));
+    }
+
+    #[test]
     fn the_app_with_the_newest_version_keeps_the_folder() {
         let mut current = app(vec![version_entry("1.3.0"), version_entry("1.2.0")]);
         current.app_id = AppId::new(0x8899_AABB_CCDD_EEFF);
@@ -1155,7 +1217,7 @@ mod tests {
         assert_eq!(current.folder, old.folder);
 
         let mut apps = vec![old, current];
-        mark_superseded(&mut apps);
+        mark_superseded(&mut apps, &BTreeSet::new());
 
         let by_id = |id: u64| apps.iter().find(|a| a.app_id == AppId::new(id)).unwrap();
         assert_eq!(by_id(0x8899_AABB_CCDD_EEFF).superseded_by, None);
@@ -1168,7 +1230,7 @@ mod tests {
     #[test]
     fn an_app_alone_in_its_folder_is_never_superseded() {
         let mut apps = vec![app(vec![version_entry("1.3.0")])];
-        mark_superseded(&mut apps);
+        mark_superseded(&mut apps, &BTreeSet::new());
         assert_eq!(apps[0].superseded_by, None);
     }
 
