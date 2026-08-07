@@ -106,11 +106,32 @@ jobs:
           if [ "$WANTED" != "all" ] && [ -n "$WANTED" ]; then
             echo "$WANTED" > tags.txt
           else
+            # Candidates are included at or above the newest full release, the
+            # same floor catalog.yml applies, so the tags this builds for and the
+            # tags it publishes from cannot drift apart. Older candidates are
+            # already represented by the release that displaced them.
             gh api --paginate repos/UNAWatch/una-sdk/releases \
-              --jq '.[] | select(.prerelease == false)
-                        | select(.tag_name | startswith("apps-v"))
-                        | .tag_name' > tags.txt
+              --jq '.[] | select(.tag_name | startswith("apps-v"))
+                        | {tag: .tag_name, pre: .prerelease}' \
+              | jq -s . > every-release.json
+            python3 - <<'PICK'
+          import json, pathlib, re
+
+          rel = json.loads(pathlib.Path("every-release.json").read_text())
+
+          def version(tag):
+              m = re.search(r"v(\d+)\.(\d+)\.(\d+)", tag)
+              return tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
+
+          floor = max((version(r["tag"]) for r in rel if not r["pre"]), default=(0, 0, 0))
+          keep = [r for r in rel if not r["pre"] or version(r["tag"]) >= floor]
+          pathlib.Path("tags.txt").write_text("".join(f"{r['tag']}\n" for r in keep))
+          pathlib.Path("candidates.txt").write_text(
+              "".join(f"{r['tag']}\n" for r in keep if r["pre"])
+          )
+          PICK
           fi
+          [ -f candidates.txt ] || : > candidates.txt
           echo "$(wc -l < tags.txt) release(s) to consider:"
           sed 's/^/  /' tags.txt
           if [ "${WANTED:-all}" = "all" ]; then
@@ -136,6 +157,7 @@ jobs:
           # of the recipe, guessing it from the tag produces artifacts the
           # catalogue build then cannot find. Read it from upstream's own binary.
           : > releases.tsv
+          : > payloads.tsv
           while read -r tag; do
             [ -n "$tag" ] || continue
             rm -rf zip && mkdir -p zip/x
@@ -150,6 +172,13 @@ jobs:
             [ -n "$sample" ] || { echo "::warning::$tag has no .uapp, skipping"; continue; }
             version=$(kira inspect "$sample" | jq -r .version)
             printf '%s\t%s\n' "$tag" "$version" >> releases.tsv
+            # The code alone, per app, while the zip is open anyway. What decides
+            # whether a candidate is worth building at all.
+            find zip/x -name '*.uapp' | while read -r binary; do
+              printf '%s\t%s\t%s\n' "$tag" \
+                "$(basename "$(dirname "$binary")")" \
+                "$(kira inspect "$binary" | jq -r .payloadSha256)" >> payloads.tsv
+            done
             echo "  $tag stamps $version"
           done < tags.txt
 
@@ -163,12 +192,81 @@ jobs:
             echo "no $BINARIES_TAG release yet; treating the store as empty"
           fi
 
+      - name: Decide which candidate builds are worth doing
+        run: |
+          set -euo pipefail
+          python3 - <<'SKIP'
+          import json, pathlib, re, sys
+
+          # Which apps in a release candidate are worth building.
+          #
+          # A candidate exists so an app that ships in one is reachable before the release
+          # lands. Most of what it carries is not new: within a version cycle a candidate
+          # usually touches a handful of apps and re-stamps the rest, and rebuilding a
+          # binary whose code did not move spends a container for nothing.
+          #
+          # So a candidate's app is built when it is new, or when its payload differs from
+          # the release below it -- the icons, service and GUI, with the header and its
+          # version stamp excluded, which is the same comparison the catalogue uses to say
+          # "code changed" rather than "version stamp only". Anything else is skipped and
+          # stays served as upstream's own binary, exactly as every candidate is today.
+          #
+          # Full releases are never skipped. A release with no Kira build would fall back to
+          # the vendor's binary and lose its recipe, which is the opposite of the point.
+
+          versions = {}
+          for line in pathlib.Path("releases.tsv").read_text().splitlines():
+              if not line.strip():
+                  continue
+              tag, version = line.split("\t")[:2]
+              versions[tag] = version
+
+          candidates = {t for t in pathlib.Path("candidates.txt").read_text().split() if t}
+
+          payloads = {}
+          for line in pathlib.Path("payloads.tsv").read_text().splitlines():
+              if not line.strip():
+                  continue
+              tag, folder, sha = line.split("\t")
+              payloads.setdefault(tag, {})[folder] = sha
+
+
+          def rank(tag):
+              """Order releases the way the catalogue does: version, then stage."""
+              v = tuple(int(p) for p in versions[tag].split("."))
+              if tag not in candidates:
+                  return (v, 1 << 30)
+              digits = re.search(r"-\D*(\d+)\s*$", tag)
+              return (v, int(digits.group(1)) if digits else 0)
+
+
+          ordered = sorted(versions, key=rank)
+          skipped = []
+          for i, tag in enumerate(ordered):
+              if tag not in candidates or i == 0:
+                  continue
+              below = ordered[i - 1]
+              for folder, sha in sorted(payloads.get(tag, {}).items()):
+                  was = payloads.get(below, {}).get(folder)
+                  if was is not None and was == sha:
+                      skipped.append((tag, folder, below))
+
+          with open("skip.tsv", "w") as out:
+              for tag, folder, _ in skipped:
+                  out.write(f"{tag}\t{folder}\n")
+
+          print(f"{len(skipped)} candidate app build(s) skipped as unchanged")
+          for tag, folder, below in skipped:
+              print(f"  {tag}/{folder} is byte-identical to {below}")
+          SKIP
+
       - uses: actions/upload-artifact@v7
         with:
           name: plan-inputs
           path: |
             releases.tsv
             available.txt
+            skip.tsv
           retention-days: 1
 
   build:
@@ -257,6 +355,14 @@ jobs:
             # would otherwise read from this pipe and eat the remaining app list.
             jq -r '.[] | select(.action == "build") | "\(.folder)\t\(.asset)"' plan.json |
             while IFS=$'\t' read -r folder asset; do
+              # A candidate whose code is byte-identical to the release below it
+              # is not worth a container. It stays served as upstream's binary,
+              # which is what every candidate does today. Full releases never
+              # appear here -- one without a Kira build would lose its recipe.
+              if grep -qxF "$tag	$folder" skip.tsv 2>/dev/null; then
+                echo "  = $folder unchanged in this candidate, not rebuilt"
+                continue
+              fi
               # One app failing must not abandon the rest: these are historical
               # releases and some may simply not build with today's recipe. Every
               # failure is listed at the end, and anything missing shows up in the
