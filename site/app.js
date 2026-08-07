@@ -957,9 +957,21 @@ function renderConfig(app) {
   const where = document.createElement('p');
   where.className = 'meta';
   // Not "written to" when it will not be: the refusal below would contradict it.
+  //
+  // "as plain text" is on the visible line rather than only in the tooltip
+  // because of what these fields invite: the format exists for a value only its
+  // owner knows, and the examples that reach for it are an athlete id, a transit
+  // pass, an account token. The first two are nobody's secret. The third is, and
+  // whoever is about to type one should not have to hover to find out where it
+  // lands.
   where.textContent = foreign
     ? `This app reads Apps/${app.folder}/${spec.file} on the watch.`
-    : `Written to Apps/${app.folder}/${spec.file} on the watch.`;
+    : `Written to Apps/${app.folder}/${spec.file} on the watch, as plain text.`;
+  where.title =
+    'The watch presents its storage as a USB drive, so this file can be read by ' +
+    'anything on any computer it is plugged into, and by any other app on the ' +
+    'watch. Fine for an id or a preference. Not somewhere to put a password or an ' +
+    'account token you would mind somebody else having.';
   box.appendChild(where);
 
   if (foreign) {

@@ -35,6 +35,13 @@ tell everyone else how to exploit it before it can be fixed.
   was published. It cannot prove who wrote the source, and its hashes live in the
   same repository as the artifacts they describe, so they do not survive a
   compromised publisher. See [docs/reproducibility.md](docs/reproducibility.md).
+- **A value typed into an app's Setup form is stored in the clear.** It is written
+  to a plain file on the watch's USB volume, readable by anything on any computer
+  the watch is plugged into and by any other app on it. There is nowhere else to
+  put it: the app reads it back with a bounded JSON parser on a device with four
+  buttons and no keystore. So "the settings file is not encrypted" is the design
+  rather than a flaw in it — but if you find a way to read one *without* physical
+  access to the watch, that is very much in scope.
 
 ## What to expect
 
