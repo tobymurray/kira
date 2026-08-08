@@ -44,9 +44,24 @@ env:
   TOOLCHAIN: ghcr.io/tobymurray/kira-toolchain@sha256:4d75a70b33b4c4fb8799bed5af2ebb03c9b6eb161ffed3049e316ad996461127
   BINARIES_TAG: app-binaries
 
+# Supersede rather than queue. This build derives everything it publishes from
+# upstream's releases and the binary store, writes nothing persistent of its own,
+# and deploys the whole site at once -- so two runs back to back produce the same
+# result and the second only waits for the first. There is no incremental work
+# queueing would protect.
+#
+# Queueing also had no way out of a stall. A Pages deployment left without a status
+# by an Actions outage held the github-pages environment, its deploy job sat
+# `queued` for thirteen hours, and every later run -- including the daily cron --
+# piled up behind it, so a newly merged app could not publish at all. Waiting does
+# not fix that; being replaced does.
+#
+# Not a timeout: the deploy job had already run 780 minutes against a 360-minute
+# default without being cancelled, so time spent waiting on an environment does not
+# count towards `timeout-minutes` and no value there would have helped.
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
