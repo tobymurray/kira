@@ -703,14 +703,33 @@ function renderCard(app, entry) {
   if (selected.prerelease) {
     const note = document.createElement('div');
     note.className = 'meta prerelease';
-    note.textContent = `pre-release · ${selected.tag}`;
+    // "may not start" is on the visible line, not left to the tooltip, because of
+    // how it fails. An app refuses to launch when the kernel is older than the
+    // interface version it was compiled against, and the interface went 2 to 3
+    // between apps-v1.3.0 and apps-v1.4.0 — so a 1.4 candidate on a watch still on
+    // 2 does nothing, and what the owner sees is an app that will not open and
+    // cannot be exited. That reads as a broken watch rather than a wrong choice,
+    // which is the sort of thing somebody deserves to be told before installing
+    // rather than after.
+    //
+    // "may", because Kira genuinely cannot tell. The requirement is compiled into
+    // the app and is not in the .uapp header, and the watch only reports its
+    // firmware over BLE, which this page has no access to. See
+    // UNAWatch/una-sdk#262.
+    note.textContent = `pre-release · ${selected.tag} · may not start on an older watch`;
     // The only place a bare version is deliberate: both of these name the release
     // this candidate is *for*, which is the thing that does not exist yet.
     // versionLabel here would say "replaced by 1.4.0-rc1 proper".
     note.title =
       `UNA published this as a release candidate, not a full release. It is their ` +
       `own build of ${selected.version}, offered here so you do not have to wait ` +
-      `for the final or build it yourself. Expect it to be replaced by ${selected.version} proper.`;
+      `for the final or build it yourself. Expect it to be replaced by ${selected.version} proper.\n\n` +
+      `A candidate is built against a newer SDK than the last full release, and an ` +
+      `app will not launch on a watch whose kernel is older than the SDK it was ` +
+      `built against — it stops before it draws anything. Nothing in a .uapp says ` +
+      `which kernel it needs and the watch only reports its firmware over ` +
+      `Bluetooth, so Kira cannot check this for you. If the app does nothing after ` +
+      `installing and rebooting, that is the likely reason.`;
     body.appendChild(note);
   }
 
