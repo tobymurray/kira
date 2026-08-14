@@ -15,12 +15,12 @@ folder     = "MapManager"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# No [config] block: the screen is read-only and the app reads no settings
-# file. What it acts on is the packs themselves, which arrive over USB as
-# files rather than as a value somebody has to be asked for.
+# No [config] block: the screen only reports, it does not command, and the app
+# reads no settings file. What it acts on is the packs themselves, which arrive
+# over USB as files rather than as a value somebody has to be asked for.
 
 [[versions]]
 version = "0.1.0"
-rev     = "f64837b27491c20371f857437fa5ce7a11ae830f"
+rev     = "38f16ecad00d44c6e249a11f84b6d17293ef36eb"
 sdk_rev = "apps-v1.3.0"
-notes   = "First build. CRC-32-verifies *.rawtiles packs copied into Apps/SharedData/maps/ and writes a trust marker beside each, so map-consuming apps read one verdict rather than each checking privately. Runs from boot; its screen shows the current pack, percent and an ETA from observed throughput. Verified on hardware -- 160MiB across seven packs in 57s. The launcher's menu lists three Utility apps alphabetically, so this one's screen may not be reachable; verification runs regardless."
+notes   = "First build. CRC-32-verifies *.rawtiles packs copied into Apps/SharedData/maps/ and writes a trust marker beside each, so map-consuming apps read one verdict instead of each checking privately. Runs from boot; its screen lists every pack and its verdict, scrolled with the left buttons, with percent and ETA for the one being read. Verified on hardware -- 160MiB in 57s. The launcher's menu lists three Utility apps alphabetically, so this screen may be unreachable; verification runs regardless."
