@@ -1,0 +1,28 @@
+# The SDK's Running activity with one thing added: a live map on the
+# in-activity screen. Tiles from an offline .rawtiles pack underneath, the GPS
+# breadcrumb over them, one line of status at the bottom. Everything else --
+# the menus, the laps, the summary, the .fit it writes -- is the stock app, and
+# it installs alongside Running rather than replacing it.
+#
+# It reads packs it does not own: Map Manager verifies whatever is dropped into
+# Apps/SharedData/maps/ and publishes a verdict per pack, and this app consumes
+# that verdict rather than checking a 200MB file on the GUI thread. The map code
+# itself lives once, in the repository's MapKit/ directory, shared with Bike Map
+# and Hike Map.
+app_id     = "96CB8FD134CF855C"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "RunMap"
+folder     = "RunMap"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# No [config] block: which pack to draw is answered from where the wearer is,
+# not from a filename somebody typed. That was the deliberate choice -- the
+# answer changes when you travel, which is exactly when you cannot plug the
+# watch into a computer to edit a JSON file.
+
+[[versions]]
+version = "0.1.0"
+rev     = "505948d0bb8f63d16a216e66bb0ec2fcd87a216a"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build. The stock Running app plus one more face on the activity screen: an offline basemap under the GPS breadcrumb, with the stock faces unmoved. Needs Map Manager and a .rawtiles pack in Apps/SharedData/maps/; it draws whichever verified pack covers the current fix, most detailed first, and says which of no-fix, no-coverage, verifying or corrupt it is when there is none. R2 zooms on that face only. The summary screen is still breadcrumb-on-black; nothing that draws is proven on hardware."
