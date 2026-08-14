@@ -1,0 +1,26 @@
+# A background verifier for offline map packs, shared between the apps that
+# read them. It owns no maps of its own: it watches Apps/SharedData/maps/,
+# CRC-32-checks whatever is dropped there over USB, and leaves a 16-byte
+# tri-state marker beside each pack saying Good, Bad, or not-yet-checked. A
+# map-consuming app reads that marker instead of re-deriving the answer, so
+# the check happens once for the device rather than once per app.
+#
+# Utility and autostart: it runs from boot whether or not its own screen is
+# ever opened, which is the point — verification has a head start on the file
+# transfer long before anyone opens an activity.
+app_id     = "F1BA1D471FE0FDC0"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "MapManager"
+folder     = "MapManager"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# No [config] block: the screen only reports, it does not command, and the app
+# reads no settings file. What it acts on is the packs themselves, which arrive
+# over USB as files rather than as a value somebody has to be asked for.
+
+[[versions]]
+version = "0.1.0"
+rev     = "38f16ecad00d44c6e249a11f84b6d17293ef36eb"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build. CRC-32-verifies *.rawtiles packs copied into Apps/SharedData/maps/ and writes a trust marker beside each, so map-consuming apps read one verdict instead of each checking privately. Runs from boot; its screen lists every pack and its verdict, scrolled with the left buttons, with percent and ETA for the one being read. Verified on hardware -- 160MiB in 57s. The launcher's menu lists three Utility apps alphabetically, so this screen may be unreachable; verification runs regardless."
