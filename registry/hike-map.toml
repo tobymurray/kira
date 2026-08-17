@@ -26,3 +26,9 @@ version = "0.1.0"
 rev     = "505948d0bb8f63d16a216e66bb0ec2fcd87a216a"
 sdk_rev = "apps-v1.3.0"
 notes   = "First build. The stock Hiking app plus one more face on the activity screen: an offline basemap under the GPS breadcrumb, with the stock faces unmoved. Needs Map Manager and a .rawtiles pack in Apps/SharedData/maps/; it draws whichever verified pack covers the current fix, most detailed first, and says which of no-fix, no-coverage, verifying or corrupt it is when there is none. R2 zooms on that face only. The summary screen is still breadcrumb-on-black; nothing that draws is proven on hardware."
+
+[[versions]]
+version = "0.2.0"
+rev     = "51d73fb41c9036b5183964c45de40d3c1da49ffe"
+sdk_rev = "apps-v1.3.0"
+notes   = "Adds the attribution screen: the credit the map data is owed, shown once at app startup, dismissed by any key or self-advancing after five seconds, and collected during the pack scan that already walks Apps/SharedData/maps/. BACK no longer quits the app from that notice. Pack selection now ranks on the deepest zoom a pack actually holds tiles at rather than the one it declares, so a pack with no tiles can no longer outrank a map that draws, and the map opens on a zoom that has tiles."
