@@ -144,8 +144,16 @@ struct AppView<'a> {
     versions: &'a [kira_core::catalog::VersionEntry],
     icon: Option<&'a str>,
     icon_small: Option<&'a str>,
-    /// Byte-derived summary, e.g. "code unchanged since 1.2.0".
+    /// Byte-derived summary, e.g. "code unchanged since 1.2.0". For a variant
+    /// alias it names what its target did too, since the alias's own bytes
+    /// cannot say whether its behaviour moved.
     history: String,
+    /// What the selected build being a variant alias means, when it is one.
+    ///
+    /// A whole sentence rather than the descriptor's fields, because naming the
+    /// target and saying it has to be installed too is a rule, and rules do not
+    /// live in the page. Render as text.
+    variant: Option<String>,
     /// Version currently selected for this app.
     /// The chosen build's label, e.g. `1.4.0` or `1.4.0-rc1`.
     selected: String,
@@ -355,27 +363,33 @@ impl Store {
             .catalog
             .apps
             .iter()
-            .map(|app| AppView {
-                app_id: app.app_id,
-                name: &app.name,
-                app_type: app.app_type,
-                folder: &app.folder,
-                versions: &app.versions,
-                icon: app.icon.as_deref(),
-                icon_small: app.icon_small.as_deref(),
-                history: app.describe_history(),
-                selected: self
+            .map(|app| {
+                // The build the card is about, which is the pin where there is
+                // one. `resolve_targets` chooses the same way; this is the same
+                // question asked of one app rather than all of them.
+                let chosen = self
                     .pinned
                     .get(&app.app_id)
-                    .filter(|label| app.find(label).is_some())
-                    .cloned()
-                    .unwrap_or_else(|| app.latest().label()),
-                latest_label: app.latest().label(),
-                ambiguous_name: self.ambiguous.contains(&app.name),
-                superseded_by: app.superseded_by,
-                publisher: app.publisher.as_ref(),
-                config: app.config.as_ref(),
-                retired: app.retired.as_deref(),
+                    .and_then(|label| app.find(label))
+                    .unwrap_or_else(|| app.latest());
+                AppView {
+                    app_id: app.app_id,
+                    name: &app.name,
+                    app_type: app.app_type,
+                    folder: &app.folder,
+                    versions: &app.versions,
+                    icon: app.icon.as_deref(),
+                    icon_small: app.icon_small.as_deref(),
+                    history: self.catalog.describe_history(app),
+                    variant: self.catalog.describe_variant(chosen),
+                    selected: chosen.label(),
+                    latest_label: app.latest().label(),
+                    ambiguous_name: self.ambiguous.contains(&app.name),
+                    superseded_by: app.superseded_by,
+                    publisher: app.publisher.as_ref(),
+                    config: app.config.as_ref(),
+                    retired: app.retired.as_deref(),
+                }
             })
             .collect();
         to_js(&views)

@@ -561,6 +561,83 @@ impl Catalog {
         self.releases.iter().find(|r| r.tag == tag)
     }
 
+    /// The app an id names, when this catalogue lists it.
+    #[must_use]
+    pub fn app(&self, app_id: AppId) -> Option<&App> {
+        self.apps.iter().find(|a| a.app_id == app_id)
+    }
+
+    /// The history line a card shows: what an app's own bytes did, and for a
+    /// variant alias what the app it *runs* did as well.
+    ///
+    /// The second clause is the point of this existing at all. An alias's bytes
+    /// describe an alias; what it does is the target binary's, so its own line
+    /// cannot answer the question a reader is asking. Composed out of the
+    /// target's own line rather than re-derived from its versions, so "did the
+    /// code move" stays one rule -- and it keeps the word *code* attached to the
+    /// thing that has some.
+    ///
+    /// Follows the app's offered build, as [`App::describe_history`] does. A
+    /// variant pointing somewhere else in an older build of itself is possible
+    /// but has never happened; the sentence a card shows beside the version
+    /// picker comes from [`Self::describe_variant`], which does follow the pin.
+    #[must_use]
+    pub fn describe_history(&self, app: &App) -> String {
+        let own = app.describe_history();
+        let target = app
+            .latest()
+            .variant
+            .as_ref()
+            .and_then(Variant::target)
+            .and_then(|id| self.app(id));
+        match target {
+            Some(target) => format!("{own} · {}: {}", target.name, target.describe_history()),
+            None => own,
+        }
+    }
+
+    /// What a build being a variant alias means, in a sentence.
+    ///
+    /// `None` for an ordinary app, which is almost all of them. The target is
+    /// named rather than shown as an id wherever this catalogue lists it, which
+    /// it can do because the catalogue is keyed on [`AppId`] -- there is no
+    /// table of variants anywhere, and none is possible: the descriptor names
+    /// its own target.
+    ///
+    /// The dependency is derived, not assumed. An alias carries no code, and the
+    /// descriptor says whose binary runs instead, so "the target has to be there
+    /// too" follows from the bytes rather than from anything Kira was told.
+    #[must_use]
+    pub fn describe_variant(&self, entry: &VersionEntry) -> Option<String> {
+        let (target, floor) = match entry.variant.as_ref()? {
+            Variant::Unreadable { problem } => {
+                return Some(format!(
+                    "a variant alias whose descriptor Kira could not read: {problem}"
+                ));
+            }
+            Variant::Alias {
+                target,
+                min_target_version,
+                ..
+            } => (*target, *min_target_version),
+        };
+
+        let Some(named) = self.app(target).map(|a| a.name.as_str()) else {
+            return Some(format!(
+                "a variant of AppID {target}, which this catalogue does not list \
+                 — it has no code of its own and cannot run without that app"
+            ));
+        };
+        let needed = match floor {
+            Some(floor) => format!("{named} {floor} or newer"),
+            None => named.to_owned(),
+        };
+        Some(format!(
+            "a variant of {named} — it has no code of its own and runs {named}'s \
+             binary, so {needed} has to be installed too"
+        ))
+    }
+
     /// Display names shared by more than one [`AppId`], so a UI can say which is
     /// which instead of showing identical-looking entries.
     ///
@@ -1451,6 +1528,90 @@ mod tests {
             targets[0].variant.as_ref().and_then(Variant::target),
             Some(AppId::new(0xA1F3_C92B_7E4D_8A10))
         );
+    }
+
+    /// `Hike`, and `Walk` on top of it, as a two-release catalogue holds them.
+    fn walk_and_hike() -> Catalog {
+        let mut hike = app(vec![version_entry("1.4.0"), version_entry("1.3.0")]);
+        hike.app_id = AppId::new(0xA1F3_C92B_7E4D_8A10);
+        hike.name = "Hike".into();
+        hike.folder = "Hiking".into();
+
+        let mut alias = version_entry("1.4.0");
+        alias.variant = Some(walk_alias());
+        let mut walk = app(vec![alias]);
+        walk.app_id = AppId::new(0xA1E5_D3B7_C9F0_4A82);
+        walk.name = "Walk".into();
+        walk.folder = "Walking".into();
+
+        catalog(vec![walk, hike])
+    }
+
+    #[test]
+    fn a_variant_card_names_the_app_it_runs() {
+        let c = walk_and_hike();
+        assert_eq!(
+            c.describe_variant(&c.apps[0].versions[0]).as_deref(),
+            Some(
+                "a variant of Hike — it has no code of its own and runs Hike's binary, \
+                 so Hike 1.4.0 or newer has to be installed too"
+            )
+        );
+        // And an ordinary app says nothing at all, rather than saying it is not one.
+        assert_eq!(c.describe_variant(&c.apps[1].versions[0]), None);
+    }
+
+    #[test]
+    fn a_variant_whose_target_is_not_listed_says_so_rather_than_naming_nothing() {
+        // A user-created variant, or one whose target this catalogue has never
+        // carried. The id is all there is, so the id is what it shows.
+        let mut alias = version_entry("1.4.0");
+        alias.variant = Some(walk_alias());
+        let c = catalog(vec![app(vec![alias])]);
+        let described = c.describe_variant(&c.apps[0].versions[0]).unwrap();
+        assert!(described.contains("A1F3C92B7E4D8A10"), "{described}");
+        assert!(described.contains("does not list"), "{described}");
+    }
+
+    #[test]
+    fn an_unreadable_descriptor_is_described_as_one() {
+        let mut alias = version_entry("1.4.0");
+        alias.variant = Some(Variant::Unreadable {
+            problem: "alias payloadVersion 2, and this reads only 1".into(),
+        });
+        let c = catalog(vec![app(vec![alias])]);
+        assert_eq!(
+            c.describe_variant(&c.apps[0].versions[0]).as_deref(),
+            Some(
+                "a variant alias whose descriptor Kira could not read: \
+                 alias payloadVersion 2, and this reads only 1"
+            )
+        );
+    }
+
+    #[test]
+    fn a_variants_history_names_what_its_target_did() {
+        // The clause that carries the answer. Walk's own bytes not moving says
+        // the alias did not move; whether the thing it runs did is Hike's line,
+        // and without it the card answers a question nobody asked.
+        let c = walk_and_hike();
+        let described = c.describe_history(&c.apps[0]);
+        assert_eq!(described, "only 1.4.0 published · Hike: code changed in 1.4.0");
+
+        // An ordinary app's line is untouched, and Hike's own card does not grow
+        // a clause about itself.
+        assert_eq!(c.describe_history(&c.apps[1]), "code changed in 1.4.0");
+    }
+
+    #[test]
+    fn a_variant_history_falls_back_to_its_own_line_alone() {
+        // Nothing to compose with when the target is not in the catalogue, and
+        // inventing a clause about an app that is not there would be worse than
+        // the shorter line.
+        let mut alias = version_entry("1.4.0");
+        alias.variant = Some(walk_alias());
+        let c = catalog(vec![app(vec![alias, version_entry("1.3.0")])]);
+        assert_eq!(c.describe_history(&c.apps[0]), "alias changed in 1.4.0");
     }
 
     #[test]

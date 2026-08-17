@@ -669,6 +669,22 @@ function renderCard(app, entry) {
     `${fmtSize(selected.size)}${selected.autostart ? ' · autostarts' : ''} · ${app.history}`;
   body.appendChild(meta);
 
+  // A variant alias: a code-less .uapp that runs another app's binary under its
+  // own launcher entry. The whole sentence comes from kira-core, including which
+  // app it names and whether that app is even in this catalogue — the descriptor
+  // in the binary is what says so, and working it out here would be the second
+  // copy of a rule. textContent: the target's display name comes out of a header.
+  if (app.variant) {
+    const note = document.createElement('div');
+    note.className = 'meta variant';
+    note.textContent = app.variant;
+    note.title =
+      'A variant is packed from a manifest rather than compiled: it carries icons, ' +
+      'a target AppID and a small JSON config, and no code at all. Without the app ' +
+      'it names there is nothing for it to run.';
+    body.appendChild(note);
+  }
+
   body.appendChild(renderProvenance(app, selected));
 
   // What the publisher says this version changed. Deliberately below the
