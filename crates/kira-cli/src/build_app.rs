@@ -78,7 +78,7 @@ pub(crate) fn find_project(app_root: &Path) -> Result<PathBuf> {
     let software = app_root.join("Software");
     ensure!(
         software.is_dir(),
-        "{} has no Software directory: not a UNA app",
+        "{} has no Software directory, so there is nothing here to compile",
         app_root.display()
     );
 

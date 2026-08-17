@@ -449,6 +449,30 @@ impl VersionEntry {
     pub fn is_prerelease(&self) -> bool {
         self.prerelease.is_some()
     }
+
+    /// Why the binary on offer is the vendor's rather than one of Kira's.
+    ///
+    /// `None` when Kira built it, which is the ordinary case and needs no excuse.
+    ///
+    /// A variant alias gets a reason of its own, because "Kira has no build for
+    /// this version" describes the wrong thing. A variant is not compiled at all:
+    /// upstream packs it from a manifest, an icon pair and a config, and it has
+    /// no `*-CMake` project for the build matrix to find — deliberately, per the
+    /// SDK's own `Examples/Apps/Variants/README.md`. Kira has no packer, so there
+    /// is nothing here that was tried and failed. Using one sentence for both
+    /// would make a thing that cannot be built this way read as one that broke.
+    #[must_use]
+    pub fn describe_origin(&self) -> Option<String> {
+        match self.origin {
+            Origin::Kira => None,
+            Origin::Upstream if self.variant.is_some() => Some(
+                "the vendor's own build — a variant is packed from a manifest rather \
+                 than compiled, so there is no source for Kira to build"
+                    .to_owned(),
+            ),
+            Origin::Upstream => Some("the vendor's own build".to_owned()),
+        }
+    }
 }
 
 impl Target {
@@ -1615,6 +1639,31 @@ mod tests {
         alias.variant = Some(walk_alias());
         let c = catalog(vec![app(vec![alias, version_entry("1.3.0")])]);
         assert_eq!(c.describe_history(&c.apps[0]), "alias changed in 1.4.0");
+    }
+
+    #[test]
+    fn a_variant_says_why_it_is_the_vendors_binary() {
+        // "Kira has no build for this version" and "this cannot be built at all"
+        // are different facts, and the second is the true one here: a variant has
+        // no *-CMake project because upstream packs it rather than compiling it,
+        // deliberately. One sentence for both would make a thing that was never
+        // buildable read as one whose build broke.
+        let mut alias = version_entry("1.4.0");
+        alias.origin = Origin::Upstream;
+        alias.variant = Some(walk_alias());
+        let described = alias.describe_origin().unwrap();
+        assert!(described.contains("packed from a manifest"), "{described}");
+        assert!(!described.contains("fail"), "{described}");
+
+        // An ordinary upstream binary keeps the plain sentence, and a Kira build
+        // has nothing to explain.
+        let mut plain = version_entry("1.4.0");
+        plain.origin = Origin::Upstream;
+        assert_eq!(
+            plain.describe_origin().as_deref(),
+            Some("the vendor's own build")
+        );
+        assert_eq!(version_entry("1.4.0").describe_origin(), None);
     }
 
     #[test]

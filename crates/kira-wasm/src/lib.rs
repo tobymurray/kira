@@ -176,6 +176,9 @@ struct AppView<'a> {
     /// target and saying it has to be installed too is a rule, and rules do not
     /// live in the page. Render as text.
     variant: Option<String>,
+    /// Why the selected build is the vendor's binary rather than one of Kira's.
+    /// `None` when Kira built it, which needs no explaining.
+    origin_note: Option<String>,
     /// Version currently selected for this app.
     /// The chosen build's label, e.g. `1.4.0` or `1.4.0-rc1`.
     selected: String,
@@ -439,6 +442,7 @@ impl Store {
                     icon_small: app.icon_small.as_deref(),
                     history: self.catalog.describe_history(app),
                     variant: self.catalog.describe_variant(chosen),
+                    origin_note: chosen.describe_origin(),
                     selected: chosen.label(),
                     latest_label: app.latest().label(),
                     ambiguous_name: self.ambiguous.contains(&app.name),

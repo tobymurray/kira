@@ -564,8 +564,13 @@ function renderProvenance(app, selected) {
   provenance.className = 'meta provenance';
   const built = selected.builtFrom;
 
-  if (selected.origin !== 'kira') {
-    provenance.textContent = "the vendor's own build";
+  // Why it is the vendor's binary and not Kira's is a judgement about how the
+  // artifact is produced -- a version nobody has built yet reads differently
+  // from a variant, which is packed rather than compiled and has no source to
+  // build. So the sentence comes from kira-core, and its absence is what says
+  // Kira built this one.
+  if (app.originNote) {
+    provenance.textContent = app.originNote;
     return provenance;
   }
 

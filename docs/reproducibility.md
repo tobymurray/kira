@@ -85,6 +85,26 @@ rather than parsing the tag — the stamp is what the catalogue looks up, so it 
 the only authority. Deriving it from the tag left ten versions unmatched and
 falling back to upstream binaries.
 
+**A variant alias is not built, because it is not compiled.** Upstream packs one
+from a manifest, an icon pair and a config JSON — `pack_variants.py` driving
+`make_variant.py` — and it deliberately has no `*-CMake` project, so nothing in
+Kira's build matrix ever looks at it. `Walk` is therefore served as the vendor's
+binary with no recipe and no attestation, the same as any version Kira has no
+build for, and the card says which of those two it is: *"a variant is packed from
+a manifest rather than compiled, so there is no source for Kira to build"*. That
+is a different statement from a build that was attempted and failed, and it comes
+from the binary — the alias flag plus `origin` — rather than from a list of
+variant names.
+
+Packing them here instead is possible and was weighed. It is the one artifact in
+the catalogue that would likely reproduce byte-for-byte, since the packer is
+deterministic and every input is in the tagged tree, where no compiled app
+reproduces yet. Against that: it means running a Python packer and Pillow inside
+a pipeline whose whole premise is a digest-pinned compiler container, and the
+resulting attestation would assert little more about 32 bytes of descriptor, two
+verbatim PNGs and 58 bytes of JSON than `git show` of the tag already does. Left
+undone on those grounds rather than forgotten.
+
 Also checked and clean: no `__DATE__`, `__TIME__` or `__TIMESTAMP__` anywhere in
 `Libs/`, `Examples/` or `ThirdParty/`; no submodules, so an SDK tag pins its
 content; and `file(GLOB_RECURSE)` source lists (22 of them) are safe because CMake
