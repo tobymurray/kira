@@ -36,24 +36,30 @@ struct HeaderView {
     #[serde(rename = "type")]
     app_type: AppType,
     autostart: bool,
+    /// Whether this file is a code-less variant alias rather than an app.
+    ///
+    /// From the flag word, so a header-only scan can see it. What the alias
+    /// *says* — its target and config — needs the whole file.
+    variant_alias: bool,
     service_len: usize,
-    gui_len: Option<usize>,
+    trailing_len: Option<usize>,
 }
 
 /// Read a `.uapp` header.
 ///
 /// Pass just the first 48 bytes when scanning a watch: reading whole files off a
 /// USB volume merely to list what is installed would be needlessly slow. Giving
-/// `total_len` additionally derives the GUI image length and rejects a file too
-/// small for what the header declares.
+/// `total_len` additionally derives the length of the trailing region — the GUI
+/// image, or an alias descriptor — and rejects a file too small for what the
+/// header declares.
 ///
 /// # Errors
 /// If the slice is too short, or `total_len` contradicts the header.
 #[wasm_bindgen]
 pub fn read_header(bytes: &[u8], total_len: Option<usize>) -> Result<JsValue, JsError> {
     let header = Header::parse(bytes).map_err(js_err)?;
-    let gui_len = match total_len {
-        Some(total) => Some(header.gui_len(total).map_err(js_err)?),
+    let trailing_len = match total_len {
+        Some(total) => Some(header.trailing_len(total).map_err(js_err)?),
         None => None,
     };
     to_js(&HeaderView {
@@ -63,8 +69,9 @@ pub fn read_header(bytes: &[u8], total_len: Option<usize>) -> Result<JsValue, Js
         libc_version: header.libc_version,
         app_type: header.app_type(),
         autostart: header.autostart(),
+        variant_alias: header.is_variant_alias(),
         service_len: header.service_len,
-        gui_len,
+        trailing_len,
     })
 }
 

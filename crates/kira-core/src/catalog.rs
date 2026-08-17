@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::prerelease::{self, PreRelease, Precedence};
-pub use crate::uapp::AppType;
-use crate::uapp::{AppId, Version};
+use crate::uapp::{AppId, Uapp, Version};
+pub use crate::uapp::{AppType, VariantOrigin};
 
 /// Schema version emitted and expected by this crate.
 ///
@@ -29,7 +29,10 @@ use crate::uapp::{AppId, Version};
 /// (`prerelease`, since the binary stamps `1.4.0` for both `apps-v1.4.0-rc1` and
 /// `apps-v1.4.0`), and the hashes of the candidates a release supersedes, so a
 /// watch carrying one is offered the release rather than reported as a stranger.
-pub const SCHEMA: u32 = 7;
+/// 8 carries [`Variant`]: `apps-v1.4.0` shipped `Walk`, a code-less alias that
+/// runs the `Hike` binary, and until it had a model of its own it was published
+/// as an ordinary app whose "code" had supposedly not changed.
+pub const SCHEMA: u32 = 8;
 
 /// A complete catalogue, as published to `data/catalog.json`.
 ///
@@ -148,6 +151,86 @@ pub struct Publisher {
     pub maintainer: String,
 }
 
+/// What a build carrying [`crate::uapp::Flags::VARIANT_ALIAS`] says about itself.
+///
+/// Published per version rather than per app, because it is derived from one
+/// binary and nothing stops a later build of an alias pointing somewhere else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum Variant {
+    /// A descriptor that reads cleanly.
+    Alias {
+        /// The app whose binary actually runs. Resolvable here: the catalogue is
+        /// keyed on [`AppId`].
+        target: AppId,
+        /// Oldest target build this may resolve against; absent means any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_target_version: Option<Version>,
+        /// Who owns the folder on update.
+        origin: VariantOrigin,
+        /// The embedded config, verbatim.
+        ///
+        /// Not parsed anywhere: the kernel does not parse it either, and beyond
+        /// `schema` its keys belong to whichever app family defines them. Third-
+        /// party JSON out of a binary — render as text, never as HTML.
+        config: String,
+    },
+    /// The alias flag is set but the descriptor does not follow the contract.
+    ///
+    /// Kept in the catalogue and named, rather than dropped or quietly published
+    /// as an ordinary app: the flag has already settled what the file is, and the
+    /// watch would refuse it too.
+    Unreadable {
+        /// What is wrong with it, in the reader's words.
+        problem: String,
+    },
+}
+
+impl Variant {
+    /// Read a parsed `.uapp`'s descriptor, if it has one.
+    #[must_use]
+    pub fn of(uapp: &Uapp<'_>) -> Option<Self> {
+        Some(match uapp.variant()? {
+            Ok(alias) => Self::Alias {
+                target: alias.target,
+                min_target_version: alias.min_target_version,
+                origin: alias.origin,
+                config: alias.config.to_owned(),
+            },
+            Err(problem) => Self::Unreadable {
+                problem: problem.to_string(),
+            },
+        })
+    }
+
+    /// The app this alias runs, when that much is known.
+    #[must_use]
+    pub const fn target(&self) -> Option<AppId> {
+        match self {
+            Self::Alias { target, .. } => Some(*target),
+            Self::Unreadable { .. } => None,
+        }
+    }
+}
+
+/// The noun for what a build's bytes *are*, given whether it is a variant.
+///
+/// An app's bytes are its code. An alias has none — icons, a target and a config
+/// — and what it does is the target binary's, which its own bytes cannot speak
+/// for. So every line derived from [`crate::uapp::Uapp::payload`] has to pick its
+/// word from here rather than saying "code" of everything.
+#[must_use]
+pub const fn contents_noun(variant: Option<&Variant>) -> &'static str {
+    match variant {
+        Some(_) => "alias",
+        None => "code",
+    }
+}
+
 /// Who produced the binary Kira serves for a version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -204,6 +287,11 @@ pub struct VersionEntry {
     pub libc_version: Version,
     /// Whether it starts at boot.
     pub autostart: bool,
+    /// Set when this build is a variant alias rather than an app binary.
+    ///
+    /// Absent for every ordinary app, which is almost all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<Variant>,
     /// File length in bytes.
     pub size: usize,
     /// Hash of the whole file.
@@ -308,6 +396,8 @@ pub struct Target {
     pub libc_version: Version,
     /// Whether it starts at boot.
     pub autostart: bool,
+    /// Set when this build is a variant alias rather than an app binary.
+    pub variant: Option<Variant>,
     /// File length in bytes.
     pub size: usize,
     /// Hash of the whole file, checked before writing.
@@ -428,14 +518,19 @@ impl App {
             return format!("only {} published", latest.label());
         }
 
+        // What moved, or did not. A variant alias has no code, and what it *does*
+        // is its target's -- so this line can only ever be about the alias
+        // itself, and must not be read as a statement about its behaviour.
+        let what = contents_noun(latest.variant.as_ref());
+
         if latest.changed == Some(false) {
             // Walk back to the last version that actually changed the app.
             let last_real = self.versions.iter().find(|v| v.changed != Some(false));
             return match last_real {
                 Some(v) if v.label() != latest.label() => {
-                    format!("code unchanged since {}", v.label())
+                    format!("{what} unchanged since {}", v.label())
                 }
-                _ => format!("code unchanged across {} releases", self.versions.len()),
+                _ => format!("{what} unchanged across {} releases", self.versions.len()),
             };
         }
 
@@ -452,9 +547,9 @@ impl App {
 
         match latest.delta_bytes {
             Some(delta) if delta != 0 => {
-                format!("code changed in {} ({delta:+} B)", latest.label())
+                format!("{what} changed in {} ({delta:+} B)", latest.label())
             }
-            _ => format!("code changed in {}", latest.label()),
+            _ => format!("{what} changed in {}", latest.label()),
         }
     }
 }
@@ -604,6 +699,7 @@ pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, String>) -> V
                 supersedes_sha256: chosen.supersedes_sha256.clone(),
                 libc_version: chosen.libc_version,
                 autostart: chosen.autostart,
+                variant: chosen.variant.clone(),
                 size: chosen.size,
                 sha256: chosen.sha256.clone(),
                 payload_sha256: chosen.payload_sha256.clone(),
@@ -780,6 +876,7 @@ mod tests {
             file: format!("Live_HR_{v}.uapp"),
             libc_version: Version::new(0, 0, 3),
             autostart: false,
+            variant: None,
             size: 22980,
             sha256: format!("sha-{v}"),
             payload_sha256: format!("payload-{v}"),
@@ -1302,6 +1399,96 @@ mod tests {
         assert_eq!(parse_source("unpinned"), None);
         assert_eq!(parse_source("git:https://example.test/x"), None);
         assert_eq!(parse_source("git:@abc:."), None);
+    }
+
+    /// `Walk`, as apps-v1.4.0 ships it: the `Hike` binary under its own identity.
+    fn walk_alias() -> Variant {
+        Variant::Alias {
+            target: AppId::new(0xA1F3_C92B_7E4D_8A10),
+            min_target_version: Some(Version::new(1, 4, 0)),
+            origin: VariantOrigin::Shipped,
+            config: r#"{"schema":1,"name":"Walk","fit":{"sport":11,"subSport":0}}"#.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_variants_history_never_claims_anything_about_code() {
+        // An alias has none, and what it *does* is its target's -- so a payload
+        // hash that has not moved says the alias is unchanged and nothing at all
+        // about whether the behaviour is. "code unchanged since 1.4.0" beside
+        // Walk would have been a claim these bytes cannot support.
+        let variant = |mut entry: VersionEntry| {
+            entry.variant = Some(walk_alias());
+            entry
+        };
+
+        let mut unchanged = variant(version_entry("1.5.0"));
+        unchanged.changed = Some(false);
+        let a = app(vec![unchanged, variant(version_entry("1.4.0"))]);
+        assert_eq!(a.describe_history(), "alias unchanged since 1.4.0");
+
+        let mut moved = variant(version_entry("1.5.0"));
+        moved.delta_bytes = Some(12);
+        let b = app(vec![moved, variant(version_entry("1.4.0"))]);
+        assert_eq!(b.describe_history(), "alias changed in 1.5.0 (+12 B)");
+
+        for described in [a.describe_history(), b.describe_history()] {
+            assert!(!described.contains("code"), "{described}");
+        }
+
+        // And an ordinary app is untouched by any of this.
+        let plain = app(vec![version_entry("1.4.0"), version_entry("1.3.0")]);
+        assert!(plain.describe_history().starts_with("code changed"));
+    }
+
+    #[test]
+    fn a_chosen_variant_carries_its_descriptor_to_the_planner() {
+        let mut entry = version_entry("1.4.0");
+        entry.variant = Some(walk_alias());
+        let c = catalog(vec![app(vec![entry])]);
+        let targets = resolve_targets(&c, &BTreeMap::new());
+        assert_eq!(
+            targets[0].variant.as_ref().and_then(Variant::target),
+            Some(AppId::new(0xA1F3_C92B_7E4D_8A10))
+        );
+    }
+
+    #[test]
+    fn a_published_variant_round_trips_through_the_catalogue() {
+        // The shape in catalog.json, pinned: a reader has to be able to tell an
+        // alias from an app, and an unreadable alias from either.
+        let alias = serde_json::to_value(walk_alias()).unwrap();
+        assert_eq!(alias["kind"], "alias");
+        assert_eq!(alias["target"], "A1F3C92B7E4D8A10");
+        assert_eq!(alias["minTargetVersion"], "1.4.0");
+        assert_eq!(alias["origin"], "shipped");
+        assert_eq!(
+            serde_json::from_value::<Variant>(alias).unwrap(),
+            walk_alias()
+        );
+
+        // "any target version" is the absence of a floor, not 0.0.0.
+        let mut any = walk_alias();
+        if let Variant::Alias {
+            min_target_version, ..
+        } = &mut any
+        {
+            *min_target_version = None;
+        }
+        let json = serde_json::to_value(&any).unwrap();
+        assert!(json.get("minTargetVersion").is_none());
+        assert_eq!(serde_json::from_value::<Variant>(json).unwrap(), any);
+
+        let broken = Variant::Unreadable {
+            problem: "alias payloadVersion 2, and this reads only 1".into(),
+        };
+        let json = serde_json::to_value(&broken).unwrap();
+        assert_eq!(json["kind"], "unreadable");
+        assert_eq!(serde_json::from_value::<Variant>(json).unwrap(), broken);
+        // An unreadable descriptor still names the file an alias, so nothing may
+        // read it as an app with a target it happens not to have declared.
+        assert_eq!(broken.target(), None);
+        assert_eq!(contents_noun(Some(&broken)), "alias");
     }
 
     #[test]

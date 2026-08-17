@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::Target;
+use crate::catalog::{self, Target};
 use crate::uapp::{AppId, Version};
 
 /// One app as found on a connected watch.
@@ -272,7 +272,11 @@ impl Entry {
             _ => {
                 let move_ = format!("{} → {}", installed.version, self.app.version);
                 if self.identical_payload {
-                    format!("{move_} · version stamp only, identical code")
+                    // "identical code" would be two false claims about an alias:
+                    // it has none, and whether it still *behaves* the same is a
+                    // question about its target that these bytes cannot answer.
+                    let what = catalog::contents_noun(self.app.variant.as_ref());
+                    format!("{move_} · version stamp only, identical {what}")
                 } else {
                     move_
                 }
@@ -536,7 +540,8 @@ fn job_note(entry: &Entry) -> String {
         Status::FolderTaken => "folder taken by another app",
     };
     if entry.identical_payload {
-        format!("{status}; identical code, version stamp only")
+        let what = catalog::contents_noun(entry.app.variant.as_ref());
+        format!("{status}; identical {what}, version stamp only")
     } else {
         status.to_owned()
     }
@@ -772,6 +777,7 @@ mod tests {
             supersedes_sha256: Vec::new(),
             libc_version: Version::new(0, 0, 3),
             autostart: true,
+            variant: None,
             size: 210_628,
             sha256: "a".repeat(64),
             payload_sha256: "p".repeat(64),
@@ -1437,6 +1443,38 @@ mod tests {
         let plan = build(&[target], &[on_watch]);
         assert_eq!(plan.entries[0].status, Status::DifferentBuild);
         assert_eq!(plan.actionable().count(), 0);
+    }
+
+    #[test]
+    fn a_variant_restamp_is_never_called_identical_code() {
+        // Walk's own bytes being unchanged says the alias is unchanged. It says
+        // nothing about Hike, which is what actually runs -- so the one word this
+        // line must not use is the one it used to use for everything.
+        let mut app = target("1.4.0");
+        app.name = "Walk".into();
+        app.variant = Some(catalog::Variant::Alias {
+            target: AppId::new(0xA1F3_C92B_7E4D_8A10),
+            min_target_version: Some(Version::new(1, 4, 0)),
+            origin: crate::uapp::VariantOrigin::Shipped,
+            config: r#"{"schema":1,"name":"Walk","fit":{"sport":11,"subSport":0}}"#.into(),
+        });
+
+        let mut on_watch = installed("1.3.0", 4642);
+        on_watch.payload_sha256 = Some(app.payload_sha256.clone());
+        let plan = build(&[app], &[on_watch]);
+
+        assert!(plan.entries[0].identical_payload);
+        let described = plan.entries[0].describe();
+        assert_eq!(
+            described,
+            "1.3.0 → 1.4.0 · version stamp only, identical alias"
+        );
+        assert!(!described.contains("code"), "{described}");
+
+        for script in [powershell(&plan, &config()), shell(&plan, &config())] {
+            assert!(script.contains("identical alias, version stamp only"));
+            assert!(!script.contains("identical code"));
+        }
     }
 
     #[test]

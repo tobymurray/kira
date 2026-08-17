@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::sha256_hex;
 use anyhow::{Context, Result, bail, ensure};
 use kira_core::catalog::{
-    App, BuiltFrom, Catalog, Origin, Publisher, Release, ReleaseOrder, SCHEMA, Source,
+    App, BuiltFrom, Catalog, Origin, Publisher, Release, ReleaseOrder, SCHEMA, Source, Variant,
     VersionEntry, partition_unique, sort_newest_first,
 };
 use kira_core::icon;
@@ -391,6 +391,7 @@ impl BuiltStore {
 /// A binary with its header parsed and its hashes computed.
 struct Parsed {
     binary: Binary,
+    variant: Option<Variant>,
     header: kira_core::uapp::Header,
     normal_icon: Vec<u8>,
     small_icon: Vec<u8>,
@@ -419,10 +420,22 @@ fn parse_release(tag: &str, binaries: Vec<Binary>) -> Result<Vec<Parsed>> {
                 &uapp.header().name,
                 &format_args!("{tag}/{}/{}", binary.folder, binary.file),
             )?;
+            // A variant alias whose descriptor will not read is still published
+            // and still named as an alias. Refusing it would drop a file the
+            // watch merely ignores, and publishing it as an ordinary app would
+            // claim it has code.
+            let variant = Variant::of(&uapp);
+            if let Some(Variant::Unreadable { problem }) = &variant {
+                eprintln!(
+                    "  ! {tag}/{}/{}: variant descriptor unreadable -- {problem}",
+                    binary.folder, binary.file
+                );
+            }
             Ok(Parsed {
                 header: uapp.header().clone(),
                 normal_icon: uapp.normal_icon().to_vec(),
                 small_icon: uapp.small_icon().to_vec(),
+                variant,
                 binary,
             })
         })
@@ -476,6 +489,7 @@ fn process_release(
 
     for Parsed {
         binary,
+        variant,
         header,
         normal_icon,
         small_icon,
@@ -538,6 +552,7 @@ fn process_release(
             file: binary.file.clone(),
             libc_version: header.libc_version,
             autostart: header.autostart(),
+            variant,
             size: chosen.bytes.len(),
             sha256: sha256_hex(&chosen.bytes),
             payload_sha256: chosen.payload_sha256,
@@ -879,6 +894,7 @@ fn fold_registry(
                 size: bytes.len(),
                 sha256: sha256_hex(&bytes),
                 payload_sha256: sha256_hex(uapp.payload()),
+                variant: Variant::of(&uapp),
                 file,
                 download,
             }));
@@ -909,6 +925,8 @@ struct SubmittedBuild<'a> {
     size: usize,
     sha256: String,
     payload_sha256: String,
+    /// Set when the submitted build is a variant alias rather than an app.
+    variant: Option<Variant>,
     file: String,
     download: String,
 }
@@ -923,6 +941,7 @@ fn submitted_version(built: SubmittedBuild<'_>) -> VersionEntry {
         size,
         sha256,
         payload_sha256,
+        variant,
         file,
         download,
     } = built;
@@ -939,6 +958,7 @@ fn submitted_version(built: SubmittedBuild<'_>) -> VersionEntry {
         file,
         libc_version: header.libc_version,
         autostart: header.autostart(),
+        variant,
         size,
         sha256,
         payload_sha256,
@@ -1699,6 +1719,7 @@ sdk_rev = "apps-v1.3.0"
             file: format!("Stopwatch_{version}.uapp"),
             libc_version: Version::new(0, 0, 3),
             autostart: false,
+            variant: None,
             size: 100,
             sha256: sha.to_owned(),
             payload_sha256: format!("p-{sha}"),

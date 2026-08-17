@@ -12,12 +12,15 @@
 //! 24      16    AppName        char[16], NUL-padded, max 15 chars
 //! 40      4     normalIconLen  u32  60x60 ABGR2222 = 3600
 //! 44      4     smallIconLen   u32  30x30 ABGR2222 = 900
-//! 48            normal icon, small icon, service image, GUI image
+//! 48            normal icon, small icon, service image, trailing region
 //! len-4   4     CRC32          u32  over everything preceding it
 //! ```
 //!
-//! The GUI image is absent for Glance apps, so its length is whatever remains
-//! between the service image and the CRC footer.
+//! Nothing in the header gives the length of the trailing region, so it is
+//! whatever remains between the service image and the CRC footer. For an
+//! ordinary app that region is the GUI image, absent for a Glance app built
+//! without one. For a **variant alias** it is something else entirely — see
+//! [`VariantAlias`] — which is why nothing here calls it the GUI image.
 
 use std::fmt;
 use std::str::FromStr;
@@ -33,6 +36,16 @@ pub const CRC_LEN: usize = 4;
 pub const NORMAL_ICON_LEN: usize = 60 * 60;
 /// A 30x30 ABGR2222 icon, one byte per pixel.
 pub const SMALL_ICON_LEN: usize = 30 * 30;
+/// Length of a variant alias's fixed descriptor, ahead of its config.
+pub const VARIANT_PAYLOAD_LEN: usize = 32;
+/// The only descriptor layout this reader understands.
+///
+/// The SDK's own `SDK::Variant::Config` gates on the same value and falls back to
+/// classic defaults on anything else: a shipped reader must never guess at
+/// rearranged fields. Kira does the same, and reports rather than guesses.
+pub const VARIANT_PAYLOAD_VERSION: u32 = 1;
+/// Largest embedded config the kernel will read, from `make_variant.py`.
+pub const VARIANT_CONFIG_MAX: usize = 8192;
 
 /// Everything that can go wrong reading a `.uapp`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -282,6 +295,13 @@ bitflags! {
         /// `cmake/una-app.cmake` passes `-glance_capable` unconditionally, so
         /// every officially built app sets it. Never surface it as a feature.
         const GLANCE_CAPABLE = 0x0000_0020;
+        /// `FLAG_APP_VARIANT_ALIAS`: this file carries no code at all.
+        ///
+        /// It is an alias that makes an existing app binary appear in the
+        /// launcher as a separate activity — see [`VariantAlias`]. This bit is
+        /// the *only* thing that says so, which is why a file carrying it is
+        /// never read as an ordinary app even when its descriptor is unreadable.
+        const VARIANT_ALIAS = 0x0000_0040;
         const _ = !0;
     }
 }
@@ -366,22 +386,266 @@ impl Header {
         self.flags.contains(Flags::AUTOSTART)
     }
 
-    /// Bytes accounted for by everything except the GUI image.
+    /// Whether this file is a variant alias rather than an app.
+    ///
+    /// A code-less `.uapp` that makes an existing binary appear in the launcher
+    /// as a separate activity. See [`VariantAlias`].
+    #[must_use]
+    pub const fn is_variant_alias(&self) -> bool {
+        self.flags.contains(Flags::VARIANT_ALIAS)
+    }
+
+    /// Bytes accounted for by everything except the trailing region.
     #[must_use]
     pub const fn fixed_len(&self) -> usize {
         HEADER_LEN + self.normal_icon_len + self.small_icon_len + self.service_len + CRC_LEN
     }
 
-    /// Length of the GUI image in a file of `total` bytes. Zero for a Glance app
-    /// built without one.
+    /// Length of the trailing region in a file of `total` bytes.
+    ///
+    /// The GUI image for an ordinary app, zero for a Glance app built without
+    /// one, and the alias descriptor plus its config for a variant.
     ///
     /// # Errors
     /// [`Error::Truncated`] if the header accounts for more bytes than exist,
     /// which is the cheapest way to tell a `.uapp` from an unrelated file.
-    pub fn gui_len(&self, total: usize) -> Result<usize, Error> {
+    pub fn trailing_len(&self, total: usize) -> Result<usize, Error> {
         total.checked_sub(self.fixed_len()).ok_or(Error::Truncated {
             declared: self.fixed_len(),
             actual: total,
+        })
+    }
+}
+
+/// Who owns a variant's folder on the watch when an update lands.
+///
+/// The raw byte is not retained: nothing renders it, and an origin Kira does not
+/// know the meaning of is [`Self::Unknown`] whatever number it carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VariantOrigin {
+    /// Packed by upstream's CI from a manifest in the SDK tree.
+    Shipped,
+    /// Created on the watch, by the kernel's `CreateVariant`.
+    ///
+    /// Such a variant exists in no release, so nothing in a catalogue can
+    /// describe it — only the alias itself says what it is.
+    User,
+    /// A value this build does not know the meaning of.
+    Unknown,
+}
+
+impl VariantOrigin {
+    /// Decode the descriptor's `origin` byte.
+    #[must_use]
+    pub const fn from_raw(raw: u8) -> Self {
+        match raw {
+            0 => Self::Shipped,
+            1 => Self::User,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl fmt::Display for VariantOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Shipped => "shipped",
+            Self::User => "user",
+            Self::Unknown => "unknown",
+        };
+        f.write_str(name)
+    }
+}
+
+/// Why an alias descriptor could not be read.
+///
+/// Every one of these describes a file the watch's own validator would refuse or
+/// read differently, so none of them is a case to guess through. Reported rather
+/// than raised: the alias flag has already settled *what the file is*, and this
+/// only says that its contents do not follow.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum VariantError {
+    /// The header claims code, which an alias never has.
+    #[error(
+        "an alias carries no code, but this declares serviceLen {service_len} and LibC {libc_version}"
+    )]
+    NotCodeless {
+        /// Declared length of the service image.
+        service_len: usize,
+        /// Declared `LibC` ABI version.
+        libc_version: Version,
+    },
+    /// The icon fields are not the fixed sizes the descriptor's offset assumes.
+    ///
+    /// The kernel and the SDK's reader both seek to a *constant* 48 + 3600 + 900,
+    /// so a header declaring anything else points them at different bytes from
+    /// the ones [`Header::fixed_len`] would compute.
+    #[error(
+        "an alias must declare {NORMAL_ICON_LEN}/{SMALL_ICON_LEN} icon bytes, not {normal}/{small}"
+    )]
+    IconSizes {
+        /// Declared length of the 60x60 icon field.
+        normal: usize,
+        /// Declared length of the 30x30 icon field.
+        small: usize,
+    },
+    /// Fewer bytes after the icons than the fixed descriptor needs.
+    #[error("too short for an alias descriptor: {got} < {VARIANT_PAYLOAD_LEN}")]
+    TooShort {
+        /// Bytes available after the icons.
+        got: usize,
+    },
+    /// A descriptor layout this build was not written for.
+    #[error("alias payloadVersion {version}, and this reads only {VARIANT_PAYLOAD_VERSION}")]
+    UnsupportedPayload {
+        /// Version the descriptor declares.
+        version: u32,
+    },
+    /// The declared config length does not account for the file.
+    #[error("alias declares a {declared}-byte config but {available} bytes follow the descriptor")]
+    ConfigSize {
+        /// Length the descriptor declares.
+        declared: usize,
+        /// Bytes actually between the descriptor and the CRC footer.
+        available: usize,
+    },
+    /// A config larger than the kernel will read.
+    #[error("alias config is {declared} bytes, over the kernel's {VARIANT_CONFIG_MAX}")]
+    ConfigTooLarge {
+        /// Length the descriptor declares.
+        declared: usize,
+    },
+    /// No config at all, which the app-side reader treats as no variant.
+    #[error("alias carries no config, so the target would run as its classic self")]
+    NoConfig,
+    /// The config is not text.
+    #[error("alias config is not valid UTF-8")]
+    ConfigNotUtf8,
+    /// The alias claims its own identity as its target.
+    #[error("alias targets its own AppID {target}, which the kernel rejects at boot scan")]
+    TargetsItself {
+        /// The contested identity.
+        target: AppId,
+    },
+}
+
+/// A code-less `.uapp` that presents an existing app binary as a second activity.
+///
+/// `Walk` is the first: the `Hike` binary, its own [`AppId`] and icons, and a JSON
+/// config that tells the shared binary which FIT sport to record. It is
+/// discriminated by [`Flags::VARIANT_ALIAS`] alone, and everything below it comes
+/// from the fixed 32-byte descriptor that replaces the GUI image:
+///
+/// ```text
+/// offset  size  field
+/// 0       4     payloadVersion    u32  gated on == 1
+/// 4       8     targetAppID       u64
+/// 12      4     minTargetVersion  u32  packed as AppVersion; 0 = any
+/// 16      1     origin            u8   0 shipped, 1 user
+/// 17      4     configSize        u32  max 8192, unaligned
+/// 21      11    reserved               zeroed
+/// 32            config JSON, configSize bytes
+/// ```
+///
+/// The config is carried verbatim and deliberately not parsed. The kernel never
+/// parses it either: only the app does, against a `features` vocabulary its own
+/// family defines, so anything Kira read out of it beyond `schema` would be a
+/// guess about somebody else's subtree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariantAlias<'a> {
+    /// The app whose binary actually runs.
+    pub target: AppId,
+    /// Oldest target build this may resolve against; `None` for any.
+    ///
+    /// The field is the packed `A.B.C`, which cannot carry a pre-release suffix —
+    /// so a `1.4.0-rc2` target satisfies a `1.4.0` minimum, as upstream intends.
+    pub min_target_version: Option<Version>,
+    /// Who owns the folder on update.
+    pub origin: VariantOrigin,
+    /// The embedded config, verbatim.
+    ///
+    /// Third-party JSON out of a binary: render as text, never as HTML.
+    pub config: &'a str,
+}
+
+impl<'a> VariantAlias<'a> {
+    /// Read the descriptor of a file whose alias flag is set.
+    ///
+    /// `bytes` is the whole file and `header` its parsed head; the caller has
+    /// already established that the file is at least [`Header::fixed_len`] long.
+    fn parse(bytes: &'a [u8], header: &Header) -> Result<Self, VariantError> {
+        // Everything the kernel's validator checks about *where the bytes are*.
+        // Its reader seeks to a constant offset rather than to anything the
+        // header declares, so a header disagreeing with that constant describes
+        // a file Kira and the watch would read differently -- which is the one
+        // kind of disagreement that must never be papered over.
+        if header.service_len != 0 || header.libc_version != Version::default() {
+            return Err(VariantError::NotCodeless {
+                service_len: header.service_len,
+                libc_version: header.libc_version,
+            });
+        }
+        if header.normal_icon_len != NORMAL_ICON_LEN || header.small_icon_len != SMALL_ICON_LEN {
+            return Err(VariantError::IconSizes {
+                normal: header.normal_icon_len,
+                small: header.small_icon_len,
+            });
+        }
+
+        // Equal to the kernel's constant 48 + 3600 + 900, given the two checks
+        // above; computed rather than written out so the two cannot drift.
+        let start = header.fixed_len() - CRC_LEN;
+        let region = &bytes[start..bytes.len() - CRC_LEN];
+        let fixed: &[u8; VARIANT_PAYLOAD_LEN] = region
+            .get(..VARIANT_PAYLOAD_LEN)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(VariantError::TooShort { got: region.len() })?;
+
+        let u32_at = |offset: usize| -> u32 {
+            u32::from_le_bytes([
+                fixed[offset],
+                fixed[offset + 1],
+                fixed[offset + 2],
+                fixed[offset + 3],
+            ])
+        };
+
+        let version = u32_at(0);
+        if version != VARIANT_PAYLOAD_VERSION {
+            return Err(VariantError::UnsupportedPayload { version });
+        }
+
+        let mut id = [0u8; 8];
+        id.copy_from_slice(&fixed[4..12]);
+        let target = AppId::new(u64::from_le_bytes(id));
+        if target == header.app_id {
+            return Err(VariantError::TargetsItself { target });
+        }
+
+        let declared = u32_at(17) as usize;
+        let available = region.len() - VARIANT_PAYLOAD_LEN;
+        if declared == 0 {
+            return Err(VariantError::NoConfig);
+        }
+        if declared > VARIANT_CONFIG_MAX {
+            return Err(VariantError::ConfigTooLarge { declared });
+        }
+        if declared != available {
+            return Err(VariantError::ConfigSize {
+                declared,
+                available,
+            });
+        }
+
+        let min_target = u32_at(12);
+        Ok(Self {
+            target,
+            // Zero is the packer's "any", not version 0.0.0.
+            min_target_version: (min_target != 0).then(|| Version::from_packed(min_target)),
+            origin: VariantOrigin::from_raw(fixed[16]),
+            config: std::str::from_utf8(&region[VARIANT_PAYLOAD_LEN..])
+                .map_err(|_| VariantError::ConfigNotUtf8)?,
         })
     }
 }
@@ -447,21 +711,31 @@ impl CrcCheck {
 pub struct Uapp<'a> {
     bytes: &'a [u8],
     header: Header,
-    gui_len: usize,
+    trailing_len: usize,
+    variant: Option<Result<VariantAlias<'a>, VariantError>>,
 }
 
 impl<'a> Uapp<'a> {
     /// Parse a complete `.uapp`.
     ///
+    /// A variant alias whose descriptor is malformed still parses: the flag has
+    /// already settled what the file is, and refusing here would take a whole
+    /// watch scan or catalogue build down over one file. [`Self::variant`]
+    /// carries the failure instead.
+    ///
     /// # Errors
-    /// See [`Header::parse`] and [`Header::gui_len`].
+    /// See [`Header::parse`] and [`Header::trailing_len`].
     pub fn parse(bytes: &'a [u8]) -> Result<Self, Error> {
         let header = Header::parse(bytes)?;
-        let gui_len = header.gui_len(bytes.len())?;
+        let trailing_len = header.trailing_len(bytes.len())?;
+        let variant = header
+            .is_variant_alias()
+            .then(|| VariantAlias::parse(bytes, &header));
         Ok(Self {
             bytes,
             header,
-            gui_len,
+            trailing_len,
+            variant,
         })
     }
 
@@ -483,10 +757,21 @@ impl<'a> Uapp<'a> {
         self.bytes.is_empty()
     }
 
-    /// Length of the GUI image; zero when absent.
+    /// Length of the trailing region; zero when absent.
     #[must_use]
-    pub const fn gui_len(&self) -> usize {
-        self.gui_len
+    pub const fn trailing_len(&self) -> usize {
+        self.trailing_len
+    }
+
+    /// The variant descriptor, when [`Flags::VARIANT_ALIAS`] is set.
+    ///
+    /// `None` for an ordinary app. `Some(Err(_))` for an alias whose descriptor
+    /// does not follow the contract — never `None`, because the flag is the only
+    /// thing that decides what the file is and an unreadable alias is still not
+    /// an app.
+    #[must_use]
+    pub fn variant(&self) -> Option<Result<&VariantAlias<'a>, &VariantError>> {
+        self.variant.as_ref().map(Result::as_ref)
     }
 
     /// The 60x60 icon field. A non-zero length does not mean there are pixels —
@@ -511,14 +796,19 @@ impl<'a> Uapp<'a> {
         &self.bytes[start..start + self.header.service_len]
     }
 
-    /// The GUI image; empty for a Glance app without one.
+    /// Everything after the service image and before the CRC footer.
+    ///
+    /// The GUI image for an ordinary app, empty for a Glance app without one, and
+    /// the descriptor plus config for a variant alias — which is why it is not
+    /// called the GUI image. Use [`Self::variant`] to read the latter.
     #[must_use]
-    pub fn gui(&self) -> &'a [u8] {
-        let start = self.bytes.len() - CRC_LEN - self.gui_len;
-        &self.bytes[start..start + self.gui_len]
+    pub fn trailing(&self) -> &'a [u8] {
+        let start = self.bytes.len() - CRC_LEN - self.trailing_len;
+        &self.bytes[start..start + self.trailing_len]
     }
 
-    /// Everything between the header and the CRC footer: icons, service and GUI.
+    /// Everything between the header and the CRC footer: icons, service and the
+    /// trailing region.
     ///
     /// This is the app itself. Hashing it rather than the whole file
     /// distinguishes "the code changed" from "the release tag moved" — in
@@ -533,6 +823,13 @@ impl<'a> Uapp<'a> {
     /// the version field alone would redefine a field the catalogue has already
     /// published, so this is a boundary to be aware of rather than a bug to fix
     /// quietly. `the_payload_hash_ignores_every_header_field` pins it.
+    ///
+    /// **For a variant alias this is not code and cannot stand in for one.** An
+    /// alias has none: this covers its icons, its descriptor and its config, so
+    /// two builds hashing the same mean only that the *alias* is unchanged. What
+    /// it does is the target binary's, and the alias's bytes say nothing at all
+    /// about whether that moved. Nothing may report "code unchanged" from this
+    /// hash for an alias -- see `catalog::contents_noun`.
     #[must_use]
     pub fn payload(&self) -> &'a [u8] {
         &self.bytes[HEADER_LEN..self.bytes.len() - CRC_LEN]
@@ -581,6 +878,55 @@ mod tests {
         bytes
     }
 
+    /// `Hike`, and the `Walk` alias that runs on it. Real ids from apps-v1.4.0.
+    const TARGET_ID: u64 = 0xA1F3_C92B_7E4D_8A10;
+    const ALIAS_ID: u64 = 0xA1E5_D3B7_C9F0_4A82;
+    /// The config `Walk 1.4.0` embeds, byte for byte.
+    const WALK_CONFIG: &str = r#"{"schema":1,"name":"Walk","fit":{"sport":11,"subSport":0}}"#;
+
+    fn restamp(bytes: &mut [u8]) {
+        let end = bytes.len() - CRC_LEN;
+        let crc = crc32(&bytes[..end]);
+        bytes[end..].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    /// Build a variant alias the way `make_variant.py` packs one.
+    ///
+    /// Field by field rather than through a helper, so these tests check the
+    /// layout against the packer rather than agreeing with the reader.
+    fn make_alias(config: &[u8]) -> Vec<u8> {
+        let total = HEADER_LEN
+            + NORMAL_ICON_LEN
+            + SMALL_ICON_LEN
+            + VARIANT_PAYLOAD_LEN
+            + config.len()
+            + CRC_LEN;
+        let mut bytes = vec![0u8; total];
+        bytes[..8].copy_from_slice(&ALIAS_ID.to_le_bytes());
+        bytes[8..12].copy_from_slice(&Version::new(1, 4, 0).packed().to_le_bytes());
+        // LibCVersion and serviceLen stay zero: an alias carries no code.
+        bytes[20..24].copy_from_slice(&Flags::VARIANT_ALIAS.bits().to_le_bytes());
+        bytes[24..28].copy_from_slice(b"Walk");
+        bytes[40..44].copy_from_slice(&(NORMAL_ICON_LEN as u32).to_le_bytes());
+        bytes[44..48].copy_from_slice(&(SMALL_ICON_LEN as u32).to_le_bytes());
+
+        let at = HEADER_LEN + NORMAL_ICON_LEN + SMALL_ICON_LEN;
+        bytes[at..at + 4].copy_from_slice(&VARIANT_PAYLOAD_VERSION.to_le_bytes());
+        bytes[at + 4..at + 12].copy_from_slice(&TARGET_ID.to_le_bytes());
+        bytes[at + 12..at + 16].copy_from_slice(&Version::new(1, 4, 0).packed().to_le_bytes());
+        bytes[at + 16] = 0; // shipped
+        bytes[at + 17..at + 21].copy_from_slice(&(config.len() as u32).to_le_bytes());
+        bytes[at + VARIANT_PAYLOAD_LEN..at + VARIANT_PAYLOAD_LEN + config.len()]
+            .copy_from_slice(config);
+        restamp(&mut bytes);
+        bytes
+    }
+
+    /// The descriptor's offset within a well-formed alias.
+    const fn descriptor_at() -> usize {
+        HEADER_LEN + NORMAL_ICON_LEN + SMALL_ICON_LEN
+    }
+
     #[test]
     fn crc32_matches_the_reference_vector() {
         // The check value for CRC-32/ISO-HDLC, which is what zlib.crc32 in the
@@ -602,7 +948,7 @@ mod tests {
         assert!(header.autostart());
         assert!(header.flags.contains(Flags::GLANCE_CAPABLE));
         assert_eq!(header.service_len, 64);
-        assert_eq!(uapp.gui_len(), 32);
+        assert_eq!(uapp.trailing_len(), 32);
         assert!(uapp.verify_crc().is_valid());
     }
 
@@ -663,19 +1009,19 @@ mod tests {
             + uapp.normal_icon().len()
             + uapp.small_icon().len()
             + uapp.service().len()
-            + uapp.gui().len()
+            + uapp.trailing().len()
             + CRC_LEN;
         assert_eq!(tiled, bytes.len());
         assert_eq!(uapp.payload().len(), bytes.len() - HEADER_LEN - CRC_LEN);
     }
 
     #[test]
-    fn glance_without_gui_has_zero_gui_len() {
+    fn glance_without_gui_has_no_trailing_region() {
         let bytes = make("Live HR", 0x22, 64, 0);
         let uapp = Uapp::parse(&bytes).unwrap();
         assert_eq!(uapp.header().app_type(), AppType::Glance);
-        assert_eq!(uapp.gui_len(), 0);
-        assert!(uapp.gui().is_empty());
+        assert_eq!(uapp.trailing_len(), 0);
+        assert!(uapp.trailing().is_empty());
     }
 
     #[test]
@@ -719,11 +1065,11 @@ mod tests {
     }
 
     #[test]
-    fn header_only_parse_leaves_gui_len_to_the_caller() {
+    fn header_only_parse_leaves_the_trailing_length_to_the_caller() {
         let bytes = make("Alarm", 0x29, 64, 32);
         let header = Header::parse(&bytes[..HEADER_LEN]).unwrap();
         assert_eq!(header.name, "Alarm");
-        assert_eq!(header.gui_len(bytes.len()).unwrap(), 32);
+        assert_eq!(header.trailing_len(bytes.len()).unwrap(), 32);
     }
 
     #[test]
@@ -740,7 +1086,10 @@ mod tests {
     fn rejects_a_file_smaller_than_its_header_claims() {
         let bytes = make("Alarm", 0x29, 4096, 0);
         let header = Header::parse(&bytes).unwrap();
-        assert!(matches!(header.gui_len(512), Err(Error::Truncated { .. })));
+        assert!(matches!(
+            header.trailing_len(512),
+            Err(Error::Truncated { .. })
+        ));
     }
 
     #[test]
@@ -768,5 +1117,173 @@ mod tests {
         assert!("1.3.256".parse::<Version>().is_err());
         assert!(Version::new(1, 3, 0) > Version::new(1, 2, 9));
         assert!(Version::new(0, 1, 9) < Version::new(1, 0, 0));
+    }
+
+    #[test]
+    fn a_variant_alias_decodes_its_descriptor() {
+        let bytes = make_alias(WALK_CONFIG.as_bytes());
+        // The shipped Walk 1.4.0 is exactly this size, which is the cheapest
+        // check that this fixture is packed the way upstream packs one.
+        assert_eq!(bytes.len(), 4642);
+
+        let uapp = Uapp::parse(&bytes).unwrap();
+        let header = uapp.header();
+        assert!(header.is_variant_alias());
+        // An alias declares its target's type and nothing else. Walk is the only
+        // app in apps-v1.4.0 without GLANCE_CAPABLE, because the packer builds the
+        // flags word from the type and the alias bit alone.
+        assert_eq!(header.app_type(), AppType::Activity);
+        assert!(!header.flags.contains(Flags::GLANCE_CAPABLE));
+        assert!(!header.autostart());
+        assert_eq!(header.service_len, 0);
+        assert_eq!(header.libc_version, Version::new(0, 0, 0));
+
+        let alias = uapp
+            .variant()
+            .expect("the flag is set")
+            .expect("well formed");
+        assert_eq!(alias.target, AppId::new(TARGET_ID));
+        assert_eq!(alias.min_target_version, Some(Version::new(1, 4, 0)));
+        assert_eq!(alias.origin, VariantOrigin::Shipped);
+        assert_eq!(alias.config, WALK_CONFIG);
+        assert_eq!(uapp.trailing_len(), VARIANT_PAYLOAD_LEN + WALK_CONFIG.len());
+        assert!(uapp.verify_crc().is_valid());
+    }
+
+    #[test]
+    fn an_ordinary_app_has_no_descriptor_to_read() {
+        let bytes = make("Alarm", 0x29, 64, 32);
+        assert!(!Uapp::parse(&bytes).unwrap().header().is_variant_alias());
+        assert!(Uapp::parse(&bytes).unwrap().variant().is_none());
+    }
+
+    #[test]
+    fn min_target_version_zero_means_any_rather_than_0_0_0() {
+        // The packer's default, and what every variant carried before una-sdk#281
+        // gave Walking a real floor.
+        let mut bytes = make_alias(WALK_CONFIG.as_bytes());
+        let at = descriptor_at();
+        bytes[at + 12..at + 16].copy_from_slice(&0u32.to_le_bytes());
+        restamp(&mut bytes);
+
+        let uapp = Uapp::parse(&bytes).unwrap();
+        let alias = uapp.variant().unwrap().unwrap();
+        assert_eq!(alias.min_target_version, None);
+    }
+
+    #[test]
+    fn a_user_created_variant_says_so() {
+        // Nothing upstream publishes carries origin 1; the kernel's CreateVariant
+        // stamps it on a variant made on the watch, which exists in no release.
+        let mut bytes = make_alias(WALK_CONFIG.as_bytes());
+        bytes[descriptor_at() + 16] = 1;
+        restamp(&mut bytes);
+        let uapp = Uapp::parse(&bytes).unwrap();
+        assert_eq!(uapp.variant().unwrap().unwrap().origin, VariantOrigin::User);
+
+        // And an origin from some later firmware is reported as unknown rather
+        // than guessed into one of the two this build knows.
+        bytes[descriptor_at() + 16] = 7;
+        restamp(&mut bytes);
+        let uapp = Uapp::parse(&bytes).unwrap();
+        assert_eq!(
+            uapp.variant().unwrap().unwrap().origin,
+            VariantOrigin::Unknown
+        );
+    }
+
+    #[test]
+    fn a_malformed_alias_is_never_read_as_an_ordinary_app() {
+        // The flag is the only thing that decides what the file is. Every one of
+        // these is a file the watch would refuse or read differently, and each
+        // must come back as an alias that failed rather than as an app.
+        type Damage = fn(&mut [u8]);
+        const AT: usize = descriptor_at();
+        let cases: [(&str, Damage); 7] = [
+            ("payload version", |b| {
+                b[AT..AT + 4].copy_from_slice(&2u32.to_le_bytes());
+            }),
+            ("config size", |b| {
+                b[AT + 17..AT + 21].copy_from_slice(&99u32.to_le_bytes());
+            }),
+            ("config size over the kernel's bound", |b| {
+                b[AT + 17..AT + 21].copy_from_slice(&99_999u32.to_le_bytes());
+            }),
+            ("declares a service image", |b| {
+                b[16..20].copy_from_slice(&16u32.to_le_bytes());
+            }),
+            ("declares a LibC ABI", |b| {
+                b[12..16].copy_from_slice(&Version::new(0, 0, 3).packed().to_le_bytes());
+            }),
+            (
+                "icon fields the kernel's fixed offset does not assume",
+                |b| {
+                    b[40..44].copy_from_slice(&16u32.to_le_bytes());
+                },
+            ),
+            ("targets itself", |b| {
+                b[AT + 4..AT + 12].copy_from_slice(&ALIAS_ID.to_le_bytes());
+            }),
+        ];
+
+        for (what, damage) in cases {
+            let mut bytes = make_alias(WALK_CONFIG.as_bytes());
+            damage(&mut bytes);
+            restamp(&mut bytes);
+            let uapp = Uapp::parse(&bytes).expect("{what}: still parses as a container");
+            assert!(
+                uapp.header().is_variant_alias(),
+                "{what}: stopped being an alias"
+            );
+            assert!(
+                uapp.variant().expect("still flagged").is_err(),
+                "{what}: read as a well-formed alias"
+            );
+        }
+    }
+
+    #[test]
+    fn an_alias_with_no_config_activates_nothing_and_says_so() {
+        // The app-side reader treats configSize 0 as "run as the classic self",
+        // so an alias like this is inert rather than a variant.
+        let bytes = make_alias(b"");
+        let uapp = Uapp::parse(&bytes).unwrap();
+        assert_eq!(uapp.variant().unwrap(), Err(&VariantError::NoConfig));
+    }
+
+    #[test]
+    fn a_config_that_is_not_text_is_refused() {
+        let bytes = make_alias(&[0xFF, 0xFE, 0xFD]);
+        let uapp = Uapp::parse(&bytes).unwrap();
+        assert_eq!(uapp.variant().unwrap(), Err(&VariantError::ConfigNotUtf8));
+    }
+
+    #[test]
+    fn a_damaged_descriptor_never_panics() {
+        // A .uapp comes off a USB volume or an upstream zip, so every field here
+        // is somebody else's bytes. The reader may report anything it likes about
+        // them; what it may not do is come apart.
+        let good = make_alias(WALK_CONFIG.as_bytes());
+
+        for cut in 0..good.len() {
+            let bytes = &good[..cut];
+            if let Ok(uapp) = Uapp::parse(bytes) {
+                let _ = uapp.variant();
+                let _ = uapp.verify_crc();
+            }
+        }
+
+        // Every byte of the header and the descriptor, saturated one at a time.
+        let region = descriptor_at() + VARIANT_PAYLOAD_LEN;
+        for offset in (0..HEADER_LEN).chain(descriptor_at()..region) {
+            for value in [0x00u8, 0xFF] {
+                let mut bytes = good.clone();
+                bytes[offset] = value;
+                restamp(&mut bytes);
+                if let Ok(uapp) = Uapp::parse(&bytes) {
+                    let _ = uapp.variant();
+                }
+            }
+        }
     }
 }

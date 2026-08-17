@@ -26,9 +26,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use kira_core::catalog::{App, AppType, Catalog, Origin, Source, VersionEntry, resolve_targets};
+use kira_core::catalog::{
+    App, AppType, Catalog, Origin, Source, Variant, VersionEntry, resolve_targets,
+};
 use kira_core::plan::{self, Installed, Status};
-use kira_core::uapp::{AppId, Uapp};
+use kira_core::uapp::{AppId, Uapp, Version};
 use sha2::{Digest, Sha256};
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -153,6 +155,7 @@ fn catalog_from(fixtures: &[Fixture], tag: &str) -> Catalog {
                     file: fixture.file.clone(),
                     libc_version: header.libc_version,
                     autostart: header.autostart(),
+                    variant: Variant::of(&uapp),
                     size: fixture.bytes.len(),
                     sha256: sha256_hex(&fixture.bytes),
                     payload_sha256: sha256_hex(uapp.payload()),
@@ -258,6 +261,102 @@ fn pin_known_pairs(old_version: &str, new_version: &str, split: &Split) {
         assert_eq!(split.installs, ["Stopwatch", "Timer", "Walking"]);
         assert!(split.restamped.is_empty());
         assert_eq!(split.changed.len(), 12);
+    }
+}
+
+/// Decode an alias descriptor straight from the bytes, the way
+/// `make_variant.py` packs one: `struct.pack("<IQIBI11s")` at a fixed
+/// 48 + 3600 + 900. Deliberately independent of `Uapp::variant`, so this checks
+/// the reader against the packer rather than against itself.
+fn descriptor_of(bytes: &[u8]) -> (u32, AppId, u32, u8, usize, &str) {
+    let at = 48 + 3600 + 900;
+    let u32_at = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+    let size = u32_at(at + 17) as usize;
+    (
+        u32_at(at),
+        AppId::new(u64::from_le_bytes(
+            bytes[at + 4..at + 12].try_into().unwrap(),
+        )),
+        u32_at(at + 12),
+        bytes[at + 16],
+        size,
+        std::str::from_utf8(&bytes[at + 32..at + 32 + size]).expect("the config is text"),
+    )
+}
+
+#[test]
+fn a_variant_alias_reads_as_one_against_the_shipped_bytes() {
+    let Ok(new) = std::env::var("KIRA_FIXTURE_NEW") else {
+        eprintln!("skipped: set KIRA_FIXTURE_NEW to run");
+        return;
+    };
+    let fixtures = collect(Path::new(&new));
+    let by_id = by_id(&fixtures, "newer");
+
+    let aliases: Vec<&Fixture> = fixtures
+        .iter()
+        .filter(|f| {
+            Uapp::parse(&f.bytes)
+                .expect("fixture parses")
+                .header()
+                .is_variant_alias()
+        })
+        .collect();
+
+    for fixture in &aliases {
+        let uapp = Uapp::parse(&fixture.bytes).expect("fixture parses");
+        let alias = uapp
+            .variant()
+            .expect("the flag is set")
+            .unwrap_or_else(|e| panic!("{}: descriptor unreadable -- {e}", fixture.folder));
+
+        let (payload_version, target, min_target, origin, config_size, config) =
+            descriptor_of(&fixture.bytes);
+        assert_eq!(payload_version, 1, "{}", fixture.folder);
+        assert_eq!(alias.target, target);
+        assert_eq!(
+            alias.min_target_version.map_or(0, Version::packed),
+            min_target
+        );
+        assert_eq!(
+            alias.origin.to_string(),
+            ["shipped", "user"][origin as usize]
+        );
+        assert_eq!(alias.config, config);
+        assert_eq!(alias.config.len(), config_size);
+
+        // An alias carries no code and never claims its target's identity.
+        assert_eq!(uapp.header().service_len, 0);
+        assert_eq!(uapp.header().libc_version.packed(), 0);
+        assert_ne!(alias.target, uapp.header().app_id);
+        // Its target ships in the same release, which is what makes the
+        // catalogue link resolvable at all.
+        assert!(
+            by_id.contains_key(&alias.target),
+            "{} targets {}, which is not in this release",
+            fixture.folder,
+            alias.target
+        );
+    }
+
+    // Pinned for the one release whose contents are known. apps-v1.4.0 ships
+    // exactly one variant: Walk, on the Hiking binary, with a 1.4.0 floor.
+    let version = Uapp::parse(&fixtures[0].bytes)
+        .expect("fixture parses")
+        .header()
+        .version;
+    if version.to_string() == "1.4.0" {
+        let folders: Vec<&str> = aliases.iter().map(|f| f.folder.as_str()).collect();
+        assert_eq!(folders, ["Walking"]);
+        let uapp = Uapp::parse(&aliases[0].bytes).expect("fixture parses");
+        let alias = uapp.variant().unwrap().unwrap();
+        assert_eq!(uapp.header().name, "Walk");
+        assert_eq!(by_id[&alias.target].folder, "Hiking");
+        assert_eq!(
+            alias.min_target_version.map(|v| v.to_string()).as_deref(),
+            Some("1.4.0")
+        );
+        assert_eq!(alias.origin.to_string(), "shipped");
     }
 }
 
