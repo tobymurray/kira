@@ -865,6 +865,12 @@ pre.notes {
   font-size: 13px;
 }
 
+/* What a variant alias needs before it can run. Emphasised over the line above
+   it because it is the one thing on the row that is not about this app. */
+.plan-row .what.needs {
+  color: var(--warn-ink);
+}
+
 /* Links to the app's card, where the version picker and history live. */
 .plan-row .plan-name {
   color: var(--ink);

@@ -1596,7 +1596,10 @@ mod tests {
         // and without it the card answers a question nobody asked.
         let c = walk_and_hike();
         let described = c.describe_history(&c.apps[0]);
-        assert_eq!(described, "only 1.4.0 published · Hike: code changed in 1.4.0");
+        assert_eq!(
+            described,
+            "only 1.4.0 published · Hike: code changed in 1.4.0"
+        );
 
         // An ordinary app's line is untouched, and Hike's own card does not grow
         // a clause about itself.

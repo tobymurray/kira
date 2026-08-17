@@ -93,6 +93,28 @@ struct Bounds {
     end: usize,
 }
 
+/// What a complete `.uapp` says about being a variant alias, if it is one.
+///
+/// Needs the whole file, unlike [`read_header`], because the descriptor sits
+/// after the icons. That is cheap for the only files it applies to: `Walk` is
+/// 4642 bytes where the `Hike` binary it runs is 433080, so a scan can read one
+/// in full without noticing. `undefined` for an ordinary app.
+///
+/// Worth reading, because a variant made on the watch ships in no release and so
+/// can never be in a catalogue — its own descriptor is the only thing that can
+/// say what it is, and without this it reports as an app nobody recognises.
+///
+/// # Errors
+/// If the bytes are not a parseable `.uapp`.
+#[wasm_bindgen]
+pub fn read_variant(bytes: &[u8]) -> Result<JsValue, JsError> {
+    let uapp = Uapp::parse(bytes).map_err(js_err)?;
+    match catalog::Variant::of(&uapp) {
+        Some(variant) => to_js(&variant),
+        None => Ok(JsValue::UNDEFINED),
+    }
+}
+
 /// Byte range of the code within a `.uapp`: everything between the header and the
 /// CRC footer.
 ///
@@ -232,6 +254,12 @@ struct EntryView<'a> {
     verdict: plan::Verdict,
     /// An app occupying this one's on-device folder that is not this app.
     blocking: Option<&'a Installed>,
+    /// The app a variant alias runs, and whether it will be there for it.
+    requires: Option<&'a plan::Requirement>,
+    /// What is missing, when anything is. `None` once the requirement holds:
+    /// the card already says the variant has one, and a met dependency is not
+    /// news on a plan row.
+    requires_note: Option<String>,
     /// Why this entry is in the plan, e.g. "1.2.0 → 1.3.0".
     describe: String,
     /// Whether acting on this entry would write to the watch.
@@ -241,12 +269,28 @@ struct EntryView<'a> {
     is_actionable: bool,
 }
 
+/// Something on the watch the catalogue does not list.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForeignView<'a> {
+    /// Nested rather than flattened: `serde_wasm_bindgen` silently drops
+    /// `#[serde(flatten)]`, so the page reads `foreign[i].installed.folder`.
+    installed: &'a Installed,
+    /// What it is, where anything more than "not in this catalogue" can be said.
+    /// A variant made on the watch is the case that has one.
+    describe: Option<String>,
+}
+
 /// A whole plan, with the counts a UI would otherwise recompute.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanView<'a> {
     entries: Vec<EntryView<'a>>,
-    foreign: &'a [Installed],
+    foreign: Vec<ForeignView<'a>>,
+    /// The ids the plan would write, in the order it would write them: a
+    /// variant's target ahead of the variant. Exposed so the in-page installer
+    /// and the generated scripts cannot disagree about it.
+    write_order: Vec<AppId>,
     actionable: usize,
     restamps: usize,
     install: usize,
@@ -275,11 +319,24 @@ impl<'a> PlanView<'a> {
                     recognised: entry.recognised,
                     verdict: entry.verdict(),
                     blocking: entry.blocking.as_ref(),
+                    requires: entry.requires.as_ref(),
+                    requires_note: entry
+                        .requires
+                        .as_ref()
+                        .and_then(plan::Requirement::describe),
                     describe: entry.describe(),
                     is_actionable: entry.is_actionable(),
                 })
                 .collect(),
-            foreign: &plan.foreign,
+            foreign: plan
+                .foreign
+                .iter()
+                .map(|installed| ForeignView {
+                    installed,
+                    describe: plan.describe_foreign(installed),
+                })
+                .collect(),
+            write_order: plan.write_order(),
             actionable: plan.actionable().count(),
             restamps: plan.restamp_count(),
             install: count(Status::Install),
@@ -469,6 +526,43 @@ impl Store {
             serde_wasm_bindgen::from_value(installed).map_err(js_err)?;
         let plan = plan::build(&self.resolve(), &installed);
         to_js(&PlanView::of(&plan))
+    }
+
+    /// Grow a selection to include what the chosen entries need.
+    ///
+    /// Returns the app ids to act on. A variant alias runs another app's binary,
+    /// so choosing one without its target buys a launcher entry with nothing
+    /// behind it — and which app that is, and whether this plan would supply a
+    /// build new enough, is a rule rather than something the page should work
+    /// out from a descriptor.
+    ///
+    /// Returned rather than applied, so the page can tick the box it is about to
+    /// act on: a selection that quietly grew would be the surprise the per-app
+    /// choice exists to prevent.
+    ///
+    /// # Errors
+    /// If `installed` is malformed or `chosen` holds something that is not an
+    /// `AppId`.
+    #[wasm_bindgen(js_name = withDependencies)]
+    pub fn with_dependencies(
+        &self,
+        installed: JsValue,
+        chosen: JsValue,
+    ) -> Result<JsValue, JsError> {
+        let installed: Vec<Installed> =
+            serde_wasm_bindgen::from_value(installed).map_err(js_err)?;
+        let chosen: Vec<String> = serde_wasm_bindgen::from_value(chosen).map_err(js_err)?;
+        let ids = chosen
+            .iter()
+            .map(|id| id.parse::<AppId>())
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()
+            .map_err(js_err)?;
+        let grown: Vec<String> = plan::build(&self.resolve(), &installed)
+            .with_dependencies(&ids)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        to_js(&grown)
     }
 
     /// Generate a standalone installer, for browsers that cannot write to the

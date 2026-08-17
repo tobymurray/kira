@@ -1,7 +1,7 @@
 //! Diffing a catalogue against a watch, and generating installers for browsers
 //! that cannot write to a removable drive themselves.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,15 @@ pub struct Installed {
     /// install". Size alone cannot tell those apart.
     #[serde(default)]
     pub crc_valid: Option<bool>,
+    /// Set when the installed file is a variant alias rather than an app.
+    ///
+    /// The flag is in the header, so a scan knows *that* much for free; the
+    /// descriptor needs the whole file, which is cheap for an alias -- `Walk` is
+    /// 4642 bytes against `Hike`'s 433080. Worth reading, because a variant made
+    /// on the watch exists in no release and so can never be in a catalogue: its
+    /// own descriptor is the only thing that can say what it is.
+    #[serde(default)]
+    pub variant: Option<catalog::Variant>,
 }
 
 /// What should happen to an app.
@@ -152,6 +161,77 @@ pub enum Recognised {
     Unhashed,
 }
 
+/// Whether the app a variant alias runs will be there for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequirementState {
+    /// The target is on the watch and new enough.
+    Satisfied,
+    /// Not satisfied now, but this plan installs a build that satisfies it.
+    Planned,
+    /// Nothing on the watch carries the target's id, and nothing here would.
+    Missing,
+    /// On the watch, older than the floor the descriptor names, and this plan
+    /// does not fix that.
+    TooOld,
+}
+
+/// What a variant alias needs before it can do anything.
+///
+/// Deliberately *not* a [`Status`]. "What should happen to this app" and "what
+/// else has to be there" are different questions, and folding the second into
+/// the first would make an installable variant look like a [`Status::Superseded`]
+/// one — listed, explained, never offered. That is the wrong answer here: Kira
+/// refuses an install where going ahead destroys something, as `FolderTaken`
+/// does, and an alias without its target destroys nothing. It is inert, which is
+/// the same property upstream relies on for watches whose firmware predates the
+/// feature. So it stays on offer, and says what it wants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Requirement {
+    /// The app whose binary the alias runs.
+    pub target: AppId,
+    /// Its display name, where the catalogue lists it.
+    pub name: Option<String>,
+    /// Oldest build that satisfies the descriptor, if it names a floor.
+    pub min_version: Option<Version>,
+    /// What the watch has, if it has anything.
+    pub installed_version: Option<Version>,
+    /// Whether the watch will satisfy it.
+    pub state: RequirementState,
+}
+
+impl Requirement {
+    /// The target as a reader would refer to it: its name, or its id.
+    fn subject(&self) -> String {
+        self.name
+            .clone()
+            .unwrap_or_else(|| format!("AppID {}", self.target))
+    }
+
+    /// What is missing, when anything is.
+    ///
+    /// `None` once the requirement holds, because a satisfied dependency is not
+    /// news — the card already says the variant has one.
+    #[must_use]
+    pub fn describe(&self) -> Option<String> {
+        let subject = self.subject();
+        let wanted = match self.min_version {
+            Some(floor) => format!("{subject} {floor} or newer"),
+            None => subject,
+        };
+        match self.state {
+            RequirementState::Satisfied => None,
+            RequirementState::Planned => Some(format!("needs {wanted}, installed here too")),
+            RequirementState::Missing => Some(format!("needs {wanted}, which is not on the watch")),
+            RequirementState::TooOld => Some(match self.installed_version {
+                Some(have) => format!("needs {wanted}; the watch has {have}"),
+                None => format!("needs {wanted}"),
+            }),
+        }
+    }
+}
+
 /// A planned action for one app.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +255,9 @@ pub struct Entry {
     /// write into, and the installer clears other `.uapp` files from it.
     #[serde(default)]
     pub blocking: Option<Installed>,
+    /// The app this one needs, when it is a variant alias.
+    #[serde(default)]
+    pub requires: Option<Requirement>,
 }
 
 impl Entry {
@@ -297,9 +380,87 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Entries that would be written.
+    /// Entries that would be written, targets ahead of the aliases that run them.
+    ///
+    /// The order only shows in a run that stops halfway. The launcher list is
+    /// rebuilt at boot, so a complete run lands the same either way — but an
+    /// interruption after the binary leaves a folder with no launcher entry
+    /// pointing at it, and an interruption after the alias leaves a launcher
+    /// entry with no binary behind it. The first of those is nothing; the second
+    /// looks like a broken app.
+    ///
+    /// A two-group sort rather than a topological one, because an alias's target
+    /// is never itself an alias: `pack_variants.py` resolves a target only among
+    /// files without the alias flag, so upstream cannot ship a chain. A
+    /// hand-made chain would be ordered no worse than it is today.
     pub fn actionable(&self) -> impl Iterator<Item = &Entry> {
-        self.entries.iter().filter(|e| e.is_actionable())
+        let mut ordered: Vec<&Entry> = self.entries.iter().filter(|e| e.is_actionable()).collect();
+        ordered.sort_by_key(|e| e.app.variant.is_some());
+        ordered.into_iter()
+    }
+
+    /// The ids [`Self::actionable`] yields, in the order it yields them.
+    ///
+    /// Exposed so the in-page installer writes in the same order the generated
+    /// scripts do. Both were catalogue order until variants arrived, and a rule
+    /// that only one of the two write paths follows is not a rule.
+    #[must_use]
+    pub fn write_order(&self) -> Vec<AppId> {
+        self.actionable().map(|e| e.app.app_id).collect()
+    }
+
+    /// Grow a selection to include what the chosen entries need.
+    ///
+    /// Choosing `Walk` without `Hike` buys a launcher entry with nothing behind
+    /// it, so the target comes along — but only where this plan would install a
+    /// build that actually satisfies the floor, since adding one that does not
+    /// would be motion without a result.
+    ///
+    /// Returned rather than applied silently, so the page can tick the box it is
+    /// about to act on. A selection that quietly grew is exactly the surprise
+    /// [`Self::only`] exists to prevent, and the fix for that is showing the
+    /// growth, not refusing to grow.
+    #[must_use]
+    pub fn with_dependencies(&self, chosen: &BTreeSet<AppId>) -> BTreeSet<AppId> {
+        let mut grown = chosen.clone();
+        for entry in self
+            .entries
+            .iter()
+            .filter(|e| chosen.contains(&e.app.app_id))
+        {
+            if let Some(requires) = &entry.requires
+                && requires.state == RequirementState::Planned
+            {
+                grown.insert(requires.target);
+            }
+        }
+        grown
+    }
+
+    /// What something on the watch that the catalogue does not list actually is.
+    ///
+    /// `None` for almost everything, where "not in this catalogue" is the whole
+    /// of what can be said. A variant made on the watch is the exception: it
+    /// ships in no release and so can never be catalogued, but its own
+    /// descriptor names what it runs, and reporting that beats reporting an
+    /// unrecognised app.
+    #[must_use]
+    pub fn describe_foreign(&self, installed: &Installed) -> Option<String> {
+        let (target, origin) = match installed.variant.as_ref()? {
+            catalog::Variant::Unreadable { .. } => {
+                return Some("a variant alias whose descriptor Kira could not read".to_owned());
+            }
+            catalog::Variant::Alias { target, origin, .. } => (*target, *origin),
+        };
+        let named = self
+            .entries
+            .iter()
+            .find(|e| e.app.app_id == target)
+            .map_or_else(|| format!("AppID {target}"), |e| e.app.name.clone());
+        Some(match origin {
+            crate::uapp::VariantOrigin::User => format!("a variant of {named}, made on the watch"),
+            _ => format!("a variant of {named}"),
+        })
     }
 
     /// Entries whose installed bytes still need hashing.
@@ -319,10 +480,16 @@ impl Plan {
     /// applies to the generated installers too: a script that ignored the choice
     /// made on the page would do more than the page said it would.
     ///
+    /// The one thing it adds to a selection is a chosen variant's target, via
+    /// [`Self::with_dependencies`] — applied here as well as on the page so both
+    /// write paths agree even if one of them forgets. Idempotent, since the page
+    /// has already ticked the box by the time this runs.
+    ///
     /// Entries that were never actionable are kept as they are — dropping them
     /// would lose what the plan knows about the rest of the watch.
     #[must_use]
     pub fn only(&self, chosen: &BTreeSet<AppId>) -> Self {
+        let chosen = self.with_dependencies(chosen);
         Self {
             entries: self
                 .entries
@@ -423,6 +590,61 @@ fn occupant<'a>(target: &Target, installed: &'a [Installed]) -> Option<&'a Insta
     })
 }
 
+/// Work out what each variant alias needs, once every entry exists.
+///
+/// A second pass because the answer depends on the other entries: whether the
+/// target is missing is a question about the watch, but whether that matters is
+/// a question about whether this same plan is about to install it.
+///
+/// The floor is compared against the packed `A.B.C`, which is the whole of what
+/// `minTargetVersion` can carry — so `1.4.0-rc2` satisfies a `1.4.0` floor,
+/// which is what upstream intends (una-sdk#281) rather than an accident here.
+fn annotate_requirements(entries: &mut [Entry], installed: &[Installed]) {
+    let planned: BTreeMap<AppId, Version> = entries
+        .iter()
+        .filter(|e| e.is_actionable())
+        .map(|e| (e.app.app_id, e.app.version))
+        .collect();
+    let named: BTreeMap<AppId, String> = entries
+        .iter()
+        .map(|e| (e.app.app_id, e.app.name.clone()))
+        .collect();
+    let on_watch: BTreeMap<AppId, Version> =
+        installed.iter().map(|i| (i.app_id, i.version)).collect();
+
+    for entry in entries {
+        let Some(catalog::Variant::Alias {
+            target,
+            min_target_version,
+            ..
+        }) = entry.app.variant.as_ref()
+        else {
+            continue;
+        };
+        let (target, min_version) = (*target, *min_target_version);
+        let satisfies = |v: Version| min_version.is_none_or(|floor| v >= floor);
+        let have = on_watch.get(&target).copied();
+
+        let state = if have.is_some_and(satisfies) {
+            RequirementState::Satisfied
+        } else if planned.get(&target).copied().is_some_and(satisfies) {
+            RequirementState::Planned
+        } else if have.is_some() {
+            RequirementState::TooOld
+        } else {
+            RequirementState::Missing
+        };
+
+        entry.requires = Some(Requirement {
+            target,
+            name: named.get(&target).cloned(),
+            min_version,
+            installed_version: have,
+            state,
+        });
+    }
+}
+
 /// Compare selected versions against what is installed.
 ///
 /// Keyed on [`AppId`], never on folder or display name: folders are arbitrary and
@@ -445,6 +667,8 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
                     identical_payload: false,
                     recognised: Recognised::Unhashed,
                     blocking: blocking.cloned(),
+                    // Filled by annotate_requirements, once every entry exists.
+                    requires: None,
                 };
             };
 
@@ -471,9 +695,13 @@ pub fn build(targets: &[Target], installed: &[Installed]) -> Plan {
                 identical_payload,
                 recognised,
                 blocking: blocking.cloned(),
+                requires: None,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+
+    let mut entries = entries;
+    annotate_requirements(&mut entries, installed);
 
     let foreign = installed
         .iter()
@@ -806,6 +1034,7 @@ mod tests {
             payload_sha256: None,
             sha256: None,
             crc_valid: None,
+            variant: None,
         }
     }
 
@@ -1443,6 +1672,196 @@ mod tests {
         let plan = build(&[target], &[on_watch]);
         assert_eq!(plan.entries[0].status, Status::DifferentBuild);
         assert_eq!(plan.actionable().count(), 0);
+    }
+
+    const HIKE: u64 = 0xA1F3_C92B_7E4D_8A10;
+    const WALK: u64 = 0xA1E5_D3B7_C9F0_4A82;
+
+    fn alias(floor: Option<Version>) -> catalog::Variant {
+        catalog::Variant::Alias {
+            target: AppId::new(HIKE),
+            min_target_version: floor,
+            origin: crate::uapp::VariantOrigin::Shipped,
+            config: r#"{"schema":1,"name":"Walk","fit":{"sport":11,"subSport":0}}"#.into(),
+        }
+    }
+
+    /// `Walk 1.4.0`, needing `Hike 1.4.0` or newer.
+    fn walk(floor: Option<Version>) -> Target {
+        let mut t = target("1.4.0");
+        t.app_id = AppId::new(WALK);
+        t.name = "Walk".into();
+        t.folder = "Walking".into();
+        t.size = 4642;
+        t.variant = Some(alias(floor));
+        t
+    }
+
+    /// `Hike`, the binary `Walk` runs.
+    fn hike(version: &str) -> Target {
+        let mut t = target(version);
+        t.app_id = AppId::new(HIKE);
+        t.name = "Hike".into();
+        t.folder = "Hiking".into();
+        t
+    }
+
+    fn on_watch(id: u64, folder: &str, version: &str) -> Installed {
+        let mut i = installed(version, 1000);
+        i.app_id = AppId::new(id);
+        i.folder = folder.to_owned();
+        i
+    }
+
+    #[test]
+    fn a_variant_whose_target_is_already_there_asks_for_nothing() {
+        let plan = build(
+            &[walk(Some(Version::new(1, 4, 0))), hike("1.4.0")],
+            &[on_watch(HIKE, "Hiking", "1.4.0")],
+        );
+        let requires = plan.entries[0].requires.as_ref().unwrap();
+        assert_eq!(requires.state, RequirementState::Satisfied);
+        assert_eq!(requires.describe(), None, "a met dependency is not news");
+        // And an ordinary app never grows one.
+        assert!(plan.entries[1].requires.is_none());
+    }
+
+    #[test]
+    fn a_variant_with_no_target_on_the_watch_is_offered_and_brings_it_along() {
+        // Offered, not refused. An alias without its binary is inert -- the same
+        // property upstream relies on for kernels that predate the feature -- so
+        // there is nothing here to protect anybody from, only something to say.
+        let plan = build(&[walk(Some(Version::new(1, 4, 0))), hike("1.4.0")], &[]);
+        assert_eq!(plan.entries[0].status, Status::Install);
+        assert!(plan.entries[0].is_actionable());
+
+        let requires = plan.entries[0].requires.as_ref().unwrap();
+        assert_eq!(requires.state, RequirementState::Planned);
+        assert_eq!(
+            requires.describe().as_deref(),
+            Some("needs Hike 1.4.0 or newer, installed here too")
+        );
+
+        // Choosing Walk alone brings Hike with it, and says so by returning the
+        // grown set rather than quietly acting on one.
+        let chosen = BTreeSet::from([AppId::new(WALK)]);
+        let grown = plan.with_dependencies(&chosen);
+        assert_eq!(grown, BTreeSet::from([AppId::new(WALK), AppId::new(HIKE)]));
+        assert_eq!(plan.only(&chosen).actionable().count(), 2);
+
+        // Choosing Hike alone does not drag Walk in: the dependency has a
+        // direction, and adding an app nobody asked for is the other failure.
+        let hike_only = BTreeSet::from([AppId::new(HIKE)]);
+        assert_eq!(plan.with_dependencies(&hike_only), hike_only);
+    }
+
+    #[test]
+    fn a_target_too_old_for_the_floor_is_named_with_both_versions() {
+        // Walking's config relies on the 1.4.x Hiking engine, so upstream gave it
+        // a real floor. A watch on 1.3.0 that is not being updated cannot run it.
+        let plan = build(
+            &[walk(Some(Version::new(1, 4, 0)))],
+            &[on_watch(HIKE, "Hiking", "1.3.0")],
+        );
+        let requires = plan.entries[0].requires.as_ref().unwrap();
+        assert_eq!(requires.state, RequirementState::TooOld);
+        assert_eq!(
+            requires.describe().as_deref(),
+            Some("needs AppID A1F3C92B7E4D8A10 1.4.0 or newer; the watch has 1.3.0")
+        );
+
+        // With Hike in the catalogue it is named, and the update satisfies it.
+        let plan = build(
+            &[walk(Some(Version::new(1, 4, 0))), hike("1.4.0")],
+            &[on_watch(HIKE, "Hiking", "1.3.0")],
+        );
+        let requires = plan.entries[0].requires.as_ref().unwrap();
+        assert_eq!(requires.state, RequirementState::Planned);
+        assert!(requires.describe().unwrap().contains("Hike 1.4.0 or newer"));
+    }
+
+    #[test]
+    fn a_target_this_plan_cannot_fix_is_reported_as_missing() {
+        // Hike is not in the catalogue at all, so nothing here will put it there.
+        let plan = build(&[walk(None)], &[]);
+        let requires = plan.entries[0].requires.as_ref().unwrap();
+        assert_eq!(requires.state, RequirementState::Missing);
+        assert_eq!(
+            requires.describe().as_deref(),
+            Some("needs AppID A1F3C92B7E4D8A10, which is not on the watch")
+        );
+        // Still offered -- refusing would leave somebody who wants Walk with no
+        // route at all, for a file that harms nothing.
+        assert_eq!(plan.actionable().count(), 1);
+        // And nothing is added to the selection, because there is nothing to add.
+        let chosen = BTreeSet::from([AppId::new(WALK)]);
+        assert_eq!(plan.with_dependencies(&chosen), chosen);
+    }
+
+    #[test]
+    fn a_prerelease_target_satisfies_a_release_floor() {
+        // minTargetVersion is the packed A.B.C and cannot carry a suffix, so a
+        // 1.4.0-rc2 Hike counts as 1.4.0 -- upstream says so explicitly, and this
+        // pins that Kira agrees rather than reading the floor some other way.
+        let mut candidate = hike("1.4.0");
+        candidate.prerelease = crate::prerelease::PreRelease::for_release("apps-v1.4.0-rc2", true);
+        assert_eq!(candidate.label(), "1.4.0-rc2");
+
+        let plan = build(&[walk(Some(Version::new(1, 4, 0))), candidate], &[]);
+        assert_eq!(
+            plan.entries[0].requires.as_ref().unwrap().state,
+            RequirementState::Planned
+        );
+    }
+
+    #[test]
+    fn the_binary_is_written_before_the_alias_that_runs_it() {
+        // Only visible in a run that stops halfway, but that is the run where it
+        // matters: stopping after Hike leaves nothing broken, stopping after Walk
+        // leaves a launcher entry with no binary behind it.
+        let plan = build(&[walk(None), hike("1.4.0")], &[]);
+        let order: Vec<&str> = plan.actionable().map(|e| e.app.name.as_str()).collect();
+        assert_eq!(order, ["Hike", "Walk"]);
+        assert_eq!(
+            plan.write_order(),
+            [AppId::new(HIKE), AppId::new(WALK)],
+            "the in-page installer and the scripts have to agree"
+        );
+
+        // The generated installers follow the same order, since both read
+        // `actionable`.
+        let script = shell(&plan, &config());
+        assert!(script.find("# Hike").unwrap() < script.find("# Walk").unwrap());
+        let ps = powershell(&plan, &config());
+        assert!(ps.find("# Hike").unwrap() < ps.find("# Walk").unwrap());
+    }
+
+    #[test]
+    fn a_variant_made_on_the_watch_is_named_rather_than_reported_as_a_stranger() {
+        // origin: user. It ships in no release, so no catalogue can ever list it
+        // and `foreign` is the only place it can land -- but its own descriptor
+        // says what it is, which beats "an app we do not know about".
+        let mut mine = on_watch(0x1111_2222_3333_4444, "Rucking", "1.4.0");
+        mine.name = "Ruck".into();
+        mine.variant = Some(catalog::Variant::Alias {
+            target: AppId::new(HIKE),
+            min_target_version: None,
+            origin: crate::uapp::VariantOrigin::User,
+            config: r#"{"schema":1,"name":"Ruck"}"#.into(),
+        });
+
+        let plan = build(&[hike("1.4.0")], &[mine.clone()]);
+        assert_eq!(plan.foreign.len(), 1);
+        assert_eq!(
+            plan.describe_foreign(&plan.foreign[0]).as_deref(),
+            Some("a variant of Hike, made on the watch")
+        );
+
+        // An ordinary stranger is still just a stranger; there is nothing more to
+        // say about it and inventing something would be worse.
+        let stranger = on_watch(0xDEAD_BEEF, "Squash", "1.0.0");
+        let plan = build(&[hike("1.4.0")], &[stranger]);
+        assert_eq!(plan.describe_foreign(&plan.foreign[0]), None);
     }
 
     #[test]

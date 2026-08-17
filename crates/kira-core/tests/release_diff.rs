@@ -204,6 +204,7 @@ fn installed_from(fixtures: &[Fixture]) -> Vec<Installed> {
                 payload_sha256: Some(sha256_hex(uapp.payload())),
                 sha256: Some(sha256_hex(&fixture.bytes)),
                 crc_valid: Some(uapp.verify_crc().is_valid()),
+                variant: Variant::of(&uapp),
             }
         })
         .collect()
