@@ -119,10 +119,11 @@ being silently downgraded.
 ### Release candidates
 
 Upstream tags an `apps-v*-rcN` release candidate weeks before the release —
-eighteen days for apps-v1.2.0, two for apps-v1.3.0 — and an app can ship for the
-first time in one. `Stopwatch`, `Timer` and `Walking` all appeared in
-apps-v1.4.0-rc1 and exist in no full release, so without candidates the only ways
-to get them are building from source or waiting.
+eighteen days for apps-v1.2.0, two for apps-v1.3.0, thirteen for apps-v1.4.0 —
+and an app can ship for the first time in one. `Stopwatch`, `Timer` and `Walking`
+all appeared in apps-v1.4.0-rc1 on 4 August and reached a full release only on the
+17th; for those thirteen days the only other ways to get them were building from
+source or waiting.
 
 So Kira publishes them, with three constraints:
 
@@ -281,14 +282,16 @@ test additionally compares two real releases end to end, and skips unless you
 point it at them:
 
 ```sh
-KIRA_FIXTURE_OLD=/path/to/apps-v1.2.0 \
-KIRA_FIXTURE_NEW=/path/to/apps-v1.3.0 \
+KIRA_FIXTURE_OLD=/path/to/apps-v1.3.0 \
+KIRA_FIXTURE_NEW=/path/to/apps-v1.4.0 \
 cargo test -p kira-core --test release_diff
 ```
 
 It cross-checks the planner against hashes it recomputes itself, so it holds for
-whichever two releases it is given, with the known 1.2.0-to-1.3.0 split pinned as
-a regression check. CI runs it against the two newest releases.
+whichever two releases it is given — including a pair where upstream added, dropped
+or renamed an app, as apps-v1.4.0 did all three — with the 1.2.0-to-1.3.0 and
+1.3.0-to-1.4.0 splits pinned as regression checks. CI runs it against the two
+newest releases.
 
 ### Reproducible builds
 
@@ -401,8 +404,9 @@ issued the certificate.
   binary carries is the LibC ABI version, which Kira records in `catalog.json` but
   does **not** show on a card or compare against anything — matching a build to
   your firmware is entirely up to you. The LibC exports are absolute flash
-  addresses, so a mismatch is not a graceful refusal. Only one ABI (0.0.3) exists
-  so far, so there is nothing to get wrong yet.
+  addresses, so a mismatch is not a graceful refusal. This was harmless while
+  0.0.3 was the only ABI in the catalogue; apps-v1.4.0 ended that, shipping `Walk`
+  as 0.0.0 against 0.0.3 everywhere else.
 - **A reboot is required** after installing, and it is not automatable.
 - **Release notes are upstream's, not per-app.** A tag's notes cover the whole
   release, so they may describe apps other than the one you are looking at. The
