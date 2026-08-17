@@ -101,8 +101,23 @@ size would be a guess about somebody else's document.
 One consequence is worth stating plainly, because it limits what the next
 section can say: **a variant's own bytes cannot tell you whether its behaviour
 changed.** They describe an alias, and what the alias *does* is the target
-binary's. So the per-version line for one says `alias unchanged since 1.4.0`,
-never `code unchanged` — there is no code in it to be unchanged.
+binary's. So its line never says `code unchanged` — there is none in it to be
+unchanged — and it names both halves: *"alias unchanged since 1.4.0 · Hike: code
+changed in 1.5.0"*. The second clause is the one that answers the question, and
+it is the target's own line rather than a second derivation of it.
+
+The card says what a variant is and what it needs, and the planner acts on it: a
+variant is offered even when the app it runs is missing or older than its
+declared floor, because an alias without its target is inert rather than harmful
+— the same property that makes one safe on a watch whose firmware predates the
+feature. Choosing it ticks the target too, visibly, and the target is written
+first, so a run interrupted halfway leaves nothing worse than a missing launcher
+entry.
+
+A variant *created on the watch* — the kernel's `CreateVariant`, `origin: user` —
+exists in no release and so can be in no catalogue. It used to be reported as an
+app Kira did not recognise. Its own descriptor says what it is, so it is now
+named as what it is instead.
 
 ### Versions, and a changelog derived from bytes
 
