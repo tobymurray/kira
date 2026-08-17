@@ -6,11 +6,19 @@
 //! a newer one as the catalogue, and asserts the planner separates genuine
 //! updates from pure re-stamps.
 //!
+//! A release is **not** a superset of the one before it, and everything here is
+//! keyed on [`AppId`] because of it. apps-v1.4.0 dropped `HRMonitor`, added
+//! `Stopwatch`, `Timer` and `Walk`, and renamed `Cycling`, `Hiking` and `Running`
+//! to `Bike`, `Hike` and `Run` while keeping both their ids and their folders. So
+//! which apps are foreign and which are first-time installs is derived from the
+//! fixtures rather than assumed: what is asserted is that the planner agrees with
+//! the bytes, not that upstream never adds, drops or renames an app.
+//!
 //! Opt in by pointing at two unzipped releases:
 //!
 //! ```text
-//! KIRA_FIXTURE_OLD=/path/to/apps-v1.2.0 \
-//! KIRA_FIXTURE_NEW=/path/to/apps-v1.3.0 \
+//! KIRA_FIXTURE_OLD=/path/to/apps-v1.3.0 \
+//! KIRA_FIXTURE_NEW=/path/to/apps-v1.4.0 \
 //! cargo test -p kira-core
 //! ```
 
@@ -20,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use kira_core::catalog::{App, AppType, Catalog, Origin, Source, VersionEntry, resolve_targets};
 use kira_core::plan::{self, Installed, Status};
-use kira_core::uapp::Uapp;
+use kira_core::uapp::{AppId, Uapp};
 use sha2::{Digest, Sha256};
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -88,6 +96,40 @@ fn collect(root: &Path) -> Vec<Fixture> {
         }
     }
     found
+}
+
+fn app_id(fixture: &Fixture) -> AppId {
+    Uapp::parse(&fixture.bytes)
+        .expect("fixture parses")
+        .header()
+        .app_id
+}
+
+/// The payload hash, computed here rather than read back from the planner, so the
+/// cross-check below is independent of the code it is checking.
+fn payload_hash(fixture: &Fixture) -> String {
+    sha256_hex(
+        Uapp::parse(&fixture.bytes)
+            .expect("fixture parses")
+            .payload(),
+    )
+}
+
+/// Index a release by the only identity an app really has.
+///
+/// `which` names the fixture set in the failure, because a duplicate id is a
+/// property of the release rather than of the test: two of the apps-v0.1.9-rc
+/// releases ship different apps under one `AppId`, which the catalogue build drops
+/// both sides of. This comparison has no way to key on that, so it says so
+/// instead of silently keeping whichever one it saw last.
+fn by_id<'a>(fixtures: &'a [Fixture], which: &str) -> BTreeMap<AppId, &'a Fixture> {
+    let map: BTreeMap<AppId, &Fixture> = fixtures.iter().map(|f| (app_id(f), f)).collect();
+    assert_eq!(
+        map.len(),
+        fixtures.len(),
+        "the {which} release ships two apps under one AppID, which this comparison cannot key on"
+    );
+    map
 }
 
 fn catalog_from(fixtures: &[Fixture], tag: &str) -> Catalog {
@@ -164,6 +206,61 @@ fn installed_from(fixtures: &[Fixture]) -> Vec<Installed> {
         .collect()
 }
 
+/// Folders of the apps the newer release introduces, sorted.
+fn installs(result: &plan::Plan) -> Vec<&str> {
+    let mut folders: Vec<&str> = result
+        .entries
+        .iter()
+        .filter(|e| e.status == Status::Install)
+        .map(|e| e.app.folder.as_str())
+        .collect();
+    folders.sort_unstable();
+    folders
+}
+
+/// How one release pair came out, as the planner reported it.
+struct Split<'a> {
+    restamped: &'a [&'a str],
+    changed: &'a [&'a str],
+    foreign: &'a [&'a str],
+    installs: &'a [&'a str],
+}
+
+/// The assertions above hold for any two releases; these hold only for the two
+/// pairs whose contents are known, and exist so a change in the planner cannot
+/// quietly agree with itself.
+fn pin_known_pairs(old_version: &str, new_version: &str, split: &Split) {
+    // The pair this behaviour was designed against: six of the thirteen apps in
+    // apps-v1.3.0 are byte-identical to their 1.2.0 builds, and 1.3.0 carries
+    // every app 1.2.0 had.
+    if old_version == "1.2.0" && new_version == "1.3.0" {
+        assert_eq!(
+            split.restamped,
+            [
+                "GlanceARHR",
+                "GlanceActivity",
+                "GlanceBattery",
+                "GlanceFloors",
+                "GlanceHR",
+                "GlanceSteps"
+            ]
+        );
+        assert_eq!(split.changed.len(), 7);
+        assert!(split.foreign.is_empty());
+        assert!(split.installs.is_empty());
+    }
+
+    // The pair CI runs today. apps-v1.4.0 is the first release that is not a
+    // superset of its predecessor: it drops HRMonitor, adds Stopwatch, Timer and
+    // Walk, and re-stamps nothing -- all twelve apps it carries over also changed.
+    if old_version == "1.3.0" && new_version == "1.4.0" {
+        assert_eq!(split.foreign, ["HRMonitor"]);
+        assert_eq!(split.installs, ["Stopwatch", "Timer", "Walking"]);
+        assert!(split.restamped.is_empty());
+        assert_eq!(split.changed.len(), 12);
+    }
+}
+
 #[test]
 fn separates_real_updates_from_release_tag_restamps() {
     let (Ok(old), Ok(new)) = (
@@ -183,22 +280,56 @@ fn separates_real_updates_from_release_tag_restamps() {
     let targets = resolve_targets(&catalog, &BTreeMap::new());
     let result = plan::build(&targets, &installed);
 
-    assert!(result.foreign.is_empty(), "no unknown apps expected");
-    assert!(
-        result.entries.iter().all(|e| e.status == Status::Update),
-        "every entry should be an update, not an install"
+    let old_by_id = by_id(&old_fixtures, "older");
+    let new_by_id = by_id(&new_fixtures, "newer");
+
+    // An app the older release carried and the newer one does not is on the watch
+    // and in no catalogue entry, which is exactly what `foreign` is for: name it
+    // and leave it alone. Upstream dropped HRMonitor in apps-v1.4.0, so this is a
+    // real state rather than a hypothetical one.
+    let mut foreign: Vec<&str> = result.foreign.iter().map(|i| i.folder.as_str()).collect();
+    let mut expect_foreign: Vec<&str> = old_fixtures
+        .iter()
+        .filter(|f| !new_by_id.contains_key(&app_id(f)))
+        .map(|f| f.folder.as_str())
+        .collect();
+    foreign.sort_unstable();
+    expect_foreign.sort_unstable();
+    assert_eq!(
+        foreign, expect_foreign,
+        "apps only in the older release should be reported foreign, and nothing else"
     );
 
+    // Carried over by both releases is an update; new in the newer release is an
+    // install. Neither Current nor NewerOnWatch is reachable from two different
+    // releases in the right order, so anything else means the fixtures are the
+    // same release or the wrong way round.
+    for entry in &result.entries {
+        let expected = if old_by_id.contains_key(&entry.app.app_id) {
+            Status::Update
+        } else {
+            Status::Install
+        };
+        assert_eq!(
+            entry.status, expected,
+            "unexpected status for {} ({})",
+            entry.app.folder, entry.app.app_id
+        );
+    }
+
+    // Of the apps both releases carry, which moved and which are pure re-stamps.
+    // Restricted to updates because an app appearing for the first time has no
+    // predecessor to be identical to.
     let mut restamped: Vec<&str> = result
         .entries
         .iter()
-        .filter(|e| e.identical_payload)
+        .filter(|e| e.status == Status::Update && e.identical_payload)
         .map(|e| e.app.folder.as_str())
         .collect();
     let mut changed: Vec<&str> = result
         .entries
         .iter()
-        .filter(|e| !e.identical_payload)
+        .filter(|e| e.status == Status::Update && !e.identical_payload)
         .map(|e| e.app.folder.as_str())
         .collect();
     restamped.sort_unstable();
@@ -206,18 +337,13 @@ fn separates_real_updates_from_release_tag_restamps() {
 
     // Cross-check against the bytes, computed independently of the planner, so
     // this holds for whichever two releases the fixtures point at.
-    let old_by_folder: BTreeMap<&str, &Fixture> = old_fixtures
-        .iter()
-        .map(|f| (f.folder.as_str(), f))
-        .collect();
     let mut expect_restamped = Vec::new();
     let mut expect_changed = Vec::new();
     for fixture in &new_fixtures {
-        let Some(before) = old_by_folder.get(fixture.folder.as_str()) else {
+        let Some(before) = old_by_id.get(&app_id(fixture)) else {
             continue;
         };
-        let payload = |f: &Fixture| sha256_hex(Uapp::parse(&f.bytes).unwrap().payload());
-        if payload(fixture) == payload(before) {
+        if payload_hash(fixture) == payload_hash(before) {
             expect_restamped.push(fixture.folder.as_str());
         } else {
             expect_changed.push(fixture.folder.as_str());
@@ -233,24 +359,16 @@ fn separates_real_updates_from_release_tag_restamps() {
         "fixtures produced no comparisons"
     );
 
-    // Regression pin for the pair this behaviour was designed against: six of the
-    // thirteen apps in apps-v1.3.0 are byte-identical to their 1.2.0 builds.
-    let old_version = installed[0].version.to_string();
-    let new_version = catalog.apps[0].versions[0].version.to_string();
-    if old_version == "1.2.0" && new_version == "1.3.0" {
-        assert_eq!(
-            restamped,
-            [
-                "GlanceARHR",
-                "GlanceActivity",
-                "GlanceBattery",
-                "GlanceFloors",
-                "GlanceHR",
-                "GlanceSteps"
-            ]
-        );
-        assert_eq!(changed.len(), 7);
-    }
+    pin_known_pairs(
+        &installed[0].version.to_string(),
+        &catalog.apps[0].versions[0].version.to_string(),
+        &Split {
+            restamped: &restamped,
+            changed: &changed,
+            foreign: &foreign,
+            installs: &installs(&result),
+        },
+    );
 
     // Every Glance in these releases is icon-less, which the catalogue build
     // relies on when deciding not to emit a PNG.
