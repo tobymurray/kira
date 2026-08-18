@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::kernel::Interface;
 use crate::prerelease::{self, PreRelease, Precedence};
 use crate::uapp::{AppId, Uapp, Version};
 pub use crate::uapp::{AppType, VariantOrigin};
@@ -774,10 +775,19 @@ pub fn mark_superseded(apps: &mut [App], incumbents: &BTreeSet<AppId>) {
 /// Choose one version per app and flatten to the planner's shape.
 ///
 /// `pinned` maps an app to a specific version; anything unpinned, or pinned to a
-/// version that is no longer published, uses the newest available rather than
-/// becoming unresolvable.
+/// version that is no longer published, uses the default for `firmware` rather
+/// than becoming unresolvable.
+///
+/// `firmware` is the interface version the view is presenting as — see
+/// [`crate::kernel`]. It has to be the same value the cards were rendered with:
+/// a plan row that names a different build to the card above it is worse than
+/// either choice on its own.
 #[must_use]
-pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, String>) -> Vec<Target> {
+pub fn resolve_targets(
+    catalog: &Catalog,
+    pinned: &BTreeMap<AppId, String>,
+    firmware: Interface,
+) -> Vec<Target> {
     catalog
         .apps
         .iter()
@@ -785,7 +795,7 @@ pub fn resolve_targets(catalog: &Catalog, pinned: &BTreeMap<AppId, String>) -> V
             let chosen = pinned
                 .get(&app.app_id)
                 .and_then(|label| app.find(label))
-                .unwrap_or_else(|| app.latest());
+                .unwrap_or_else(|| catalog.default_build(app, firmware));
 
             Target {
                 app_id: app.app_id,
@@ -964,6 +974,7 @@ impl std::fmt::Display for Collision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel;
 
     fn version_entry(v: &str) -> VersionEntry {
         let version: Version = v.parse().unwrap();
@@ -1123,7 +1134,7 @@ mod tests {
         a.versions[0].supersedes_sha256 = vec!["candidate-bytes".into()];
 
         let c = catalog(vec![a]);
-        let targets = resolve_targets(&c, &BTreeMap::new());
+        let targets = resolve_targets(&c, &BTreeMap::new(), kernel::newest());
         assert_eq!(targets[0].version, Version::new(1, 4, 0));
         assert_eq!(targets[0].prerelease, None);
         assert_eq!(targets[0].supersedes_sha256, ["candidate-bytes"]);
@@ -1135,7 +1146,7 @@ mod tests {
         // strength of an empty list must not be possible.
         let c = catalog(vec![app_with_candidate()]);
         let pinned = BTreeMap::from([(c.apps[0].app_id, "1.4.0-rc1".to_owned())]);
-        let targets = resolve_targets(&c, &pinned);
+        let targets = resolve_targets(&c, &pinned, kernel::newest());
         assert_eq!(
             targets[0].prerelease.as_ref().map(PreRelease::as_str),
             Some("rc1")
@@ -1192,7 +1203,7 @@ mod tests {
             version_entry("1.3.0"),
             version_entry("1.2.0"),
         ])]);
-        let targets = resolve_targets(&c, &BTreeMap::new());
+        let targets = resolve_targets(&c, &BTreeMap::new(), kernel::newest());
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].version, Version::new(1, 3, 0));
         assert!(targets[0].is_latest);
@@ -1205,7 +1216,7 @@ mod tests {
             version_entry("1.2.0"),
         ])]);
         let pinned = BTreeMap::from([(c.apps[0].app_id, "1.2.0".to_owned())]);
-        let targets = resolve_targets(&c, &pinned);
+        let targets = resolve_targets(&c, &pinned, kernel::newest());
         assert_eq!(targets[0].version, Version::new(1, 2, 0));
         assert!(!targets[0].is_latest);
         assert_eq!(targets[0].file, "Live_HR_1.2.0.uapp");
@@ -1216,7 +1227,7 @@ mod tests {
         let c = catalog(vec![app(vec![version_entry("1.3.0")])]);
         let pinned = BTreeMap::from([(c.apps[0].app_id, "0.9.0".to_owned())]);
         assert_eq!(
-            resolve_targets(&c, &pinned)[0].version,
+            resolve_targets(&c, &pinned, kernel::newest())[0].version,
             Version::new(1, 3, 0)
         );
     }
@@ -1450,7 +1461,7 @@ mod tests {
             let pinned = pin.map_or_else(BTreeMap::new, |v: Version| {
                 BTreeMap::from([(c.apps[0].app_id, v.to_string())])
             });
-            let targets = resolve_targets(&c, &pinned);
+            let targets = resolve_targets(&c, &pinned, kernel::newest());
             assert_eq!(
                 targets[0].retired.as_deref(),
                 Some("the sensor it reads was removed in firmware 2.0"),
@@ -1467,10 +1478,17 @@ mod tests {
 
         // The newest is the withdrawn one, so that is what an unpinned selection
         // lands on -- and it must still say so rather than being offered.
-        assert!(resolve_targets(&c, &BTreeMap::new())[0].retired.is_some());
+        assert!(
+            resolve_targets(&c, &BTreeMap::new(), kernel::newest())[0]
+                .retired
+                .is_some()
+        );
 
         let pinned = BTreeMap::from([(c.apps[0].app_id, "1.0.0".to_owned())]);
-        assert_eq!(resolve_targets(&c, &pinned)[0].retired, None);
+        assert_eq!(
+            resolve_targets(&c, &pinned, kernel::newest())[0].retired,
+            None
+        );
     }
 
     #[test]
@@ -1547,7 +1565,7 @@ mod tests {
         let mut entry = version_entry("1.4.0");
         entry.variant = Some(walk_alias());
         let c = catalog(vec![app(vec![entry])]);
-        let targets = resolve_targets(&c, &BTreeMap::new());
+        let targets = resolve_targets(&c, &BTreeMap::new(), kernel::newest());
         assert_eq!(
             targets[0].variant.as_ref().and_then(Variant::target),
             Some(AppId::new(0xA1F3_C92B_7E4D_8A10))

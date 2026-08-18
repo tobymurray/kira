@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use kira_core::catalog::{
     App, AppType, Catalog, Origin, Source, Variant, VersionEntry, resolve_targets,
 };
+use kira_core::kernel;
 use kira_core::plan::{self, Installed, Status};
 use kira_core::uapp::{AppId, Uapp, Version};
 use sha2::{Digest, Sha256};
@@ -377,7 +378,7 @@ fn separates_real_updates_from_release_tag_restamps() {
 
     let catalog = catalog_from(&new_fixtures, "apps-new");
     let installed = installed_from(&old_fixtures);
-    let targets = resolve_targets(&catalog, &BTreeMap::new());
+    let targets = resolve_targets(&catalog, &BTreeMap::new(), kernel::newest());
     let result = plan::build(&targets, &installed);
 
     let old_by_id = by_id(&old_fixtures, "older");

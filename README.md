@@ -447,17 +447,29 @@ issued the certificate.
   release candidate and any version Kira has no build for. Attestation is also
   still not authenticity: it says which build emitted the bytes, not that the
   source was benign, and nothing here reviews code.
-- **The kernel version cannot be checked over USB, and nothing warns you.** An
-  app's `minKernelVersion` is a BLE/DIS check in the official mobile app, and it
-  is not in the `.uapp` at all, so Kira cannot read it. The nearest thing the
-  binary carries is the LibC ABI version, which Kira records in `catalog.json` but
-  does **not** show on a card or compare against anything — matching a build to
-  your firmware is entirely up to you. The LibC exports are absolute flash
-  addresses, so a mismatch is not a graceful refusal. It stays harmless while
-  0.0.3 is the only ABI in the catalogue, which it still is: apps-v1.4.0 stamps
-  `Walk` `0.0.0`, but `Walk` is a [variant alias](#variant-aliases) and carries no
-  code, so it is linked against nothing. That zero is structural rather than a
-  second ABI.
+- **The kernel version cannot be checked over USB, so the page asks instead.** An
+  app's `minKernelVersion` is a BLE/DIS check in the official mobile app and is not
+  in the `.uapp` at all, so Kira can read it neither from a binary nor from the
+  drive. What it *can* do is work out which SDK release a build was compiled
+  against — the catalogue records that for every build — and compare it against the
+  firmware you say you are on. An app refuses to launch on a kernel older than the
+  interface version it carries, and that went 2 → 3 between apps-v1.3.0 and
+  apps-v1.4.0, so on a 1.3 watch the newest build of most apps stops before drawing
+  anything. The catalogue presents as the newest kernel; the control in the top
+  right is how an older watch corrects it, and doing so selects the newest build of
+  each app that will actually start. It is your word and unverifiable, so it moves
+  selections and annotates cards and **never** blocks a download or an install.
+  [`kernel.rs`](crates/kira-core/src/kernel.rs) holds the release-to-interface
+  table, which deliberately answers nothing for a release newer than the one it was
+  last checked against.
+- **The LibC ABI is recorded and still compared against nothing.** The nearest
+  thing a binary itself carries to a firmware requirement is its LibC ABI version,
+  which Kira publishes in `catalog.json` but does **not** show on a card or check.
+  The LibC exports are absolute flash addresses, so a mismatch is not a graceful
+  refusal. It stays harmless while 0.0.3 is the only ABI in the catalogue, which it
+  still is: apps-v1.4.0 stamps `Walk` `0.0.0`, but `Walk` is a
+  [variant alias](#variant-aliases) and carries no code, so it is linked against
+  nothing. That zero is structural rather than a second ABI.
 - **A reboot is required** after installing, and it is not automatable.
 - **Release notes are upstream's, not per-app.** A tag's notes cover the whole
   release, so they may describe apps other than the one you are looking at. The

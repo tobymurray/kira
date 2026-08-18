@@ -69,6 +69,22 @@
             Unofficial. Not affiliated with, endorsed or sponsored by UNA Watch Ltd.
           </p>
         </div>
+
+        <!-- The catalogue presents as current firmware, and this is how a watch
+             on an older kernel says so. It sits in the topbar rather than beside
+             the watch panel because it applies whether or not anything is
+             connected -- and because nothing over USB reports the kernel, so it
+             can never be filled in from the device. Hidden until the module has
+             rendered its options: a select with nothing in it is worse than no
+             select at all. -->
+        <div id="firmware" class="firmware" hidden>
+          <p id="firmware-state" class="firmware-state"></p>
+          <label class="firmware-row">
+            <span>Firmware</span>
+            <select id="firmware-select" aria-describedby="firmware-help"></select>
+          </label>
+          <p id="firmware-help" class="firmware-help"></p>
+        </div>
       </div>
     </header>
 
