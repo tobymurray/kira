@@ -71,6 +71,17 @@ const DATA_BASE = new URL('data', location.href).href.replace(/\/$/, '');
 /** Bytes of the fixed header, all a scan needs to read per app. */
 const HEADER_LEN = 48;
 
+/**
+ * Where a firmware correction is kept between visits.
+ *
+ * The catalogue presents as current firmware, so this only ever holds a
+ * correction -- and a correction describes the owner's hardware rather than a
+ * browsing choice, which is why it survives a reload at all. Deliberately not in
+ * the URL: a query parameter would put one person's watch in another person's
+ * link.
+ */
+const FIRMWARE_KEY = 'kira.firmware';
+
 /** Not an app: the SDK's own docs note SharedData lives alongside app folders. */
 const NON_APP_DIRS = new Set(['sharedata', 'shareddata', 'system', '.trashes', '.spotlight-v100']);
 
@@ -109,6 +120,14 @@ function ejectHint() {
 const state = {
   /** Rust-side catalogue and version pins. */
   store: null,
+  /**
+   * The firmware the view is presenting as, as the module describes it.
+   *
+   * Cached from `firmwareOptions()` rather than asked per card: every card that
+   * has something to say about the kernel needs the same label, and the answer
+   * only changes when the control does.
+   */
+  firmware: null,
   /** 'write' | 'read' | null */
   mode: null,
   /** FileSystemDirectoryHandle, write mode only. */
@@ -259,12 +278,122 @@ function startCatalog(catalog) {
   // The store validates the schema and throws if it is not the expected one.
   state.store = new Store(catalog);
 
+  // A correction from a previous visit, applied before anything renders so the
+  // catalogue never shows one selection and then replaces it.
+  const stored = storedFirmware(state.store.firmwareOptions());
+  if (stored !== null) state.store.setFirmware(stored);
+  renderFirmware();
+
   const when = new Date(state.store.generated).toLocaleDateString();
   el('catalogue-meta').textContent =
     `${state.store.appCount} apps · ${state.store.versionCount} versions · ` +
     `${state.store.releaseCount} releases · built ${when}`;
   renderReleaseNotes();
 }
+
+// ------------------------------------------------------------------- firmware
+
+/**
+ * The correction stored from a previous visit, if it still names a real choice.
+ *
+ * Read defensively: this is a string somebody can edit, and a value that no
+ * longer names a firmware Kira knows has to read as no answer rather than as an
+ * error. The default is never stored, so absence is the ordinary case.
+ */
+function storedFirmware(options) {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(FIRMWARE_KEY);
+  } catch {
+    // Private modes and disabled storage both throw here. Not knowing is fine.
+    return null;
+  }
+  if (raw === null) return null;
+  const wanted = Number(raw);
+  if (!Number.isInteger(wanted)) return null;
+  return options.some((option) => option.interface === wanted) ? wanted : null;
+}
+
+/** Keep a correction; forget one that is back to what the page assumes anyway. */
+function rememberFirmware(kernel, isDefault) {
+  try {
+    if (isDefault) localStorage.removeItem(FIRMWARE_KEY);
+    else localStorage.setItem(FIRMWARE_KEY, String(kernel));
+  } catch {
+    // Nothing to do about it, and nothing broken: the choice still applies to
+    // this page view, it just will not survive a reload.
+  }
+}
+
+/**
+ * The topbar control: what the catalogue is presenting as, and how to correct it.
+ *
+ * The options, their labels and which one is the default all come from the
+ * module. Working any of that out here would be the second copy of a rule that
+ * lives in `kira_core::kernel`, and the copies are what drift.
+ */
+function renderFirmware() {
+  const options = state.store.firmwareOptions();
+  const current = state.store.firmware;
+  const chosen = options.find((option) => option.interface === current) ?? null;
+  state.firmware = chosen;
+
+  const select = el('firmware-select');
+  select.replaceChildren();
+  for (const option of options) {
+    const node = document.createElement('option');
+    node.value = String(option.interface);
+    // textContent: these labels are built from the kernel table, but the rule is
+    // the same everywhere -- nothing on this page becomes markup.
+    node.textContent = option.label;
+    node.selected = option.interface === current;
+    select.appendChild(node);
+  }
+
+  const isDefault = Boolean(chosen?.isDefault);
+  el('firmware').classList.toggle('corrected', !isDefault);
+
+  if (isDefault) {
+    el('firmware-state').textContent = `Showing apps for firmware ${chosen.label}`;
+    el('firmware-help').textContent =
+      'On an older watch? Say so here — Settings → About shows the version.';
+  } else {
+    // The count is the point of this line. A catalogue that quietly stopped
+    // offering the newest build of a dozen apps would read as a broken one; one
+    // that says how many it moved reads as a filter, which is what it is.
+    const narrowed = state.store.firmwareNarrowed;
+    const apps = narrowed === 1 ? '1 app' : `${narrowed} apps`;
+    el('firmware-state').textContent =
+      `Firmware ${chosen?.label ?? current} — ${apps} limited to older builds`;
+    el('firmware-help').textContent =
+      'Newer builds need a newer kernel. UNA publish the .ota with each release.';
+  }
+  el('firmware').hidden = false;
+}
+
+/**
+ * Present the catalogue as a different firmware, and re-plan.
+ *
+ * Same shape as pinning a version: the store owns the choice, and everything
+ * derived from it is re-rendered rather than patched.
+ */
+async function chooseFirmware(kernel) {
+  try {
+    state.store.setFirmware(kernel);
+  } catch (err) {
+    log(err.message, 'bad');
+    return;
+  }
+  renderFirmware();
+  rememberFirmware(kernel, Boolean(state.firmware?.isDefault));
+  if (state.mode) await refreshInventory();
+  else {
+    state.plan = null;
+    renderCatalogue();
+  }
+}
+
+// ------------------------------------------------------------- release notes
 
 /** A list of parsed change lines, each linked to its pull request. */
 function renderChanges(changes) {
@@ -719,6 +848,47 @@ function renderCard(app, entry) {
     body.appendChild(note);
   }
 
+  // Whether the selected build will start on the firmware the page is presenting
+  // as. Above the pre-release note deliberately: "it will not open" outranks "it
+  // is a candidate", and somebody who reads one line should read this one.
+  //
+  // Both branches are on the visible line rather than left to a tooltip, because
+  // of how this fails. The app installs, verifies against flash, and then refuses
+  // to launch -- it stops before drawing anything, so what the owner sees is an
+  // app that will not open and cannot be exited. That reads as a broken watch
+  // rather than a wrong choice.
+  const firmwareLabel = state.firmware?.label ?? 'this firmware';
+  if (app.needsNewerKernel.includes(app.selected)) {
+    const note = document.createElement('div');
+    note.className = 'meta needs-kernel';
+    note.textContent = `will not start on firmware ${firmwareLabel}`;
+    note.title =
+      `This build was compiled against a newer SDK than the firmware you chose, and an ` +
+      `app refuses to launch on a kernel older than the interface version it carries. ` +
+      `It stops before drawing anything, so the app will not open and cannot be exited.\n\n` +
+      `Flashing the kernel that matches it fixes this: UNA publish the .ota alongside ` +
+      `each release. An older build of this app, where there is one, is already selected ` +
+      `for you instead.\n\n` +
+      `Kira cannot check any of this against your watch — the kernel version is not in a ` +
+      `.uapp and the watch reports its firmware only over Bluetooth. It is going on what ` +
+      `you told it.`;
+    body.appendChild(note);
+  } else if (app.kernelUnknown.includes(app.selected)) {
+    // The hedge, kept for exactly the case that earns it: a build from a release
+    // newer than the kernel table has been checked against. Guessing that the
+    // release did not move the interface is the direction that would offer
+    // somebody a build their watch refuses.
+    const note = document.createElement('div');
+    note.className = 'meta prerelease';
+    note.textContent = `built against ${selected.tag} · may not start`;
+    note.title =
+      `Kira's kernel table has not been checked against ${selected.tag}, which is newer ` +
+      `than any release it knows about. A build from it may need a newer kernel than ` +
+      `yours, and nothing in a .uapp says which kernel it needs, so this cannot be ` +
+      `resolved from the binary.`;
+    body.appendChild(note);
+  }
+
   // A candidate, published so an app that ships in one is reachable before the
   // release lands — Stopwatch and Timer first appeared in apps-v1.4.0-rc1. Stated
   // on the card and not only in the version picker, which is absent entirely when
@@ -726,20 +896,12 @@ function renderCard(app, entry) {
   if (selected.prerelease) {
     const note = document.createElement('div');
     note.className = 'meta prerelease';
-    // "may not start" is on the visible line, not left to the tooltip, because of
-    // how it fails. An app refuses to launch when the kernel is older than the
-    // interface version it was compiled against, and the interface went 2 to 3
-    // between apps-v1.3.0 and apps-v1.4.0 — so a 1.4 candidate on a watch still on
-    // 2 does nothing, and what the owner sees is an app that will not open and
-    // cannot be exited. That reads as a broken watch rather than a wrong choice,
-    // which is the sort of thing somebody deserves to be told before installing
-    // rather than after.
-    //
-    // "may", because Kira genuinely cannot tell. The requirement is compiled into
-    // the app and is not in the .uapp header, and the watch only reports its
-    // firmware over BLE, which this page has no access to. See
-    // UNAWatch/una-sdk#262.
-    note.textContent = `pre-release · ${selected.tag} · may not start on an older watch`;
+    // Says what this build *is*, and nothing about whether it will start. That
+    // used to be tacked on here as "may not start on an older watch", because the
+    // page had no idea what the watch was; the note above answers it now, from
+    // the release each build was compiled against and the firmware the view is
+    // presenting as.
+    note.textContent = `pre-release · ${selected.tag}`;
     // The only place a bare version is deliberate: both of these name the release
     // this candidate is *for*, which is the thing that does not exist yet.
     // versionLabel here would say "replaced by 1.4.0-rc1 proper".
@@ -795,6 +957,9 @@ function renderCard(app, entry) {
       // From the store, not from the head of the list: a candidate outranks an
       // earlier release but is not what gets offered. See `App::latest`.
       if (label === app.latestLabel) tags.push('latest');
+      // Before the rest: which builds will start is the first thing this list is
+      // being read for on a watch that cannot run the newest one.
+      if (app.needsNewerKernel.includes(label)) tags.push('needs newer firmware');
       // Upstream's own candidate, published so an app that ships in one is
       // reachable before the release lands. Said on every entry, not just the
       // newest, because the number alone does not show it.
@@ -1650,6 +1815,17 @@ async function verifyFlash() {
       );
     }
     if (bad > 0) log(`${bad} file(s) failed — re-install, eject, reconnect, verify.`, 'bad');
+    // The one failure a byte-for-byte check cannot see. A build compiled against
+    // a newer SDK than the watch's kernel installs and verifies perfectly, then
+    // refuses to launch. Said here because this is the moment somebody is looking
+    // for an explanation, and only while the page is presenting as current
+    // firmware — that is the assumption which would be wrong.
+    if (checked > 0 && state.firmware?.isDefault) {
+      log(
+        'If an app verified here but will not open on the watch, its build may need a newer ' +
+          'kernel than yours — say which firmware you are on, top right.',
+      );
+    }
   } finally {
     setBusy(false);
   }
@@ -2166,6 +2342,10 @@ function disconnect() {
 // ------------------------------------------------------------------------ init
 
 function wireUp() {
+  el('firmware-select').addEventListener('change', (event) => {
+    void chooseFirmware(Number(event.target.value));
+  });
+
   if (CAN_WRITE) {
     el('pick').hidden = false;
     el('pick').addEventListener('click', () => {

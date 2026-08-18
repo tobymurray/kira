@@ -7,6 +7,7 @@
 //! - [`catalog`] is the published schema, plus version selection.
 //! - [`config`] assembles the settings file an app reads from its own folder.
 //! - [`fat`] names the watch's volume, or a desktop, will not take literally.
+//! - [`kernel`] says which kernel a build needs, from the SDK it was built against.
 //! - [`notes`] sorts upstream's release prose by what can reach a watch.
 //! - [`prerelease`] ranks builds that stamp the same version, e.g. `1.4.0-rc1`.
 //! - [`plan`] diffs a selection against a watch and generates installers.
@@ -17,6 +18,7 @@ pub mod catalog;
 pub mod config;
 pub mod fat;
 pub mod icon;
+pub mod kernel;
 pub mod notes;
 pub mod plan;
 pub mod prerelease;

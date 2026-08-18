@@ -139,6 +139,80 @@ ul.changes li,
   display: flex;
   align-items: flex-start;
   gap: 14px;
+  /* Wraps only once the firmware control cannot sit beside the mark and the
+     title. At every width where all three fit, this changes nothing. */
+  flex-wrap: wrap;
+}
+
+/* Which kernel the catalogue is presenting as, and the control that corrects it.
+   Loud enough to find without being the loudest thing here: .primary (Connect
+   watch) is the page's main action and this must not compete with it, so it is
+   an outlined accent block rather than a filled one. */
+.firmware {
+  margin-left: auto;
+  max-width: 22rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.firmware-state {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Corrected off the default: a filtered catalogue, which is the site's existing
+   "read this" register rather than an error. */
+.firmware.corrected {
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+}
+
+.firmware.corrected .firmware-state,
+.firmware.corrected .firmware-help {
+  color: var(--warn-ink);
+}
+
+.firmware-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.firmware.corrected .firmware-row {
+  color: var(--warn-ink);
+}
+
+.firmware-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.firmware-help {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+/* A build that will not start on the firmware being presented as. Not the
+   warning treatment the other notes share: those say "offered, with a caveat",
+   and this one says the app stops before it draws anything. */
+.meta.needs-kernel {
+  font-size: 11px;
+  color: var(--bad);
+  border: 1px solid currentcolor;
+  border-radius: 6px;
+  padding: 1px 6px;
+  display: inline-block;
+  margin: 0 0 6px;
 }
 
 /* The mark carries its own dark background, so it needs rounding to sit well on

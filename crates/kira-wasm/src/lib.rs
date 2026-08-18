@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use kira_core::catalog::{self, Catalog, Release, Target};
 use kira_core::config;
+use kira_core::kernel::{self, Interface};
 use kira_core::notes;
 use kira_core::plan::{self, Installed, Plan, ScriptConfig};
 use kira_core::uapp::{AppId, AppType, CRC_LEN, HEADER_LEN, Header, Uapp, Version};
@@ -198,6 +199,19 @@ struct AppView<'a> {
     config: Option<&'a config::Spec>,
     /// Why the app is no longer offered, if it is not.
     retired: Option<&'a str>,
+    /// Labels of this app's builds that will not start on the firmware the view
+    /// is presenting as.
+    ///
+    /// A list rather than a flag per version: the picker asks about each option it
+    /// renders, and the card asks about the one selected, so one lookup serves
+    /// both without a parallel copy of every version.
+    needs_newer_kernel: Vec<String>,
+    /// Labels whose kernel requirement cannot be stated, because they were built
+    /// against an SDK release newer than the one Kira's table was checked
+    /// against. Separate from `needs_newer_kernel`, because "will not start" and
+    /// "cannot say" are different claims and the second one is a hedge the card
+    /// has to keep making.
+    kernel_unknown: Vec<String>,
 }
 
 /// A release, with its prose sorted and its effect on the apps worked out.
@@ -356,6 +370,9 @@ pub struct Store {
     catalog: Catalog,
     pinned: BTreeMap<AppId, String>,
     ambiguous: Vec<String>,
+    /// The kernel the view presents as, which the page may correct. Never read
+    /// from the device: nothing over USB reports it. See [`kira_core::kernel`].
+    firmware: Interface,
 }
 
 #[wasm_bindgen]
@@ -383,6 +400,11 @@ impl Store {
             catalog,
             pinned: BTreeMap::new(),
             ambiguous,
+            // Current firmware until told otherwise. Presenting as the newest
+            // kernel offers exactly what the catalogue offered before this
+            // existed, so the default is no behaviour change -- it is the removal
+            // of a hedge on every card that a question nobody answered left there.
+            firmware: kernel::newest(),
         })
     }
 
@@ -431,7 +453,7 @@ impl Store {
                     .pinned
                     .get(&app.app_id)
                     .and_then(|label| app.find(label))
-                    .unwrap_or_else(|| app.latest());
+                    .unwrap_or_else(|| self.catalog.default_build(app, self.firmware));
                 AppView {
                     app_id: app.app_id,
                     name: &app.name,
@@ -450,6 +472,18 @@ impl Store {
                     publisher: app.publisher.as_ref(),
                     config: app.config.as_ref(),
                     retired: app.retired.as_deref(),
+                    needs_newer_kernel: app
+                        .versions
+                        .iter()
+                        .filter(|entry| !self.catalog.runs_on(entry, self.firmware))
+                        .map(catalog::VersionEntry::label)
+                        .collect(),
+                    kernel_unknown: app
+                        .versions
+                        .iter()
+                        .filter(|entry| self.catalog.interface_required(entry).is_none())
+                        .map(catalog::VersionEntry::label)
+                        .collect(),
                 }
             })
             .collect();
@@ -498,9 +532,12 @@ impl Store {
                         app.name
                     )));
                 }
-                // Following the newest is the absence of a pin, so a stale pin
-                // cannot survive a release that makes it the latest.
-                if label == app.latest().label() {
+                // Following the default is the absence of a pin, so a stale pin
+                // cannot survive a release that makes it the default -- nor a
+                // firmware correction that does. Against the default rather than
+                // `latest`: on an older kernel those are different builds, and
+                // pinning what was already selected would freeze it.
+                if label == self.catalog.default_build(app, self.firmware).label() {
                     self.pinned.remove(&id);
                 } else {
                     self.pinned.insert(id, label);
@@ -508,6 +545,52 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// The kernel the view is presenting as.
+    #[wasm_bindgen(getter, js_name = firmware)]
+    #[must_use]
+    pub fn firmware(&self) -> Interface {
+        self.firmware
+    }
+
+    /// Present the catalogue as a different kernel.
+    ///
+    /// # Errors
+    /// If the interface version is not one this build knows, rather than silently
+    /// presenting as something no watch is.
+    #[wasm_bindgen(js_name = setFirmware)]
+    pub fn set_firmware(&mut self, interface: Interface) -> Result<(), JsError> {
+        if !kernel::firmwares()
+            .iter()
+            .any(|choice| choice.interface == interface)
+        {
+            return Err(JsError::new(&format!(
+                "no firmware provides kernel interface {interface}"
+            )));
+        }
+        self.firmware = interface;
+        Ok(())
+    }
+
+    /// The firmware choices to offer, newest first, with the default marked.
+    ///
+    /// From here rather than assembled in the page: which kernels exist, what
+    /// they are called and which one is assumed are all one rule, and the page
+    /// holding a second copy of it is how the two drift apart.
+    ///
+    /// # Errors
+    /// If the values cannot be handed to JavaScript.
+    #[wasm_bindgen(js_name = firmwareOptions)]
+    pub fn firmware_options(&self) -> Result<JsValue, JsError> {
+        to_js(&kernel::firmwares())
+    }
+
+    /// How many apps the current firmware moves off their newest build.
+    #[wasm_bindgen(getter, js_name = firmwareNarrowed)]
+    #[must_use]
+    pub fn firmware_narrowed(&self) -> usize {
+        self.catalog.narrowed_by(self.firmware)
     }
 
     /// The selected version of every app, flattened.
@@ -665,6 +748,6 @@ impl Store {
     }
 
     fn resolve(&self) -> Vec<Target> {
-        catalog::resolve_targets(&self.catalog, &self.pinned)
+        catalog::resolve_targets(&self.catalog, &self.pinned, self.firmware)
     }
 }
