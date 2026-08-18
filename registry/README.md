@@ -5,20 +5,20 @@ not a binary: a repository, a commit, and the SDK revision to build against. Kir
 then compiles it itself, in the same digest-pinned toolchain container it uses for
 every other app in the catalogue.
 
-That is not bureaucracy — it is the only thing that makes the catalogue checkable.
-The watch has no code signing, and it silently ignores a `.uapp` whose CRC fails,
-so "trust me, this binary is fine" is not something anyone can verify. A binary
-built from a named commit by a published recipe is.
+That is the only thing that makes the catalogue checkable. The watch has no code
+signing, and it silently ignores a `.uapp` whose CRC fails, so "trust me, this
+binary is fine" is not something anyone can verify. A binary built from a named
+commit by a published recipe is.
 
 ## What you need first
 
 - **A public repository** with your app's source, under an open licence.
-- **An app that builds against the SDK** — it needs the usual layout, a
+- **An app that builds against the SDK.** It needs the usual layout, a
   `Software/<name>-CMake/CMakeLists.txt` declaring `APP_ID`, `APP_TYPE` and
   `APP_NAME`. If `kira build-app` can build it, Kira can carry it.
 - **An `AppID` nobody else uses.** It is 64 bits and it is the app's whole
-  identity on the watch — the folder name and the display name are not. Generate
-  one at random rather than picking something memorable.
+  identity on the watch; the folder name and the display name are not. Generate
+  one at random instead of picking something memorable.
 
 ## The manifest
 
@@ -56,21 +56,21 @@ cargo run -p kira-cli -- registry validate --catalog catalog.json
 cargo run -p kira-cli -- registry plan --toolchain unpinned
 ```
 
-`--catalog` is optional. Without it the manifest is still checked on its own
-terms — the charset rules, the licence, the commit shas, the settings
-declaration — but not against the identities already published, which is the
-check most likely to send a pull request back. CI always runs it with one.
+`--catalog` is optional. Without it the manifest is still checked on its own terms
+(the charset rules, the licence, the commit shas, the settings declaration) but not
+against the identities already published, which is the check most likely to send a
+pull request back. CI always runs it with one.
 
 ## If your app reads a settings file
 
 A watch with four buttons and no keyboard cannot be told an athlete id, a transit
 pass or an account token, and the SDK offers no way to send one in. If your app
-reads such a value from a file in its own folder, say so and the page will offer
-a form that writes it over USB:
+reads such a value from a file in its own folder, say so and the page will offer a
+form that writes it over USB:
 
 ```toml
 [config]
-file   = "input.json"     # written into Apps/<folder>/ — a plain name, never a path
+file   = "input.json"     # written into Apps/<folder>/; a plain name, never a path
 schema = 1                # the document's top-level "schema", for apps that gate on it
 
 [[config.fields]]
@@ -84,14 +84,14 @@ required  = true          # optional: the app does nothing useful without it
 `required` changes how the page presents a field, not what gets written. A
 required field is shown above the download instead of in a collapsed panel
 underneath it, and once a watch is connected the card says when the value is not
-on it yet — because an install that worked and a value nobody wrote look
-identical otherwise, which is how somebody ends up holding an app that does
-nothing and no way to tell why. Leave it off when the app is fine either way:
-`Barcode` scans as nothing without an id, but `Squash` records a perfectly good
-activity with its IMU flag untouched, and nagging about that would be wrong.
+on it yet. Otherwise an install that worked and a value nobody wrote look
+identical, which is how somebody ends up holding an app that does nothing with no
+way to tell why. Leave it off when the app is fine either way: `Barcode` scans as
+nothing without an id, but `Squash` records a perfectly good activity with its IMU
+flag untouched, and nagging about that would be wrong.
 
 It is not enforced. Like everything else in this block it is your word and cannot
-be checked against a binary, so nothing refuses an install over it — somebody may
+be checked against a binary, so nothing refuses an install over it; somebody may
 want the `.uapp` now and the value later, or may write the file by hand.
 
 which produces
@@ -112,32 +112,31 @@ change. Add a field and the form grows a row.
 Worth knowing before you rely on it:
 
 - **This is the one thing on a card that cannot come from your binary.** Nothing
-  in a `.uapp` says what it reads, so it is your word for it — and unlike
-  `notes`, which is only displayed, this is *acted on*: it names a file written
-  to somebody's watch. Expect the checks to be fussier than the shape needs, and
-  expect them to run on every catalogue build rather than only on your pull
-  request.
-- **Values are restricted to printable ASCII without `\` or `"`.** Not JSON's
-  rule — a reader built on coreJSON gets the raw slice with escapes undecoded, so
-  an escaped character would reach your app as the literal characters of its
-  escape sequence. A value that cannot survive the trip is refused in the form,
-  where there is somewhere to explain why.
+  in a `.uapp` says what it reads, so it is your word for it. Unlike `notes`,
+  which is only displayed, this is *acted on*: it names a file written to
+  somebody's watch. Expect the checks to be fussier than the shape needs, and
+  expect them to run on every catalogue build, not only on your pull request.
+- **Values are restricted to printable ASCII without `\` or `"`.** That is not
+  JSON's rule. A reader built on coreJSON gets the raw slice with escapes
+  undecoded, so an escaped character would reach your app as the literal
+  characters of its escape sequence. A value that cannot survive the trip is
+  refused in the form, where there is somewhere to explain why.
 - **Over-long values are refused, never trimmed.** A shortened id is a wrong id.
 - **Validate again on the watch.** The form is a convenience; the file is a text
   file on a mass-storage volume that anyone can edit with Notepad. Bound the read
   before you allocate, gate on the schema number, and fall back to a default
-  rather than failing to start — `SDK::Variant::Config` in the SDK is the
+  rather than failing to start. `SDK::Variant::Config` in the SDK is the
   reference for all three.
 - **Chromium desktop only**, like installing. The generated scripts carry no
-  settings, deliberately: see the README.
+  settings by design: see the README.
 
 ## One repository or several?
 
 **One repository holding all your apps is the better default.** `subdir` exists for
-exactly this: one manifest per app, each pointing at the same `source` with a
-different path. Versions stay independent — a manifest is only rebuilt when its own
-entries change — so a monorepo does not force your apps into lockstep, and shared
-helpers are just a directory rather than a submodule.
+this: one manifest per app, each pointing at the same `source` with a different
+path. Versions stay independent, since a manifest is only rebuilt when its own
+entries change, so a monorepo does not force your apps into lockstep, and shared
+helpers are just a directory instead of a submodule.
 
 ```
 una-apps/                      registry/tide-clock.toml  → subdir = "tide-clock"
@@ -156,7 +155,7 @@ Reach for separate repositories when an app has a different licence, a different
 set of maintainers, or an audience that should not have to clone the rest.
 
 If you later rearrange the repository, do not edit `subdir` on versions already
-published — the path is part of the recipe, so that would change what those
+published: the path is part of the recipe, so that would change what those
 versions claim to be built from. Set `subdir` on the new version instead, and pin
 the old ones to where they actually lived.
 
@@ -186,16 +185,16 @@ again, its binaries go to the content-addressed store, and the catalogue picks
 them up from there.
 
 Every rule in that table is checked again on **each** catalogue build, not only
-when your pull request was reviewed. That is not distrust — a manifest is only
-ever checked against the catalogue as it stood at the time, and upstream can ship
-a colliding `AppID` or folder in any later release. A collision that appears
-afterwards stops the whole catalogue build rather than reaching a watch.
+when your pull request was reviewed. A manifest is only ever checked against the
+catalogue as it stood at the time, and upstream can ship a colliding `AppID` or
+folder in any later release. A collision that appears afterwards stops the whole
+catalogue build instead of reaching a watch.
 
 The three rules about what a *published* version may no longer change are checked
 twice, in two different ways, because they are the ones a merge can slip past. Your
 pull request is compared against the commit it branched from, which catches the
 ordinary edit. The catalogue build then compares every manifest against the
-catalogue it is currently serving — the `builtFrom` recorded on each published
+catalogue it is currently serving: the `builtFrom` recorded on each published
 version, which is the recipe the binary on somebody's watch actually came from.
 The second check needs no git history, so it holds however a manifest reached
 `main`: a direct push, or a branch whose own review compared it against a base that
@@ -205,22 +204,22 @@ nothing is published until they are reconciled.
 ## Things worth knowing
 
 - **Kira does not review your code**, and says so. What the catalogue offers is
-  provenance and integrity — that a binary was built from a named commit by a
+  provenance and integrity: that a binary was built from a named commit by a
   published recipe, and that the bytes on your watch match what was published. It
   cannot tell anyone whether the app is any good or safe. See
   [SECURITY.md](../SECURITY.md).
 - **Your app is listed with UNA's**, in the same grid for its type, in the same
   order, with no badge marking it out. Kira has no way to judge whether an app is
   any good, so a layout implying a ranking would be claiming something it does not
-  know. What the card does say is where the binary came from — *built by Kira from
-  `<your repo>` at `<commit>`* against *the vendor's own build* — which is
-  information, not a verdict.
+  know. What the card does say is where the binary came from: *built by Kira from
+  `<your repo>` at `<commit>`* against *the vendor's own build*, which is
+  information and not a verdict.
 - **Updating** means a new `[[versions]]` entry with a new commit. Old versions
   stay: every published version of every app remains downloadable.
 - **`notes` is how a version says what changed**, in 4 to 500 characters, shown on
   the card. Nothing else can: the release notes panel carries the UNA SDK's own
   release bodies, and none of them mention your app. It is the one line on a card
-  that nobody can check — it sits below the byte-derived history, which says
+  that nobody can check, so it sits below the byte-derived history, which says
   whether the code actually moved, and above the pinned commit, which is the
   account of record. Alone among a published version's fields it stays editable,
   because it is not part of the recipe: correcting a typo changes no artifact.
@@ -241,7 +240,7 @@ nothing is published until they are reconciled.
   recognised and told why, which is more use than being reported as something
   unknown. The reason is required: a bare flag tells that person nothing.
   Deleting a manifest outright is reserved for cases where the binaries must
-  genuinely stop being served — see
+  genuinely stop being served; see
   [Getting an app removed](../SECURITY.md#getting-an-app-removed) for what those
   are, how to ask, and what removal can and cannot do.
 - **Versions are yours to number.** Unlike UNA's apps, which are all stamped with
@@ -249,5 +248,5 @@ nothing is published until they are reconciled.
   intend it to mean.
 
 Questions before you start are welcome in
-[Discussions](https://github.com/tobymurray/kira/discussions/new?category=q-a) —
-better than finding out in review that the app cannot be built.
+[Discussions](https://github.com/tobymurray/kira/discussions/new?category=q-a),
+and beat finding out in review that the app cannot be built.

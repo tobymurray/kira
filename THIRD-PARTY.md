@@ -4,7 +4,7 @@
 
 Most of the binaries the site serves are ones **Kira compiled itself** from the
 UNA Watch SDK's source, in its own pinned toolchain container. They are *not*
-UNA Watch Ltd's binaries and are not byte-identical to them — Kira's build of the
+UNA Watch Ltd's binaries and are not byte-identical to them: Kira's build of the
 same source currently differs from the vendor's. Every catalogue entry records
 which is being served (`origin`) and whether the two match (`matchesUpstream`).
 
@@ -18,7 +18,7 @@ binary.
 Source project: <https://github.com/UNAWatch/una-sdk>
 
 The SDK's source, the binaries compiled from it, and the releases republished
-unmodified are all covered by the SDK's MIT licence — Kira's builds being
+unmodified are all covered by the SDK's MIT licence, Kira's builds being
 derivative works of that source:
 
 ```
@@ -56,14 +56,14 @@ publisher on its catalogue card. See [registry/README.md](registry/README.md).
 “UNA”, “UNA Watch” and the UNA logo are trademarks of UNA Watch Ltd. Kira is
 not affiliated with, endorsed by or sponsored by UNA Watch Ltd.
 
-Kira uses those marks only to state compatibility — a nominative use the SDK's
-own [trademark notice](https://github.com/UNAWatch/una-sdk/blob/main/TRADEMARK.md)
+Kira uses those marks only to state compatibility, a nominative use the SDK's own
+[trademark notice](https://github.com/UNAWatch/una-sdk/blob/main/TRADEMARK.md)
 permits. Kira does not use the UNA name or logo as its own branding, and the UNA
 logo is not redistributed. App icons shown in the catalogue are extracted from
 each app's own binary and displayed alongside that app.
 
 ## Kira's own code
 
-Everything under `crates/` and `site/` is MIT licensed — see
+Everything under `crates/` and `site/` is MIT licensed; see
 [LICENSE](LICENSE). It has no runtime dependencies: the `.uapp` parser, PNG
 encoder and CRC-32 implementation are all first-party.

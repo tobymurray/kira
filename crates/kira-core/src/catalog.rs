@@ -458,8 +458,8 @@ impl VersionEntry {
     /// A variant alias gets a reason of its own, because "Kira has no build for
     /// this version" describes the wrong thing. A variant is not compiled at all:
     /// upstream packs it from a manifest, an icon pair and a config, and it has
-    /// no `*-CMake` project for the build matrix to find — deliberately, per the
-    /// SDK's own `Examples/Apps/Variants/README.md`. Kira has no packer, so there
+    /// no `*-CMake` project for the build matrix to find, per the SDK's own
+    /// `Examples/Apps/Variants/README.md`. Kira has no packer, so there
     /// is nothing here that was tried and failed. Using one sentence for both
     /// would make a thing that cannot be built this way read as one that broke.
     #[must_use]
@@ -467,8 +467,8 @@ impl VersionEntry {
         match self.origin {
             Origin::Kira => None,
             Origin::Upstream if self.variant.is_some() => Some(
-                "the vendor's own build — a variant is packed from a manifest rather \
-                 than compiled, so there is no source for Kira to build"
+                "the vendor's own build: a variant is packed from a manifest, not \
+                 compiled, so there is no source for Kira to build"
                     .to_owned(),
             ),
             Origin::Upstream => Some("the vendor's own build".to_owned()),

@@ -1,7 +1,7 @@
 # Kira
 
 **An app store for UNA Watch.** Browse apps, see what's on your watch, and
-install or update over the USB cable — from a static web page, with no backend.
+install or update over the USB cable, from a static web page with no backend.
 Every published version of every app is downloadable, with release notes, and
 each version is marked according to whether the app's code actually changed.
 Upstream's [release candidates](#release-candidates) are carried too, so an app
@@ -15,7 +15,7 @@ that ships in one is reachable before the release lands.
 bugs as [issues](https://github.com/tobymurray/kira/issues/new/choose), and report
 security problems [privately](https://github.com/tobymurray/kira/security/advisories/new).
 Anything about the watch or an app's own behaviour belongs with
-[UNA Watch](https://github.com/UNAWatch/una-sdk/issues) instead. See
+[UNA Watch](https://github.com/UNAWatch/una-sdk/issues). See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## How it works
@@ -26,12 +26,12 @@ metadata out of each `.uapp` binary, and publishes a catalogue plus the binaries
 to GitHub Pages. The page then talks to the watch directly as a USB mass-storage
 volume.
 
-Kira builds the binaries it ships rather than trusting upstream's: a second
+Kira builds the binaries it ships instead of trusting upstream's: a second
 workflow compiles each app from its tagged source in a digest-pinned ARM
 toolchain container and republishes the result, recording what it was built from.
 A rebuild that disagrees with upstream about *which app or which version it is*,
 or that fails its own CRC, is refused and upstream's artifact used instead. A
-rebuild that merely differs byte-for-byte is still what gets served — that is the
+rebuild that merely differs byte-for-byte is still what gets served. That is the
 expected state until the SDK carries its path-independence fix, and it is
 currently true of every SDK app in the catalogue. The card says which binary is
 being served and whether it matches the vendor's. See
@@ -41,16 +41,16 @@ being served and whether it matches the vendor's. See
 
 The interesting logic is Rust. `kira-core` reads the `.uapp` container, models the
 catalogue, diffs it against a watch and generates installers; it does no I/O, so
-the catalogue build links it natively and the browser loads the very same code
-compiled to WebAssembly.
+the catalogue build links it natively and the browser loads the same code compiled
+to WebAssembly.
 
-That sharing is not itself the reason for Rust — the JavaScript this replaced was
-also one implementation, imported by Node and copied to the browser. What the
-rewrite buys is a type system over a packed binary format: `AppId` and `Version`
-are newtypes rather than strings, version ordering is the derived `Ord` on a
-packed `u32` rather than a hand-written comparison, and `AppType`/`Status` are
-enums the compiler checks every match against. It costs about 56 kB gzipped —
-see [Module size](#module-size).
+That sharing is not the reason for Rust: the JavaScript this replaced was also one
+implementation, imported by Node and copied to the browser. What the rewrite buys
+is a type system over a packed binary format. `AppId` and `Version` are newtypes,
+version ordering is the derived `Ord` on a packed `u32`, and `AppType`/`Status`
+are enums the compiler checks every match against; in JavaScript all of that was
+strings and hand-written comparisons. It costs about 56 kB gzipped, see
+[Module size](#module-size).
 
 ```
 crates/kira-core   the .uapp format, catalogue model, planner, script generation
@@ -61,26 +61,26 @@ assets/            source artwork for the icons
 ```
 
 JavaScript keeps only what a browser must do itself: the File System Access API,
-IndexedDB and the DOM. Everything else crosses one narrow boundary — a `Store`
+IndexedDB and the DOM. Everything else crosses one narrow boundary: a `Store`
 that owns the catalogue and the user's version selections.
 
 ### Everything comes from the binary
 
 A `.uapp` is self-describing: a 48-byte header carries the AppID, version, the
 LibC ABI version, type and autostart flags, the display name, and two embedded
-icons. `kira-core` gives those real types — `AppId` renders as 16 hex digits,
+icons. `kira-core` gives those real types: `AppId` renders as 16 hex digits,
 `Version` packs into a `u32` that orders correctly, and the type is an enum
-rather than two bits of a flag word.
+instead of two bits of a flag word.
 
 The catalogue is keyed on **AppID**, never on folder or display name. Folder
-names are arbitrary, and display names can contain a path separator — the
+names are arbitrary, and display names can contain a path separator: the
 `GlanceARHR` app is really named `AVG / R HR`.
 
 ### Variant aliases
 
 Not every `.uapp` is an app. apps-v1.4.0 introduced a **variant alias**: a
 code-less file that makes an *existing* app binary appear in the launcher as a
-separate activity. `Walk` is the first and so far the only one — 4642 bytes of
+separate activity. `Walk` is the first and so far the only one: 4642 bytes of
 its own AppID, its own icons and a 58-byte JSON config, running the `Hike`
 binary and telling it to record FIT sport 11.
 
@@ -90,68 +90,68 @@ AppID, a minimum target version, whether the variant was shipped by upstream or
 created on the watch, and the length of the config that follows. Kira reads it
 behind a `payloadVersion == 1` gate, the same gate the SDK's own app-side reader
 uses, and publishes what it finds in `catalog.json`. A descriptor that does not
-follow the contract is named as an unreadable alias rather than quietly
-published as an ordinary app — the flag has already settled what the file is.
+follow the contract is named as an unreadable alias, not quietly published as an
+ordinary app; the flag has already settled what the file is.
 
 The **config is carried verbatim and never parsed.** The kernel does not parse
 it either; only the app does, against a `features` vocabulary each app family
 defines for itself, so anything Kira claimed to read out of it beyond its own
 size would be a guess about somebody else's document.
 
-One consequence is worth stating plainly, because it limits what the next
-section can say: **a variant's own bytes cannot tell you whether its behaviour
-changed.** They describe an alias, and what the alias *does* is the target
-binary's. So its line never says `code unchanged` — there is none in it to be
-unchanged — and it names both halves: *"alias unchanged since 1.4.0 · Hike: code
-changed in 1.5.0"*. The second clause is the one that answers the question, and
-it is the target's own line rather than a second derivation of it.
+One consequence limits what the next section can say: **a variant's own bytes
+cannot tell you whether its behaviour changed.** They describe an alias, and what
+the alias *does* is the target binary's. So its line never says `code unchanged`,
+since there is no code in it to be unchanged. It names both halves instead:
+*"alias unchanged since 1.4.0 · Hike: code changed in 1.5.0"*. The second clause
+answers the question, and it is the target's own line, not a second derivation of
+it.
 
 The card says what a variant is and what it needs, and the planner acts on it: a
 variant is offered even when the app it runs is missing or older than its
-declared floor, because an alias without its target is inert rather than harmful
-— the same property that makes one safe on a watch whose firmware predates the
+declared floor, because an alias without its target is inert, not harmful. That
+is the same property that makes one safe on a watch whose firmware predates the
 feature. Choosing it ticks the target too, visibly, and the target is written
 first, so a run interrupted halfway leaves nothing worse than a missing launcher
 entry.
 
-A variant *created on the watch* — the kernel's `CreateVariant`, `origin: user` —
+A variant *created on the watch* (the kernel's `CreateVariant`, `origin: user`)
 exists in no release and so can be in no catalogue. It used to be reported as an
-app Kira did not recognise. Its own descriptor says what it is, so it is now
-named as what it is instead.
+app Kira did not recognise; its own descriptor says what it is, so it is now
+named as that.
 
-### Versions, and a changelog derived from bytes
+### Versions, and a changelog built from bytes
 
 App versions are **not per-app semver**. `una-version.sh` stamps every app in a
 release with the `apps-v*` tag, so all thirteen apps in apps-v1.3.0 report
-`1.3.0` whether or not their code changed — comparing the published binaries,
-six of those thirteen are byte-identical to their apps-v1.2.0 builds.
+`1.3.0` whether or not their code changed. Comparing the published binaries, six
+of those thirteen are byte-identical to their apps-v1.2.0 builds.
 
-Kira therefore hashes each version's payload — the icons, the service image and
-the GUI image — and compares it with the next older version. That is everything
+Kira therefore hashes each version's payload (the icons, the service image and
+the GUI image) and compares it with the next older version. That is everything
 between the 48-byte header and the CRC footer, so the whole header is out, not
 just the version stamp: the AppID, the LibC ABI version, the type and autostart
 flags, the display name and the icon lengths are all excluded too. Two builds
 that differ only in one of those therefore read as *"same code"*, which is
 accurate about the code and silent about the flag. No pair in the catalogue
-currently differs that way. Each card says *"code changed in 1.3.0 (+17288 B)"* or *"code unchanged
-since 1.2.0"*, and an update that is only a re-stamp is labelled *"version stamp
-only, identical code"* rather than presented as new work. That changelog comes
-from the binaries, not from prose.
+currently differs that way. Each card says *"code changed in 1.3.0 (+17288 B)"*
+or *"code unchanged since 1.2.0"*, and an update that is only a re-stamp is
+labelled *"version stamp only, identical code"*. That changelog comes from the
+binaries, not from prose.
 
 Upstream's own release notes are shown too, per `apps-v*` tag, but not as a wall
 of text. A release body is GitHub's generated "What's Changed" list, and most of
-it — documentation, the desktop simulator, build tooling — cannot reach a watch.
-So each bullet is parsed for its Conventional Commit type and scope and split in
+it (documentation, the desktop simulator, build tooling) cannot reach a watch. So
+each bullet is parsed for its Conventional Commit type and scope and split in
 two: changes that ship, and repository churn, collapsed. Each release leads with
 what its *binaries* did, which is the part that is not a judgement call.
 
 Nothing is dropped. The split is biased towards "this ships", because wrongly
 demoting a real app fix is the harmful error; an unrecognised line is kept as-is,
-and the original body stays one click away. The one heuristic that reads a
-description rather than its scope catches simulator work the SDK files under an
-app's name, e.g. `fix(hrmonitor): make the GCC/Linux simulator build`.
+and the original body stays one click away. One heuristic reads a description
+instead of its scope, to catch simulator work the SDK files under an app's name,
+e.g. `fix(hrmonitor): make the GCC/Linux simulator build`.
 
-Every string is rendered as **text, never as HTML** — it is third-party Markdown,
+Every string is rendered as **text, never as HTML**: it is third-party Markdown,
 and it is not going anywhere near `innerHTML`.
 
 Any published version can be selected per app; the newest **full release** is the
@@ -161,8 +161,8 @@ being silently downgraded.
 
 ### Release candidates
 
-Upstream tags an `apps-v*-rcN` release candidate weeks before the release —
-eighteen days for apps-v1.2.0, two for apps-v1.3.0, thirteen for apps-v1.4.0 —
+Upstream tags an `apps-v*-rcN` release candidate weeks before the release
+(eighteen days for apps-v1.2.0, two for apps-v1.3.0, thirteen for apps-v1.4.0),
 and an app can ship for the first time in one. `Stopwatch`, `Timer` and `Walking`
 all appeared in apps-v1.4.0-rc1 on 4 August and reached a full release only on the
 17th; for those thirteen days the only other ways to get them were building from
@@ -171,16 +171,16 @@ source or waiting.
 So Kira publishes them, with three constraints:
 
 - **A candidate never becomes the default for an app that has a full release.** It
-  ranks *above* the older release — semver's rule, `1.3.0 < 1.4.0-rc1 < 1.4.0` —
+  ranks *above* the older release by semver's rule, `1.3.0 < 1.4.0-rc1 < 1.4.0`,
   and is selectable in the version picker, but `Alarm` still offers 1.3.0. A
   candidate is the default only where there is nothing else, which is the case it
   exists for.
 - **One candidate is listed at a time.** `rc2` displaces `rc1`; the full release
   displaces the candidate entirely. This is a catalogue, not an archive of every
   tag upstream ever pushed. What survives a displacement is the *hash*, carried
-  onto whatever displaced it — otherwise a watch still holding a candidate would
-  report an unrecognised build of the current version and never be offered the
-  release.
+  onto whatever displaced it. Without that, a watch still holding a candidate
+  would report an unrecognised build of the current version and never be offered
+  the release.
 - **Candidates are the vendor's binaries, not Kira's.** Nothing builds candidate
   tags, so they carry `origin: "upstream"`, no recipe, and no attestation. The
   card says so.
@@ -201,60 +201,59 @@ tags merely read like candidates.
 
 Writing to a removable drive needs the File System Access API, which only
 Chromium desktop implements. Reading uses `<input webkitdirectory>`, which is
-supported nearly everywhere — so Firefox and Safari still get the full inventory
-and version diff, then a ready-to-run PowerShell or `sh` script that performs
-exactly the writes the page planned. Which of the two is offered follows the
-visitor's platform, and either one locates the watch by its volume label rather
-than by a path, since where a USB drive appears is stable on no platform.
+supported nearly everywhere, so Firefox and Safari still get the full inventory
+and version diff, then a ready-to-run PowerShell or `sh` script performing the
+writes the page planned. Which of the two is offered follows the visitor's
+platform, and either one locates the watch by its volume label instead of a path,
+since where a USB drive appears is stable on no platform.
 
 The chosen directory handle is kept in IndexedDB, so a reload does not mean
-picking the watch again. The *permission* to use that handle is a separate thing
+picking the watch again. The *permission* to use that handle is a separate thing,
 and Chromium drops it once every tab on the origin closes, so a lapsed one becomes
-a one-click **Reconnect** button — re-granting needs a user gesture, and page load
-is not one. Installing Kira (the manifest exists for this reason, not for looks)
-lets Chromium offer to keep the permission across visits, which removes the click
-too. Firefox and Safari read the drive through `<input webkitdirectory>`, which
-yields files rather than a handle, so there is nothing to persist and the folder
-has to be picked each visit.
+a one-click **Reconnect** button: re-granting needs a user gesture, and page load
+is not one. Installing Kira, which is why the manifest exists, lets Chromium offer
+to keep the permission across visits and removes the click too. Firefox and Safari
+read the drive through `<input webkitdirectory>`, which yields files and not a
+handle, so there is nothing to persist and the folder has to be picked each visit.
 
-Settings have no script fallback, unlike installing, and that is a deliberate
-refusal rather than an omission. The installers reference files by name; a
-setting is a value the visitor types, which would have to be *embedded* in the
-generated shell and PowerShell — a sink that does not exist there today, in a
-file people are told to run on their own machine. Getting shell quoting, JSON
-escaping and their interaction right in two languages is not worth it for a
-convenience feature, so on Firefox and Safari the form says which file to type by
-hand instead. Commit `ad4482a` is why: a display name read out of a binary
-reached past a `#` comment and into a live statement in both installers.
+Settings have no script fallback, unlike installing, and that is a refusal, not
+an oversight. The installers reference files by name; a setting is a value the
+visitor types, which would have to be *embedded* in the generated shell and
+PowerShell, giving files people run on their own machine a sink they do not have
+today. Getting shell quoting, JSON escaping and their interaction right in two
+languages is not worth it for a convenience feature, so on Firefox and Safari the
+form says which file to type by hand. Commit `ad4482a` is why: a display name read
+out of a binary reached past a `#` comment and into a live statement in both
+installers.
 
 ### Settings an app reads
 
-Some apps need a value only their owner knows — an athlete id, a transit pass, an
-account token. The watch has four buttons and no keyboard and the SDK offers no
+Some apps need a value only their owner knows: an athlete id, a transit pass, an
+account token. The watch has four buttons and no keyboard, and the SDK offers no
 way to send one in, so the app reads it from a file in its own folder and Kira
 fills that file in over the same USB handle it installs through.
 
 **What lands there is plain text, and nothing about it is private.** The watch
 presents its storage as a USB drive, so the file is readable by anything on any
 computer it is plugged into, and by any other app on the watch. There is no
-encryption, no keystore and nowhere to put one — the app has to read the value
+encryption and no keystore, and nowhere to put one: the app has to read the value
 back with a bounded JSON parser and four buttons. That is fine for an id or a
 preference, which is what these fields are for. It is not somewhere to put a
 password or an account token you would mind somebody else having, and the form
-says so where the value is typed rather than only here.
+says so where the value is typed, not only here.
 
 **The app owns the format entirely.** Its manifest declares the file name, the
 schema number and every key; Kira assembles the document, refuses values the app
 could not read back, and writes it. Nothing about the convention is Kira's, which
-matters because it is nobody's standard yet: the SDK ships `SDK::Variant::Config`
-with exactly this shape — an exact `schema` major, an app-owned subtree the reader
+matters because it is nobody's standard yet. The SDK ships `SDK::Variant::Config`
+with this same shape (an exact `schema` major, an app-owned subtree the reader
 treats as opaque, a size ceiling checked before allocating, defaults on every
-failure — but only for configs the platform itself writes. See
+failure) but only for configs the platform itself writes. See
 [UNAWatch/una-sdk#225](https://github.com/UNAWatch/una-sdk/issues/225).
 
 This is the one thing on a card that **cannot come from the binary**. Nothing in a
-`.uapp` says what it reads, so it is the submitter's assertion — and the only
-assertion Kira acts on rather than merely renders, since it names a file written
+`.uapp` says what it reads, so it is the submitter's assertion, and the only
+assertion Kira acts on instead of merely rendering, since it names a file written
 to somebody's watch. It is checked on every catalogue build, not just at review:
 the name must be a plain file in the app's own folder, must not look like an app
 binary, and every key must be dot-separated plain segments.
@@ -264,10 +263,9 @@ binary, and every key must be dot-separated plain segments.
 The install path follows the ordering proven by `Update-Watch-Apps.ps1` in the
 SDK:
 
-1. Download and check the binary **before** it touches the watch — expected
-   size, SHA-256 against the catalogue, and the `.uapp` CRC-32 footer. A file
-   failing CRC is dropped *silently* by the watch kernel, so the app would simply
-   never appear.
+1. Download and check the binary **before** it touches the watch: expected size,
+   SHA-256 against the catalogue, and the `.uapp` CRC-32 footer. A file failing
+   CRC is dropped *silently* by the watch kernel, so the app would never appear.
 2. Write the new `.uapp` into `Apps/<Folder>/`.
 3. Read it back and check the length.
 4. Only then delete any stale `.uapp` in that folder. The watch loads whichever
@@ -279,7 +277,7 @@ left alone.
 
 **Verification is a two-step affair.** Hashing straight after writing reads the
 OS write cache and can report a false OK. Eject the watch, reconnect it, then
-press *Verify flash* — Kira keeps the directory handle in IndexedDB so it can
+press *Verify flash*. Kira keeps the directory handle in IndexedDB, so it can
 re-check without you re-picking the drive. Then reboot the watch: the launcher
 list is rebuilt only at boot.
 
@@ -331,27 +329,27 @@ cargo test -p kira-core --test release_diff
 ```
 
 It cross-checks the planner against hashes it recomputes itself, so it holds for
-whichever two releases it is given — including a pair where upstream added, dropped
-or renamed an app, as apps-v1.4.0 did all three — with the 1.2.0-to-1.3.0 and
-1.3.0-to-1.4.0 splits pinned as regression checks. CI runs it against the two
-newest releases.
+whichever two releases it is given, including a pair where upstream added, dropped
+or renamed an app, as apps-v1.4.0 did all three. The 1.2.0-to-1.3.0 and
+1.3.0-to-1.4.0 splits are pinned as regression checks, and CI runs it against the
+two newest releases.
 
 ### Reproducible builds
 
 Almost every app Kira serves is built from source by a recipe that pins the SDK
 revision, the toolchain container digest, the stamped version and the flags. The
-exceptions carry `origin: "upstream"` — a version Kira has no build for, or whose
-build was refused — and the card calls those the vendor's own build. See
+exceptions carry `origin: "upstream"`, meaning a version Kira has no build for or
+whose build was refused, and the card calls those the vendor's own build. See
 [docs/reproducibility.md](docs/reproducibility.md) for what that rests on, what
-has been verified, and the weak points — including the fact that reproducibility
-is not authenticity.
+has been verified, and the weak points, including the fact that reproducibility is
+not authenticity.
 
-The SDK revision in a recipe is a tag, and tags move — which `registry/README.md`
-tells submitters is exactly what makes a pinned source a lie. Changing the recipe
-to name a commit would invalidate every stored artifact and force a full rebuild,
-so instead `sdk-tags.lock.json` records the commit each published tag pointed at
-and the catalogue build refuses to publish if upstream has moved one. That does
-not make the recipe immutable; it makes a move impossible to miss.
+The SDK revision in a recipe is a tag, and tags move, which `registry/README.md`
+tells submitters is what makes a pinned source a lie. Changing the recipe to name a
+commit would invalidate every stored artifact and force a full rebuild, so
+`sdk-tags.lock.json` records the commit each published tag pointed at, and the
+catalogue build refuses to publish if upstream has moved one. That does not make
+the recipe immutable; it makes a move impossible to miss.
 
 ### Module size
 
@@ -367,16 +365,15 @@ The published `.wasm` is ~78 kB gzipped:
 | one app install, e.g. Running 1.3.0 | 520 kB |
 
 The first two rows are the rewrite's own measurement, kept because the argument
-below is about it. The rest is drift since, measured the same way — the module
-has grown 21.5 kB across four features and nobody was watching, which is the
-usual way a budget goes.
+below is about it. The rest is drift since, measured the same way: the module has
+grown 21.5 kB across four features with nobody watching.
 
 So the rewrite costs ~56 kB on first load, against a page that already transfers
-20 kB of catalogue and, the moment anyone does the thing the site exists for,
-half a megabyte per app. It is cached after the first visit. On a slow connection
-the first load is nonetheless noticeably heavier, and that is the honest cost.
+20 kB of catalogue and half a megabyte for every app anybody installs. It is
+cached after the first visit, but on a slow connection that first load is
+noticeably heavier.
 
-Two dependencies were worth removing, each measured rather than guessed:
+Two dependencies were worth removing, each measured:
 
 | Change | gzipped |
 | --- | --- |
@@ -384,11 +381,10 @@ Two dependencies were worth removing, each measured rather than guessed:
 | drop `serde_json` — the browser already has a JSON parser, so `Store::new` takes the result of `JSON.parse` | 73.9 kB |
 | drop `crc32fast` for a `const` table — it ships SIMD dispatch and multi-kilobyte slice-by-N tables that compress poorly | 58.2 kB |
 
-**`wasm-opt` is deliberately not used.** It shrinks the raw module by ~11%
-(152 kB → 135 kB) but makes it *less compressible*, so the gzipped transfer grows
-to ~60 kB. Raw size still matters for parse time and memory, so it is a real
-trade — just not the one that helps a visitor on a network. Measure gzipped
-output before adding it.
+**`wasm-opt` is not used.** It shrinks the raw module by ~11% (152 kB → 135 kB)
+but makes it *less compressible*, so the gzipped transfer grows to ~60 kB. Raw
+size still matters for parse time and memory, so it is a real trade, just not one
+that helps a visitor on a network. Measure gzipped output before adding it.
 
 What remains is mostly unavoidable: ~12 kB of float-to-decimal formatting pulled
 in by serde's error machinery, ~5 kB of allocator, and ~10 kB of generated
@@ -398,14 +394,14 @@ nothing measurable, since LTO was already discarding it.
 ### Icons
 
 `make icons` derives the favicons, apple-touch icon and link-preview card from
-`assets/kira-mark.png` using the `image` crate — no ImageMagick. The outputs are
+`assets/kira-mark.png` using the `image` crate, with no ImageMagick. The outputs are
 committed, so it only runs when the artwork changes.
 
 The crop geometry is the **measured** bounding box of the mark
-(`440x440+484+164`). It is deliberately not an autocrop, because the source render
-carries a generator watermark in one corner that a trim would include — the tool
-checks the source dimensions and refuses to run if they change, rather than
-silently cropping the wrong region.
+(`440x440+484+164`), not an autocrop: the source render carries a generator
+watermark in one corner that a trim would include. The tool checks the source
+dimensions and refuses to run if they change, so it cannot silently crop the wrong
+region.
 
 ## Deploying
 
@@ -415,10 +411,10 @@ daily on a schedule, or via *Run workflow* (optionally pinning a specific
 **Settings → Pages → Source** must be set to **GitHub Actions**.
 
 A push that changes `registry/` is the exception: it deploys once the
-**Submissions** workflow has finished building and uploading the app, rather than
-on the push itself. Publishing on the push as well would put out a catalogue
-missing the app that was just merged, and the two runs — same commit, so the same
-Pages build version — could cancel each other's deployment.
+**Submissions** workflow has finished building and uploading the app, not on the
+push itself. Publishing on the push as well would put out a catalogue missing the
+app that was just merged, and the two runs share a commit and therefore a Pages
+build version, so they could cancel each other's deployment.
 
 All asset paths are resolved relative to the page's own URL, so the site works
 unchanged at a `github.io/kira/` subpath or on a custom domain. The domain lives
@@ -438,30 +434,30 @@ issued the certificate.
   the JavaScript it replaced. The trade is one implementation instead of two.
   See [Module size](#module-size) before trying to shrink it further.
 - **No signing of the apps themselves.** Integrity is SHA-256 (against this
-  catalogue) plus the `.uapp` CRC-32, which catches corruption and truncation,
+  catalogue) plus the `.uapp` CRC-32, which catches corruption and truncation but
   not a malicious publisher. Every binary Kira *built* carries a GitHub
-  build-provenance attestation — `gh attestation verify <file> --repo
-  tobymurray/kira` — so it can be tied to the workflow run that produced it
-  without trusting this repository. A version served as the vendor's own build
-  has none, and `gh attestation verify` on one will simply fail; that is every
-  release candidate and any version Kira has no build for. Attestation is also
-  still not authenticity: it says which build emitted the bytes, not that the
-  source was benign, and nothing here reviews code.
-- **The kernel version cannot be checked over USB, so the page asks instead.** An
-  app's `minKernelVersion` is a BLE/DIS check in the official mobile app and is not
-  in the `.uapp` at all, so Kira can read it neither from a binary nor from the
-  drive. What it *can* do is work out which SDK release a build was compiled
-  against — the catalogue records that for every build — and compare it against the
+  build-provenance attestation (`gh attestation verify <file> --repo
+  tobymurray/kira`), so it can be tied to the workflow run that produced it
+  without trusting this repository. A version served as the vendor's own build has
+  none, and `gh attestation verify` on one will fail; that is every release
+  candidate and any version Kira has no build for. Attestation is still not
+  authenticity: it says which build emitted the bytes, not that the source was
+  benign, and nothing here reviews code.
+- **The kernel version cannot be checked over USB, so the page asks.** An app's
+  `minKernelVersion` is a BLE/DIS check in the official mobile app and is not in
+  the `.uapp` at all, so Kira can read it neither from a binary nor from the drive.
+  What it *can* do is work out which SDK release a build was compiled against,
+  which the catalogue records for every build, and compare that against the
   firmware you say you are on. An app refuses to launch on a kernel older than the
   interface version it carries, and that went 2 → 3 between apps-v1.3.0 and
   apps-v1.4.0, so on a 1.3 watch the newest build of most apps stops before drawing
   anything. The catalogue presents as the newest kernel; the control in the top
   right is how an older watch corrects it, and doing so selects the newest build of
   each app that will actually start. It is your word and unverifiable, so it moves
-  selections and annotates cards and **never** blocks a download or an install.
+  selections and annotates cards but **never** blocks a download or an install.
   [`kernel.rs`](crates/kira-core/src/kernel.rs) holds the release-to-interface
-  table, which deliberately answers nothing for a release newer than the one it was
-  last checked against.
+  table, which answers nothing for a release newer than the one it was last checked
+  against.
 - **The LibC ABI is recorded and still compared against nothing.** The nearest
   thing a binary itself carries to a firmware requirement is its LibC ABI version,
   which Kira publishes in `catalog.json` but does **not** show on a card or check.
@@ -469,14 +465,14 @@ issued the certificate.
   refusal. It stays harmless while 0.0.3 is the only ABI in the catalogue, which it
   still is: apps-v1.4.0 stamps `Walk` `0.0.0`, but `Walk` is a
   [variant alias](#variant-aliases) and carries no code, so it is linked against
-  nothing. That zero is structural rather than a second ABI.
+  nothing. That zero is structural, not a second ABI.
 - **A reboot is required** after installing, and it is not automatable.
 - **Release notes are upstream's, not per-app.** A tag's notes cover the whole
   release, so they may describe apps other than the one you are looking at. The
   per-app "did the code change" line is the reliable signal.
-- Glance apps are commonly built without icons — their icon fields are present but
-  zero-filled — so the catalogue shows a lettered placeholder for them.
+- Glance apps are commonly built without icons (their icon fields are present but
+  zero-filled), so the catalogue shows a lettered placeholder for them.
 - Upstream reassigned the AppIDs of three Glances after `apps-v0.1.9-rc1`, and
   two of its releases ship different apps under one AppID. Kira reports the first
   as separate entries labelled with their IDs, and drops every side of the second
-  rather than guessing which binary belongs to which app.
+  instead of guessing which binary belongs to which app.

@@ -2,7 +2,7 @@
 
 Kira is an unofficial app store for UNA Watch, and **not a support channel for
 the watch itself**. If the watch or an app misbehaves once installed, that
-belongs with [UNA Watch](https://github.com/UNAWatch/una-sdk/issues) — Kira only
+belongs with [UNA Watch](https://github.com/UNAWatch/una-sdk/issues); Kira only
 distributes their apps.
 
 ## Where to go
@@ -15,9 +15,9 @@ distributes their apps.
 | Report a security problem | [Privately](https://github.com/tobymurray/kira/security/advisories/new) — see [SECURITY.md](SECURITY.md) |
 | Show what you built | [Discussions → Show and tell](https://github.com/tobymurray/kira/discussions/new?category=show-and-tell) |
 
-Questions go to Discussions rather than issues on purpose: the answer stays
-searchable for the next person who asks the same thing, and the issue tracker
-stays a list of things that are actually broken.
+Questions go to Discussions instead of issues: the answer stays searchable for
+the next person who asks the same thing, and the issue tracker stays a list of
+things that are actually broken.
 
 Nothing posted in Discussions or issues is rendered on the site. The published
 page loads no third-party script, because it holds a read/write handle to your
@@ -47,10 +47,10 @@ make serve    # build the wasm module, then serve site/ on :8099
 The workspace is three crates: `kira-core` holds the `.uapp` parser, catalogue
 model and install planner with no I/O at all; `kira-cli` is the build-time tool;
 `kira-wasm` is the thin browser binding. Logic belongs in `kira-core` so that the
-CLI and the page cannot disagree — if you find yourself writing a rule twice,
-that is the bug.
+CLI and the page cannot disagree; if you find yourself writing a rule twice, that
+is the bug.
 
-`site/app.js` is deliberately dumb: DOM and File System Access plumbing only. No
+`site/app.js` is dumb by design: DOM and File System Access plumbing only. No
 parsing, no version comparison, no decisions about what to install.
 
 Run `make check` before opening a pull request. New behaviour in `kira-core`
@@ -59,7 +59,7 @@ are verified by hand against a real watch.
 
 ## Adding an app
 
-Kira carries third-party apps, and builds every binary it ships from source — so a
+Kira carries third-party apps, and builds every binary it ships from source, so a
 submission is a manifest naming a repository, a commit and the SDK revision to
 build against, never an uploaded binary. The process, the rules and the reasons
 are in [registry/README.md](registry/README.md); the short version is that you add
@@ -74,6 +74,6 @@ does not claim about an app it carries.
 ## Licence
 
 Kira's own code is MIT. Most app binaries here are Kira's own builds of the UNA
-SDK's source rather than UNA's binaries, covered by the SDK's MIT licence as
-derivative works; submitted apps carry their own — see
+SDK's source and not UNA's binaries, covered by the SDK's MIT licence as
+derivative works. Submitted apps carry their own; see
 [THIRD-PARTY.md](THIRD-PARTY.md).
