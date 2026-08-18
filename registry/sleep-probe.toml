@@ -99,3 +99,9 @@ version = "0.1.0"
 rev     = "9b37dbf45d80dc23192bf1d639ecf351590198ac"
 sdk_rev = "apps-v1.4.0"
 notes   = "First build. Subscribes every candidate sensor -- accelerometer, worn-detection, motion, heart rate and its multi-source variant, beat events, PPG, SpO2, steps, battery -- and appends one row a minute of delivered sample counts, worn transitions, both clocks and battery state. A missing measurement is written -1, never 0: a sensor that delivered nothing is a finding, one never subscribed is not. Analysis is a script in the same repo. Not tested on hardware; testing on hardware is what it is for."
+
+[[versions]]
+version = "0.1.1"
+rev     = "53cbe141a429d9429be36b427824b8c6f504be51"
+sdk_rev = "apps-v1.4.0"
+notes   = "Distinguishes a sensor the config never asked for from one it asked for and the firmware refused -- a dot against a lower-case letter, where both used to read the same. Prompted by the first hardware run: SpO2, beat events and PPG all fail to resolve a driver at all on 1.4, which the old screen showed the same way as a sensor simply switched off. Recording is unchanged; the log already told these apart."
