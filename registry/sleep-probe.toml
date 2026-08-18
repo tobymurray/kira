@@ -1,0 +1,101 @@
+# Measures whether an all-night app is possible on this watch at all.
+#
+# Nothing on this device has ever run for eight hours. Every app in the
+# catalogue is either foreground-interactive or a background task measured in
+# minutes, so whether a service keeps its sensor subscriptions, its file handles
+# and its battery across a night is simply unmeasured -- and a sleep app that
+# finds out in month two that its sensors stopped at 02:00 has wasted month one.
+#
+# So this subscribes every candidate sensor, counts what actually arrives, and
+# appends one line a minute. It computes nothing and decides nothing. The
+# reading is done afterwards on a computer, by a script in the same repository,
+# where it can be re-run against the same night as the questions change.
+#
+# Eight questions, each a column: does delivery survive the whole night, and
+# where does it stop if not; what does continuous optical heart rate cost;
+# what is the *delivered* sample rate as opposed to the requested one; does
+# SpO2 produce a single sample; does HEART_BEAT still emit nothing; does
+# worn-detection hold on a loosely-strapped sleeping wrist or flicker; does
+# anything else contend for the heart-rate sensor; and how fast can the volume
+# be appended to.
+#
+# Run it unplugged and worn -- plugging in stops every app on the watch, so a
+# night on the charger records nothing. Two nights answer most of it: one with
+# heart rate on, one with it off, and the difference is what heart rate costs.
+# A third on a nightstand answers the rest.
+#
+# It has a screen showing which sensors resolved and how many rows have been
+# written, for the thirty seconds before bed when the only question is whether
+# this is going to record anything. It cannot be stopped from the watch: delete
+# the folder when you are done with it. That is the right trade for a
+# diagnostic whose whole job is to still be running at 04:00.
+#
+# A tool, not a product. It produces a CSV that means nothing without the
+# report script, and it is deliberately uninteresting to anyone not building
+# something that has to run all night.
+app_id     = "999A630E7F105A07"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "SleepLab/Probe"
+folder     = "SleepProbe"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# Every field is optional and the app records a useful night with no file at
+# all -- the defaults are the most informative run, not the cheapest, because a
+# first night with everything subscribed answers the most questions.
+#
+# Leave a box blank and the default stands. A value outside its range is
+# refused rather than clamped: clamping turns a typo into a silently different
+# experiment, recording a night at some rate nobody chose while the log looks
+# perfectly healthy.
+[config]
+file   = "probe.json"
+schema = 1
+
+[[config.fields]]
+path      = "values.hr"
+title     = "Heart rate"
+help      = "Type continuous, off, or duty. Leave blank for continuous. Run one night on continuous and one on off -- the difference between them is what overnight heart rate costs, which is the single number that decides whether a sleep app can afford it."
+maxLength = 10
+
+[[config.fields]]
+path      = "values.hr_duty_on_sec"
+title     = "Duty: seconds on"
+help      = "Only read when heart rate is set to duty. Leave blank for 60. Must be less than the period below, or the mode falls back to continuous and says so."
+maxLength = 4
+
+[[config.fields]]
+path      = "values.hr_duty_per_sec"
+title     = "Duty: seconds per cycle"
+help      = "Only read when heart rate is set to duty. Leave blank for 300, so heart rate is on for one minute in five."
+maxLength = 4
+
+[[config.fields]]
+path      = "values.accel_period_ms"
+title     = "Accelerometer period (ms)"
+help      = "Leave blank for 40, which asks for 25 Hz. It is a request, not a promise -- what the watch actually delivers is what this app exists to measure, and the two are not the same number."
+maxLength = 4
+
+[[config.fields]]
+path      = "values.accel_latency_ms"
+title     = "Accelerometer batching (ms)"
+help      = "How long the watch may hold samples before delivering them in one go. Leave blank for 5000. Without batching, 25 Hz is 25 wake-ups a second for eight hours, which is itself part of what is being measured."
+maxLength = 5
+
+[[config.fields]]
+path      = "values.spo2"
+title     = "Record SpO2"
+help      = "Type off to skip it. Leave blank or type on. Whether the firmware produces a single SpO2 sample is unknown, and one night settles it -- which is the entire reason this box is on by default."
+maxLength = 8
+
+[[config.fields]]
+path      = "values.ppg"
+title     = "Record raw PPG"
+help      = "Type on to subscribe the raw optical waveform as well. Leave blank for off: 20 Hz all night is a great deal of traffic to answer a question a short run answers just as well."
+maxLength = 8
+
+[[versions]]
+version = "0.1.0"
+rev     = "9b37dbf45d80dc23192bf1d639ecf351590198ac"
+sdk_rev = "apps-v1.4.0"
+notes   = "First build. Subscribes every candidate sensor -- accelerometer, worn-detection, motion, heart rate and its multi-source variant, beat events, PPG, SpO2, steps, battery -- and appends one row a minute of delivered sample counts, worn transitions, both clocks and battery state. A missing measurement is written -1, never 0: a sensor that delivered nothing is a finding, one never subscribed is not. Analysis is a script in the same repo. Not tested on hardware; testing on hardware is what it is for."
