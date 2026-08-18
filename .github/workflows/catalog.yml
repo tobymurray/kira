@@ -13,9 +13,37 @@ name: Catalogue
 on:
   push:
     branches: [main]
+    # What Submissions runs on, mirrored. A push touching these gets a catalogue
+    # build from the workflow_run trigger below instead, once the app it added
+    # is actually in the store -- so running here as well would build a
+    # catalogue deliberately missing the app that was just merged, then throw it
+    # away three minutes later.
+    #
+    # It also stops the two runs racing. Both carry the same commit, and the
+    # `pages` group below replaces the older one; when that lands while its
+    # deploy job is mid-poll, the Pages deployment it created goes to `error`,
+    # and the successor's deployment -- same commit, so the same
+    # `pages_build_version` -- comes back "Deployment cancelled". That is how
+    # merging #49 published nothing. It needed the push run's deploy to still be
+    # in flight 2m46s in, which is why the three registry merges before it were
+    # fine: their deploys finished inside 1m40 and there was nothing to cancel.
+    #
+    # A push touching one of these *and* something else still runs both, since
+    # `paths-ignore` skips only when every changed path matches -- so the race is
+    # narrowed to a shape no submission has: registry/README.md says a submission
+    # is one `registry/<slug>.toml` and nothing else.
+    paths-ignore:
+      - 'registry/**'
+      - '.github/workflows/registry.yml'
   # A merged submission builds and uploads to the store in its own workflow,
-  # which finishes after the push run here has already read the store. Without
-  # this the app would not appear until the next build, which reads as broken.
+  # which finishes after a push run here would have read the store. This is the
+  # rebuild that publishes it, and now the only one for such a push.
+  #
+  # The cost is that a registry change whose Submissions run *fails* gets no
+  # catalogue build at all, where it used to get one that published nothing new.
+  # That matters only for a change with no binary behind it -- withdrawing a
+  # version, say -- which then waits for the daily cron rather than publishing at
+  # once. A day late on a retirement, against a deploy that fails outright.
   workflow_run:
     workflows: [Submissions]
     types: [completed]
