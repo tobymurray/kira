@@ -4,6 +4,14 @@
 # interface version it was compiled against, which went 2 -> 3 between the two.
 # A distinct AppID and folder because UNA's Stopwatch is still shipping; these
 # two install side by side rather than one replacing the other.
+#
+# Retired now that upstream's own Stopwatch is a full release and the kernel it
+# needs is flashable over USB. Not withdrawn because anything is wrong with it:
+# on a watch still on interface version 2 it remains the one that runs, and Kira
+# cannot tell which kernel is in front of it. Retiring keeps the card and the
+# binary and only stops offering the install, which is the right default now.
+retired = "UNA's Stopwatch ships in apps-v1.4.0. This existed only for a watch on kernel interface version 2, and flashing the 1.4.0 kernel is the better answer to that than a backport."
+
 app_id     = "FD92465DEEB5F39C"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "Chrono"
@@ -15,4 +23,4 @@ maintainer = "tobymurray"
 version = "0.1.0"
 rev     = "c07b305ca512868c4f163b12673cab493b38338e"
 sdk_rev = "apps-v1.3.0"
-notes   = "First build. UNA's Stopwatch, made to build and run on SDK 1.3: start, pause, lap and reset with a scrollable lap list, the Service keeping time whether or not the GUI is up. Upstream's Stopwatch is built against 1.4, and an app will not launch on a kernel older than the interface version it carries -- so on a watch still on interface version 2 that one does nothing and this one runs. It needs none of what the bump brought in. Untested on hardware."
+notes   = "First build. UNA's Stopwatch, made to build and run on SDK 1.3: start, pause, lap and reset with a scrollable lap list, the Service keeping time whether or not the GUI is up. Upstream's Stopwatch is built against 1.4, and an app will not launch on a kernel older than the interface version it carries -- so on a watch still on interface version 2 that one did nothing and this one ran. It needs none of what the bump brought in. Untested on hardware."
