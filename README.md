@@ -414,6 +414,12 @@ daily on a schedule, or via *Run workflow* (optionally pinning a specific
 `apps-v*` tag or capping how many releases to include). Repository
 **Settings → Pages → Source** must be set to **GitHub Actions**.
 
+A push that changes `registry/` is the exception: it deploys once the
+**Submissions** workflow has finished building and uploading the app, rather than
+on the push itself. Publishing on the push as well would put out a catalogue
+missing the app that was just merged, and the two runs — same commit, so the same
+Pages build version — could cancel each other's deployment.
+
 All asset paths are resolved relative to the page's own URL, so the site works
 unchanged at a `github.io/kira/` subpath or on a custom domain. The domain lives
 in `site/CNAME` as well as the repository settings, so a deploy cannot drop it.
