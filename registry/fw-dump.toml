@@ -1,0 +1,80 @@
+# Reads the watch's own 4 MB of internal flash straight out of memory and writes
+# it into its own folder, 32 files of 128 KB with a CRC-32 per chunk and one for
+# the whole image, to be copied off over USB. No SWD probe and no key: the
+# release firmware is AES-encrypted in transit but sits in plaintext in flash at
+# rest, and an app here runs with no memory isolation, so a pointer is enough.
+#
+# Read-only by construction — memory reads and filesystem writes into its own
+# sandbox, and no code path that writes flash, option bytes or a peripheral
+# register. It will not even walk the MPU region table, because selecting a
+# region means writing MPU_RNR.
+#
+# Two-phase and it cannot be otherwise: the kernel stops every running app while
+# USB is connected, so the dump runs with the cable out and the files are read
+# back afterwards. Which is why it resumes — every chunk is flushed before the
+# next is opened, and a relaunch re-verifies what is already on disk against
+# memory rather than rewriting it.
+#
+# For the curious rather than the general user. It produces a 4 MB folder of
+# binaries that mean nothing without a host-side reassembler, and it is a tool
+# for reading hardware you own.
+app_id     = "5D041A7EB1D16CAA"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "FwDump"
+folder     = "FwDump"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# The default region needs no configuration and the app ships working without
+# this file — flash is what all but one user of this will want. What it buys is
+# pointing the same app at a different window (SRAM, a peripheral block) without
+# rebuilding it, so no field is required and every failure falls back to the
+# built-in flash region rather than refusing to start.
+#
+# Addresses are hex without an 0x prefix, matching the manifest the app writes
+# and sidestepping the fact that JSON has no hex literal — writing 0x08000000 as
+# a decimal number is how somebody ends up dumping the wrong region. The app
+# rejects anything that is not entirely hex digits rather than parsing as far as
+# it can, because this field names memory it is about to dereference.
+#
+# Geometry must tile exactly: size a whole number of chunks, chunk a whole number
+# of sub-writes, sub-write no larger than 16 KiB. It is validated again on the
+# watch and discarded whole if it does not hold, so a half-applied geometry
+# cannot tile the region wrongly.
+#
+# A configured region is read exactly as flash is. What changes is the chance
+# that an address does not decode — which faults rather than returning an error,
+# and a fault takes the app down. The default is a region already known readable.
+[config]
+file   = "fwdump.json"
+schema = 1
+
+[[config.fields]]
+path      = "base"
+title     = "Base address (hex)"
+help      = "First address to read, hex without 0x. Leave blank for 08000000, the internal flash this app exists to dump. Anything else is your risk: an address that does not decode faults and ends the app."
+maxLength = 8
+
+[[config.fields]]
+path      = "size"
+title     = "Bytes to read (hex)"
+help      = "How much to read from the base address, hex without 0x. Leave blank for 00400000, the whole 4 MB. Must be a whole number of chunks."
+maxLength = 8
+
+[[config.fields]]
+path      = "chunk"
+title     = "Bytes per file (hex)"
+help      = "Size of each output file, hex without 0x. Leave blank for 00020000 (128 KiB), which gives 32 files. Smaller chunks lose less to an interruption and make more files."
+maxLength = 8
+
+[[config.fields]]
+path      = "subwrite"
+title     = "Bytes per write (hex)"
+help      = "How much is read, hashed and written at a time, hex without 0x. Leave blank for 00001000 (4 KiB). This is where the app yields, so it bounds how long the dump can go without answering a message. Must divide the chunk size and cannot exceed 4000."
+maxLength = 8
+
+[[versions]]
+version = "1.0.0"
+rev     = "555bca30980ac3402f2c371afcbce915b75a4679"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build. Dumps the 4 MB of internal flash at 0x08000000 to 32 files of 128 KiB plus a manifest with a CRC-32 per chunk and one for the whole image, so a host reassembler re-derives every checksum rather than taking the watch's word. Resumable: an interrupted run leaves complete chunks and a relaunch re-verifies them against memory rather than rewriting. Also records the UID and isolation registers, which are not in the dump. Read-only. Verified on hardware against two firmware versions."
