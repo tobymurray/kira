@@ -611,6 +611,14 @@ details.archive .card {
   margin: 0 0 6px;
 }
 
+/* A variant alias, and what it depends on. Not the warning treatment: a variant
+   is a perfectly ordinary thing to install, it just needs the app it runs. */
+.meta.variant {
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin: 0 0 6px;
+}
+
 .meta.provenance {
   font-size: 11px;
   opacity: 0.75;
@@ -855,6 +863,12 @@ pre.notes {
 .plan-row .what {
   color: var(--ink-soft);
   font-size: 13px;
+}
+
+/* What a variant alias needs before it can run. Emphasised over the line above
+   it because it is the one thing on the row that is not about this app. */
+.plan-row .what.needs {
+  color: var(--warn-ink);
 }
 
 /* Links to the app's card, where the version picker and history live. */

@@ -341,6 +341,18 @@ fn inspect(file: &std::path::Path) -> Result<()> {
     let uapp = kira_core::uapp::Uapp::parse(&bytes)?;
     let header = uapp.header();
     let crc = uapp.verify_crc();
+    // Null for an ordinary app, and for an alias either the descriptor or the
+    // reason it would not read -- never absent, so a caller can tell the three
+    // apart without inspecting `variantAlias` as well.
+    let variant = uapp.variant().map(|read| match read {
+        Ok(alias) => serde_json::json!({
+            "target": alias.target.to_string(),
+            "minTargetVersion": alias.min_target_version.map(|v| v.to_string()),
+            "origin": alias.origin.to_string(),
+            "config": alias.config,
+        }),
+        Err(problem) => serde_json::json!({ "problem": problem.to_string() }),
+    });
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
@@ -350,15 +362,20 @@ fn inspect(file: &std::path::Path) -> Result<()> {
             "libcVersion": header.libc_version.to_string(),
             "type": header.app_type().to_string(),
             "autostart": header.autostart(),
+            "variantAlias": header.is_variant_alias(),
+            "variant": variant,
             "size": bytes.len(),
             "serviceLen": header.service_len,
-            "guiLen": uapp.gui_len(),
+            // The GUI image for an app; the alias descriptor and its config for a
+            // variant. Nothing in the header gives its length.
+            "trailingLen": uapp.trailing_len(),
             "crcValid": crc.is_valid(),
             "sha256": sha256_hex(&bytes),
-            // The code alone: icons, service and GUI, with the whole header and
-            // the CRC footer excluded. Two builds of the same source under
-            // different release tags share this and differ in "sha256", which is
-            // what lets a caller tell a real change from a version re-stamp.
+            // Everything between the header and the CRC footer. Two builds of the
+            // same source under different release tags share this and differ in
+            // "sha256", which is what lets a caller tell a real change from a
+            // version re-stamp. For a variant alias it covers the icons, the
+            // descriptor and the config -- not code, of which an alias has none.
             "payloadSha256": sha256_hex(uapp.payload()),
         }))?
     );

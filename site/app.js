@@ -28,6 +28,7 @@ let Store;
 let crcIsValid;
 let payloadBounds;
 let readHeader;
+let readVariant;
 let sourceRef;
 
 /**
@@ -60,6 +61,7 @@ async function loadModule(schema) {
     crc_is_valid: crcIsValid,
     payload_bounds: payloadBounds,
     read_header: readHeader,
+    read_variant: readVariant,
     source_ref: sourceRef,
   } = module);
 }
@@ -562,8 +564,13 @@ function renderProvenance(app, selected) {
   provenance.className = 'meta provenance';
   const built = selected.builtFrom;
 
-  if (selected.origin !== 'kira') {
-    provenance.textContent = "the vendor's own build";
+  // Why it is the vendor's binary and not Kira's is a judgement about how the
+  // artifact is produced -- a version nobody has built yet reads differently
+  // from a variant, which is packed rather than compiled and has no source to
+  // build. So the sentence comes from kira-core, and its absence is what says
+  // Kira built this one.
+  if (app.originNote) {
+    provenance.textContent = app.originNote;
     return provenance;
   }
 
@@ -668,6 +675,22 @@ function renderCard(app, entry) {
   meta.textContent =
     `${fmtSize(selected.size)}${selected.autostart ? ' · autostarts' : ''} · ${app.history}`;
   body.appendChild(meta);
+
+  // A variant alias: a code-less .uapp that runs another app's binary under its
+  // own launcher entry. The whole sentence comes from kira-core, including which
+  // app it names and whether that app is even in this catalogue — the descriptor
+  // in the binary is what says so, and working it out here would be the second
+  // copy of a rule. textContent: the target's display name comes out of a header.
+  if (app.variant) {
+    const note = document.createElement('div');
+    note.className = 'meta variant';
+    note.textContent = app.variant;
+    note.title =
+      'A variant is packed from a manifest rather than compiled: it carries icons, ' +
+      'a target AppID and a small JSON config, and no code at all. Without the app ' +
+      'it names there is nothing for it to run.';
+    body.appendChild(note);
+  }
 
   body.appendChild(renderProvenance(app, selected));
 
@@ -1252,7 +1275,7 @@ async function resolveAppsDir(root) {
 }
 
 /** Turn a header plus file facts into the shape the planner expects. */
-function installedFrom(header, folder, file, size, extraUapps) {
+function installedFrom(header, folder, file, size, extraUapps, variant) {
   return {
     appId: header.appId,
     folder,
@@ -1261,11 +1284,32 @@ function installedFrom(header, folder, file, size, extraUapps) {
     version: header.version,
     size,
     extraUapps,
+    // Present only for a variant alias, which the header flag already gave away.
+    variant: variant ?? null,
     // Filled by hashInstalled() once the file has been read.
     payloadSha256: null,
     sha256: null,
     crcValid: null,
   };
+}
+
+/**
+ * The descriptor of an installed .uapp, when the header says it is an alias.
+ *
+ * A whole extra read, but only for a file the header has already identified as a
+ * few kilobytes of alias rather than a few hundred of app — and it is the only
+ * way a variant created on the watch can be reported as anything but a stranger,
+ * since it ships in no release and can be in no catalogue.
+ */
+async function readVariantOf(header, file) {
+  if (!header.variantAlias) return undefined;
+  try {
+    return readVariant(new Uint8Array(await file.arrayBuffer()));
+  } catch {
+    // Unreadable descriptors are the planner's business, not the scan's; a file
+    // that will not parse at all is already reported by the caller.
+    return undefined;
+  }
 }
 
 /** Read installed apps by parsing each folder's .uapp header. */
@@ -1299,6 +1343,7 @@ async function readInstalledFromHandles(appsDir) {
           fileName,
           file.size,
           uapps.slice(1).map((u) => u.fileName),
+          await readVariantOf(header, file),
         ),
       );
     } catch (err) {
@@ -1343,6 +1388,7 @@ async function readInstalledFromFiles(fileList) {
           file.name,
           file.size,
           group.slice(1).map((f) => f.name),
+          await readVariantOf(header, file),
         ),
       );
       // Kept so Verify can hash without asking for the folder again.
@@ -1442,7 +1488,7 @@ async function installOne(entry) {
 }
 
 async function installAll() {
-  const jobs = selectedJobs();
+  const jobs = inWriteOrder(selectedJobs());
   if (jobs.length === 0) return;
 
   clearLog();
@@ -1648,7 +1694,50 @@ function selectJobs(wanted) {
       .filter((e) => !wanted(e))
       .map((e) => e.app.appId),
   );
+  applyDependencies();
   renderPlan();
+}
+
+/**
+ * Un-exclude whatever the ticked jobs depend on.
+ *
+ * A variant alias runs another app's binary, so choosing one without its target
+ * buys a launcher entry with nothing behind it. Which app that is, and whether
+ * this plan would supply a build new enough to satisfy the descriptor's floor,
+ * are the planner's to answer — this only puts the tick where it says.
+ *
+ * Applied to the visible selection rather than silently at install time, on
+ * purpose: a selection that quietly grew is exactly the surprise the per-app
+ * ticks exist to prevent, so the box has to be seen to move. Unticking a target
+ * while the variant that needs it is still ticked therefore springs back, and
+ * the variant's row says why — the alternative is letting somebody assemble a
+ * selection that installs a launcher entry with nothing behind it.
+ */
+function applyDependencies() {
+  if (!state.store || !state.plan) return;
+  const wanted = new Set(
+    state.store.withDependencies(
+      state.installed,
+      selectedJobs().map((e) => e.app.appId),
+    ),
+  );
+  for (const id of wanted) state.excluded.delete(id);
+}
+
+/**
+ * The order the writes go in, from the planner.
+ *
+ * A variant's target lands before the variant. It only shows in a run that stops
+ * halfway — the launcher list is rebuilt at boot either way — but stopping after
+ * the binary leaves nothing broken, and stopping after the alias leaves a
+ * launcher entry with no binary behind it. Taken from the plan rather than
+ * re-sorted here, so this path and the generated scripts cannot disagree.
+ */
+function inWriteOrder(jobs) {
+  const order = new Map((state.plan?.writeOrder ?? []).map((id, i) => [id, i]));
+  return [...jobs].sort(
+    (a, b) => (order.get(a.app.appId) ?? 0) - (order.get(b.app.appId) ?? 0),
+  );
 }
 
 /** Anchor for an app's card, so a plan row can point at it. */
@@ -1689,6 +1778,7 @@ function renderPlan() {
     tick.addEventListener('change', () => {
       if (tick.checked) state.excluded.delete(entry.app.appId);
       else state.excluded.add(entry.app.appId);
+      applyDependencies();
       renderPlan();
     });
     row.appendChild(tick);
@@ -1707,6 +1797,15 @@ function renderPlan() {
     const where = entry.installed ? entry.installed.folder : entry.app.folder;
     what.textContent = `${entry.describe} · Apps/${where}/`;
     left.appendChild(what);
+    // A variant alias runs another app's binary. The sentence, and whether there
+    // is one to show at all, come from the planner: a satisfied dependency is not
+    // news, and which app it is comes out of the descriptor rather than from here.
+    if (entry.requiresNote) {
+      const needs = document.createElement('div');
+      needs.className = 'what needs';
+      needs.textContent = entry.requiresNote;
+      left.appendChild(needs);
+    }
     row.appendChild(left);
 
     const right = document.createElement('div');
@@ -1758,9 +1857,16 @@ function renderPlan() {
   if (plan.foreign.length > 0) {
     const note = document.createElement('p');
     note.className = 'muted';
+    // A variant made on the watch can never be in a catalogue -- it ships in no
+    // release -- so `describe` is the only thing that can say what it is. The
+    // planner decides whether there is anything to add; the folder alone is all
+    // there is for everything else.
+    const named = plan.foreign.map((f) =>
+      f.describe ? `${f.installed.folder} — ${f.describe}` : f.installed.folder,
+    );
     note.textContent =
       `${plan.foreign.length} app(s) on the watch are not in this catalogue ` +
-      `(${plan.foreign.map((f) => f.folder).join(', ')}). Kira leaves them alone.`;
+      `(${named.join(', ')}). Kira leaves them alone.`;
     list.appendChild(note);
   }
 

@@ -76,6 +76,49 @@ The catalogue is keyed on **AppID**, never on folder or display name. Folder
 names are arbitrary, and display names can contain a path separator — the
 `GlanceARHR` app is really named `AVG / R HR`.
 
+### Variant aliases
+
+Not every `.uapp` is an app. apps-v1.4.0 introduced a **variant alias**: a
+code-less file that makes an *existing* app binary appear in the launcher as a
+separate activity. `Walk` is the first and so far the only one — 4642 bytes of
+its own AppID, its own icons and a 58-byte JSON config, running the `Hike`
+binary and telling it to record FIT sport 11.
+
+Flag bit `0x40` in the header is the only thing that says so. Behind it, in
+place of an app's GUI image, sits a fixed 32-byte descriptor naming the target
+AppID, a minimum target version, whether the variant was shipped by upstream or
+created on the watch, and the length of the config that follows. Kira reads it
+behind a `payloadVersion == 1` gate, the same gate the SDK's own app-side reader
+uses, and publishes what it finds in `catalog.json`. A descriptor that does not
+follow the contract is named as an unreadable alias rather than quietly
+published as an ordinary app — the flag has already settled what the file is.
+
+The **config is carried verbatim and never parsed.** The kernel does not parse
+it either; only the app does, against a `features` vocabulary each app family
+defines for itself, so anything Kira claimed to read out of it beyond its own
+size would be a guess about somebody else's document.
+
+One consequence is worth stating plainly, because it limits what the next
+section can say: **a variant's own bytes cannot tell you whether its behaviour
+changed.** They describe an alias, and what the alias *does* is the target
+binary's. So its line never says `code unchanged` — there is none in it to be
+unchanged — and it names both halves: *"alias unchanged since 1.4.0 · Hike: code
+changed in 1.5.0"*. The second clause is the one that answers the question, and
+it is the target's own line rather than a second derivation of it.
+
+The card says what a variant is and what it needs, and the planner acts on it: a
+variant is offered even when the app it runs is missing or older than its
+declared floor, because an alias without its target is inert rather than harmful
+— the same property that makes one safe on a watch whose firmware predates the
+feature. Choosing it ticks the target too, visibly, and the target is written
+first, so a run interrupted halfway leaves nothing worse than a missing launcher
+entry.
+
+A variant *created on the watch* — the kernel's `CreateVariant`, `origin: user` —
+exists in no release and so can be in no catalogue. It used to be reported as an
+app Kira did not recognise. Its own descriptor says what it is, so it is now
+named as what it is instead.
+
 ### Versions, and a changelog derived from bytes
 
 App versions are **not per-app semver**. `una-version.sh` stamps every app in a
@@ -404,9 +447,11 @@ issued the certificate.
   binary carries is the LibC ABI version, which Kira records in `catalog.json` but
   does **not** show on a card or compare against anything — matching a build to
   your firmware is entirely up to you. The LibC exports are absolute flash
-  addresses, so a mismatch is not a graceful refusal. This was harmless while
-  0.0.3 was the only ABI in the catalogue; apps-v1.4.0 ended that, shipping `Walk`
-  as 0.0.0 against 0.0.3 everywhere else.
+  addresses, so a mismatch is not a graceful refusal. It stays harmless while
+  0.0.3 is the only ABI in the catalogue, which it still is: apps-v1.4.0 stamps
+  `Walk` `0.0.0`, but `Walk` is a [variant alias](#variant-aliases) and carries no
+  code, so it is linked against nothing. That zero is structural rather than a
+  second ABI.
 - **A reboot is required** after installing, and it is not automatable.
 - **Release notes are upstream's, not per-app.** A tag's notes cover the whole
   release, so they may describe apps other than the one you are looking at. The
