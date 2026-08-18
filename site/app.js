@@ -114,7 +114,7 @@ function ejectHint() {
   if (/^win/i.test(platform)) return 'right-click the drive → Eject, or Safely Remove Hardware';
   if (/mac/i.test(platform)) return 'Finder → the eject arrow, or `diskutil eject "UNA WATCH"`';
   if (/linux/i.test(platform)) return '`udisksctl unmount -b /dev/…`, or eject it in your file manager';
-  return "your file manager's eject or unmount — not just unplugging it";
+  return "your file manager's eject or unmount, not just unplugging it";
 }
 
 const state = {
@@ -356,7 +356,7 @@ function renderFirmware() {
   if (isDefault) {
     el('firmware-state').textContent = `Showing apps for firmware ${chosen.label}`;
     el('firmware-help').textContent =
-      'On an older watch? Say so here — Settings → About shows the version.';
+      'On an older watch, say so here. Settings → About shows the version.';
   } else {
     // The count is the point of this line. A catalogue that quietly stopped
     // offering the newest build of a dozen apps would read as a broken one; one
@@ -815,9 +815,9 @@ function renderCard(app, entry) {
     note.className = 'meta variant';
     note.textContent = app.variant;
     note.title =
-      'A variant is packed from a manifest rather than compiled: it carries icons, ' +
-      'a target AppID and a small JSON config, and no code at all. Without the app ' +
-      'it names there is nothing for it to run.';
+      'A variant is packed from a manifest, not compiled. It carries icons, a target ' +
+      'AppID and a small JSON config, but no code, so without the app it names there ' +
+      'is nothing to run.';
     body.appendChild(note);
   }
 
@@ -867,11 +867,11 @@ function renderCard(app, entry) {
       `app refuses to launch on a kernel older than the interface version it carries. ` +
       `It stops before drawing anything, so the app will not open and cannot be exited.\n\n` +
       `Flashing the kernel that matches it fixes this: UNA publish the .ota alongside ` +
-      `each release. An older build of this app, where there is one, is already selected ` +
-      `for you instead.\n\n` +
-      `Kira cannot check any of this against your watch — the kernel version is not in a ` +
-      `.uapp and the watch reports its firmware only over Bluetooth. It is going on what ` +
-      `you told it.`;
+      `each release. Where an older build of this app exists, it is already selected ` +
+      `for you.\n\n` +
+      `Kira cannot check any of this against your watch. The kernel version is not in a ` +
+      `.uapp, and the watch reports its firmware only over Bluetooth, so it is going on ` +
+      `what you told it.`;
     body.appendChild(note);
   } else if (app.kernelUnknown.includes(app.selected)) {
     // The hedge, kept for exactly the case that earns it: a build from a release
@@ -884,8 +884,8 @@ function renderCard(app, entry) {
     note.title =
       `Kira's kernel table has not been checked against ${selected.tag}, which is newer ` +
       `than any release it knows about. A build from it may need a newer kernel than ` +
-      `yours, and nothing in a .uapp says which kernel it needs, so this cannot be ` +
-      `resolved from the binary.`;
+      `yours, and nothing in a .uapp says which kernel it needs, so the binary cannot ` +
+      `settle it.`;
     body.appendChild(note);
   }
 
@@ -911,7 +911,7 @@ function renderCard(app, entry) {
       `for the final or build it yourself. Expect it to be replaced by ${selected.version} proper.\n\n` +
       `A candidate is built against a newer SDK than the last full release, and an ` +
       `app will not launch on a watch whose kernel is older than the SDK it was ` +
-      `built against — it stops before it draws anything. Nothing in a .uapp says ` +
+      `built against: it stops before it draws anything. Nothing in a .uapp says ` +
       `which kernel it needs and the watch only reports its firmware over ` +
       `Bluetooth, so Kira cannot check this for you. If the app does nothing after ` +
       `installing and rebooting, that is the likely reason.`;
@@ -1185,7 +1185,7 @@ function renderConfig(app) {
     const note = document.createElement('p');
     note.className = 'meta config-note bad';
     note.textContent =
-      `That folder belongs to ${foreign}, so Kira will not write to it — the ` +
+      `That folder belongs to ${foreign}, so Kira will not write to it; the ` +
       'settings would land in another app\'s folder.';
     box.appendChild(note);
   } else if (!writable) {
@@ -1399,7 +1399,7 @@ function renderArchive(root, archived, byId) {
   const note = document.createElement('p');
   note.className = 'type-blurb';
   note.textContent =
-    `${reasons.join(' ')} None of them can be installed — the binaries stay here so a ` +
+    `${reasons.join(' ')} None of them can be installed. The binaries stay here so a ` +
     'watch already carrying one can be identified.';
   box.appendChild(note);
 
@@ -1635,8 +1635,8 @@ async function installOne(entry) {
       );
     }
     throw new Error(
-      `short write (${back.size}/${bytes.length}); left in place — it is the only ` +
-        `.uapp in Apps/${app.folder}/, so removing it would take the app off the watch. ` +
+      `short write (${back.size}/${bytes.length}); left in place, since it is the only ` +
+        `.uapp in Apps/${app.folder}/ and removing it would take the app off the watch. ` +
         'Re-install before rebooting.',
     );
   }
@@ -1685,7 +1685,7 @@ async function installAll() {
     log('');
     log('NOT DONE YET — the bytes are in the operating system, not in flash.', 'bad');
     log(`  1. Eject the drive: ${ejectHint()}`, 'bad');
-    log('     Not "Forget this watch" here, and not unplugging it — those skip the flush.');
+    log('     Not "Forget this watch" here, and not unplugging it; those skip the flush.');
     log('  2. Reconnect it, then press "Verify flash".');
     log('  3. Reboot the watch. The launcher list is only rebuilt at boot.');
   }
@@ -1772,7 +1772,7 @@ async function verifyFlash() {
     // verify exists to prevent, in the tier that most needs it.
     if (state.mode !== 'write') {
       log('This browser cannot re-read the watch, so it cannot verify.', 'bad');
-      log('Eject, reconnect, and pick the Apps folder again — that scan is the check.', 'bad');
+      log('Eject, reconnect, and pick the Apps folder again. That scan is the check.', 'bad');
       return;
     }
 
@@ -1810,7 +1810,7 @@ async function verifyFlash() {
     if (stale > 0) {
       log(
         `${stale} app(s) are not the version selected. If you have just installed them, ` +
-          'the write did not reach flash — eject the drive properly and install again.',
+          'the write did not reach flash. Eject the drive properly and install again.',
         'bad',
       );
     }
@@ -1823,7 +1823,7 @@ async function verifyFlash() {
     if (checked > 0 && state.firmware?.isDefault) {
       log(
         'If an app verified here but will not open on the watch, its build may need a newer ' +
-          'kernel than yours — say which firmware you are on, top right.',
+          'kernel than yours. Say which firmware you are on, top right.',
       );
     }
   } finally {
@@ -2082,10 +2082,10 @@ function renderPlan() {
     const why = document.createElement('p');
     why.className = 'muted';
     why.textContent =
-      'Run it and it performs exactly these writes, checking each binary before it ' +
-      'touches the watch and reading it back afterwards before removing anything. ' +
-      'Then eject, reconnect, and pick the Apps folder again — that scan reads cold ' +
-      'flash and is how you verify what landed. Individual binaries can be ' +
+      'Run it and it performs these writes, checking each binary before it touches ' +
+      'the watch and reading it back afterwards before removing anything. Then eject, ' +
+      'reconnect, and pick the Apps folder again: that scan reads cold flash and is ' +
+      'how you verify what landed. Individual binaries can be ' +
       'downloaded per app above, and each row shows the folder it belongs in.';
     // Into the list, which is cleared each render; a sibling of `actions` would
     // accumulate one copy per refresh.
@@ -2311,7 +2311,7 @@ async function connectWithInput(files) {
   await refreshInventory();
   log(`Found ${state.installed.length} installed app(s).`);
   if (state.installed.length === 0) {
-    log("No .uapp files found — did you pick the watch's Apps folder?", 'bad');
+    log("No .uapp files found. Did you pick the watch's Apps folder?", 'bad');
   }
 }
 

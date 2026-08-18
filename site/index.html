@@ -9,16 +9,16 @@
       content="Install and update apps on a USB-connected UNA Watch from your browser. Unofficial."
     />
 
-    <!-- Explicit icon links matter here: the site lives at a /kira/ subpath, and
-         a bare /favicon.ico request would miss it. -->
+    <!-- The site lives at a /kira/ subpath, so a bare /favicon.ico request
+         would miss it. Hence the explicit links. -->
     <link rel="icon" href="favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="img/mark-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="img/mark-16.png" />
     <link rel="apple-touch-icon" href="img/mark-180.png" />
 
-    <!-- Installability is not cosmetic here: Chromium only offers to remember a
-         directory permission across visits for an installed app, which is what
-         saves picking the watch again on every reload. -->
+    <!-- Chromium only offers to remember a directory permission across visits
+         for an installed app, so the manifest is what saves picking the watch
+         again on every reload. -->
     <link rel="manifest" href="manifest.webmanifest" />
     <meta name="theme-color" content="#080808" />
 
@@ -28,22 +28,20 @@
       property="og:description"
       content="Install and update apps on a USB-connected UNA Watch from your browser. Unofficial."
     />
-    <!-- Relative on purpose, so it survives the move to a custom domain. Make it
-         absolute if a scraper that requires that ever matters. -->
+    <!-- Relative so it survives a move to a custom domain. Make it absolute if
+         some scraper ever needs that. -->
     <meta property="og:image" content="img/og-image.png" />
     <meta name="twitter:card" content="summary_large_image" />
 
-    <!-- CONTRIBUTING.md states that this page loads no third-party script,
-         because it holds a read/write handle to your watch while you use it.
-         That was a promise with nothing enforcing it; this enforces it. GitHub
-         Pages will not serve custom headers, so it goes in a meta tag — which
-         covers every directive here, frame-ancestors and sandbox being the two
-         that a meta tag cannot carry.
+    <!-- CONTRIBUTING.md promises this page loads no third-party script, since it
+         holds a read/write handle to your watch while you use it. This enforces
+         the promise. GitHub Pages will not serve custom headers, so it goes in a
+         meta tag, which carries every directive used here (frame-ancestors and
+         sandbox are the two it cannot).
 
-         'wasm-unsafe-eval' is required to instantiate the WebAssembly module;
-         without it the page cannot start. Everything else is same-origin: no
-         CDN, no font service, no analytics, and nothing is ever assigned to
-         innerHTML. -->
+         'wasm-unsafe-eval' is needed to instantiate the WebAssembly module;
+         without it the page cannot start. Everything else is same-origin, with no
+         CDN or font service, and nothing is assigned to innerHTML. -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self';
@@ -70,13 +68,12 @@
           </p>
         </div>
 
-        <!-- The catalogue presents as current firmware, and this is how a watch
-             on an older kernel says so. It sits in the topbar rather than beside
-             the watch panel because it applies whether or not anything is
-             connected -- and because nothing over USB reports the kernel, so it
-             can never be filled in from the device. Hidden until the module has
-             rendered its options: a select with nothing in it is worse than no
-             select at all. -->
+        <!-- The catalogue presents as current firmware; this is how a watch on an
+             older kernel says otherwise. It sits in the topbar because it applies
+             whether or not anything is connected, and because nothing over USB
+             reports the kernel, so it can never be filled in from the device.
+             Hidden until the module has rendered its options, to avoid showing an
+             empty select. -->
         <div id="firmware" class="firmware" hidden>
           <p id="firmware-state" class="firmware-state"></p>
           <label class="firmware-row">
@@ -105,8 +102,8 @@
               <button id="pick" class="primary" type="button" hidden>Connect watch</button>
 
               <!-- Shown only when a stored handle exists whose permission has
-                   lapsed: one click re-grants it, instead of picking the folder
-                   again. app.js fills in the folder name. -->
+                   lapsed: one click re-grants it, so the folder need not be
+                   picked again. app.js fills in the folder name. -->
               <button id="reconnect" class="primary" type="button" hidden></button>
 
               <label id="pick-fallback" class="button" hidden>
@@ -115,21 +112,21 @@
               </label>
 
               <button id="verify" class="ghost" type="button" hidden>Verify flash</button>
-              <!-- Named for what it does. "Disconnect" read like ejecting the drive,
-                   which it has never done -- it forgets the folder and the stored
-                   permission, and a user who pressed it and then pulled the cable
-                   lost the writes still sitting in the cache. -->
+              <!-- This was called "Disconnect", which read like ejecting the drive.
+                   All it does is forget the folder and the stored permission, so
+                   anyone who pressed it and then pulled the cable lost the writes
+                   still sitting in the cache. -->
               <button id="forget" class="ghost" type="button" hidden
-                title="Forgets this watch in the browser. It does not eject the drive — do that in your file manager.">
+                title="Forgets this watch in the browser. It does not eject the drive; do that in your file manager.">
                 Forget this watch
               </button>
             </div>
 
             <p id="readonly-note" class="note" hidden>
-              This browser can read the watch but cannot write to it — only Chromium-based desktop
+              This browser can read the watch but cannot write to it: only Chromium-based desktop
               browsers (Chrome, Edge, Opera) implement the directory-write API. You will get a
-              ready-to-run install script instead. For the same reason this browser cannot remember
-              the folder, so it has to be picked each visit.
+              ready-to-run install script instead. This browser also cannot remember the folder, so
+              it has to be picked each visit.
             </p>
 
             <div id="status" class="status" hidden></div>
@@ -148,9 +145,9 @@
             <div class="row script-row">
               <button id="script-copy" class="ghost" type="button">Copy</button>
               <button id="script-download" class="ghost" type="button">Download</button>
-              <!-- The shell script is first because it is also what an
-                   unrecognised platform falls back to; app.js preselects
-                   whichever one matches and labels it. -->
+              <!-- The shell script is first because an unrecognised platform falls
+                   back to it. app.js preselects whichever one matches and labels
+                   it. -->
               <select id="script-kind">
                 <option value="sh">macOS / Linux — sh</option>
                 <option value="ps1">Windows — PowerShell</option>
@@ -166,17 +163,17 @@
           <h2>Catalogue</h2>
           <span id="catalogue-meta" class="muted"></span>
         </div>
-        <!-- The caveats existed only in README.md, registry/README.md and
-             docs/reproducibility.md — none of which the person about to write an
-             executable to their watch has any reason to open. -->
+        <!-- These caveats used to live only in README.md, registry/README.md and
+             docs/reproducibility.md, which nobody about to write an executable to
+             their watch is going to open. -->
         <p class="what-this-is-not note">
           <strong>Nobody reviews these apps.</strong> Kira compiles most of them from a named
           commit and publishes the recipe, so you can check that a binary came from the source it
-          claims. It cannot tell you whether that source is any good, or safe. Anything marked
-          <em>pre-release</em> is UNA’s own unreleased build, republished as-is with no recipe of
-          Kira’s. There is no code signing on
-          this watch, so integrity here is a SHA-256 against this catalogue plus the file’s own
-          CRC — that catches corruption, not a hostile publisher.
+          claims. Whether that source is any good, or safe, is something Kira cannot tell you.
+          Anything marked <em>pre-release</em> is UNA’s own unreleased build, republished as-is
+          with no recipe of Kira’s. The watch has no code signing, so integrity here is a SHA-256
+          against this catalogue plus the file’s own CRC, which catches corruption but not a
+          hostile publisher.
           <a href="https://github.com/tobymurray/kira/blob/main/docs/reproducibility.md"
             rel="noopener noreferrer" target="_blank">What this does and does not prove →</a>
         </p>
@@ -185,14 +182,14 @@
           <p class="muted">Loading catalogue…</p>
         </div>
 
-        <!-- At the foot of the catalogue on purpose: whoever has just scrolled
-             every app is the person most likely to think theirs belongs here. -->
+        <!-- At the foot of the catalogue, where someone who has just scrolled
+             every app may be thinking theirs belongs here. -->
         <p class="submit-cta">
-          <strong>Your own app can be listed here.</strong> You send a repository, a
-          commit and the SDK release to build against — never a binary. Kira compiles it
-          in the same pinned toolchain as everything above, checks the result against
-          what your <code>CMakeLists.txt</code> declares, and lists it in these same
-          grids with the source and commit shown on its card.
+          <strong>Your own app can be listed here.</strong> You send a repository, a commit
+          and the SDK release to build against, not a binary. Kira compiles it in the same
+          pinned toolchain as everything above, checks the result against what your
+          <code>CMakeLists.txt</code> declares, and lists it in these same grids with the
+          source and commit on its card.
           <a href="https://github.com/tobymurray/kira/blob/main/registry/README.md"
             rel="noopener noreferrer" target="_blank">How to submit an app →</a>
         </p>
@@ -207,8 +204,8 @@
           <p class="muted">
             Upstream publishes no per-app changelog, so these are the release notes for each
             <code>apps-v*</code> tag. Whether a given app’s code actually changed in a release is
-            shown on its card, derived from the binary rather than the prose. Submitted apps do
-            not appear here — they ship on their own schedule, so their notes are on their cards.
+            shown on its card, derived from the binary and not from the prose. Submitted apps
+            ship on their own schedule, so their notes are on their cards.
           </p>
           <div id="release-notes"></div>
         </section>
@@ -222,45 +219,45 @@
             Kira is unofficial, and <strong>not a support channel for UNA&nbsp;Watch</strong>. Anything
             about the watch itself, or how an app behaves once installed, belongs with
             <a href="https://github.com/UNAWatch/una-sdk/issues" rel="noopener noreferrer" target="_blank"
-              >UNA&nbsp;Watch</a>. Everything below is about Kira: this catalogue, and installing from it.
+              >UNA&nbsp;Watch</a>. Everything below is about this catalogue and installing from it.
           </p>
           <ul class="links">
             <li>
               <a href="https://github.com/tobymurray/kira/discussions/new?category=q-a"
-                rel="noopener noreferrer" target="_blank">Ask a question</a>
-              — answers stay searchable for whoever asks next.
+                rel="noopener noreferrer" target="_blank">Ask a question</a>.
+              Answers stay searchable for whoever asks next.
             </li>
             <li>
               <a href="https://github.com/tobymurray/kira/discussions/new?category=ideas"
-                rel="noopener noreferrer" target="_blank">Suggest something</a>
-              — a change, or an app worth carrying.
+                rel="noopener noreferrer" target="_blank">Suggest something</a>:
+              a change, or an app worth carrying.
             </li>
             <li>
               <a href="https://github.com/tobymurray/kira/issues/new/choose"
                 rel="noopener noreferrer" target="_blank">Report a bug</a>
-              — the catalogue, an install, or the site misbehaving.
+              in the catalogue, an install, or the site itself.
             </li>
             <li>
               <a href="https://github.com/tobymurray/kira/blob/main/registry/README.md"
-                rel="noopener noreferrer" target="_blank">Get your own app listed</a>
-              — a commit for Kira to build, not a binary to upload.
+                rel="noopener noreferrer" target="_blank">Get your own app listed</a>.
+              You send a commit for Kira to build, not a binary to upload.
             </li>
             <li>
               <a href="https://github.com/tobymurray/kira/blob/main/SECURITY.md"
-                rel="noopener noreferrer" target="_blank">Report a security problem privately</a>
-              — Kira writes binaries to your watch, so please don’t post those publicly.
+                rel="noopener noreferrer" target="_blank">Report a security problem privately</a>.
+              Kira writes binaries to your watch, so please don’t post those publicly.
             </li>
             <li>
               <a href="https://github.com/tobymurray/kira/blob/main/SECURITY.md#getting-an-app-removed"
-                rel="noopener noreferrer" target="_blank">Ask for an app to be removed</a>
-              — what that does, what it cannot do, and where to go if I’m not answering.
+                rel="noopener noreferrer" target="_blank">Ask for an app to be removed</a>,
+              and see what that does and where to go if I’m not answering.
             </li>
           </ul>
           <p class="muted">
-            All of these need a GitHub account. If that’s a barrier for you, say so in a
+            All of these need a GitHub account. If that’s a barrier, say so in a
             <a href="https://github.com/tobymurray/kira/discussions/new?category=ideas"
-              rel="noopener noreferrer" target="_blank">suggestion</a>
-            — or ask someone who has one to raise it — and another route can be added.
+              rel="noopener noreferrer" target="_blank">suggestion</a>, or ask someone who has
+            one to raise it, and another route can be added.
           </p>
         </section>
       </div>
@@ -271,8 +268,8 @@
         Kira is an independent project. “UNA”, “UNA Watch” and the UNA logo are trademarks of UNA
         Watch Ltd, used here only to state compatibility. Most binaries here were compiled by Kira
         from the UNA SDK’s source and are <strong>not</strong> UNA’s own builds; each card says
-        which it is serving. Both are covered by the SDK’s MIT licence; submitted apps carry their
-        own — see
+        which it is serving. Both are covered by the SDK’s MIT licence, and submitted apps carry
+        their own; see
         <a href="https://github.com/tobymurray/kira/blob/main/THIRD-PARTY.md">THIRD-PARTY.md</a>.
       </p>
       <p>
