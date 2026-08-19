@@ -76,3 +76,9 @@ version = "0.3.0"
 rev     = "b43828b5a4fb0bac1e8ad382404fd7c5c28e7c4b"
 sdk_rev = "apps-v1.4.0"
 notes   = "Both times side by side now -- left is what happens next, right is the one after it, with the countdown under them. That is also the fix for a clipped bottom row in 0.2.0: stacking made height the binding constraint on a panel that is wide and short, and the font was a size too big for the band holding it. Nothing is positioned by hand any more. The arrangement, the font and every box are worked out from the area the kernel reports, which the app now writes to glance.txt."
+
+[[versions]]
+version = "0.3.1"
+rev     = "32673c9757cbf78ea989e8ff440fa2b07d952719"
+sdk_rev = "apps-v1.4.0"
+notes   = "Keeps the left icon clear of the scroll indicator the carousel paints over the glance, which was clipping its edge in 0.3.0. The app reports the glance area to glance.txt and a watch says 240x60 -- so everything but the caption is now inset 18 pixels from the left, and the gaps between icon and time came in to keep the same font size inside the narrower usable width. Same two times, same font, nothing under the bar."
