@@ -64,3 +64,9 @@ version = "0.1.0"
 rev     = "cfada78867c05253c0a554582f79d54ee20697b9"
 sdk_rev = "apps-v1.4.0"
 notes   = "First build. Shows the next sun event and the countdown to it, from a latitude and longitude you set here; nothing is compiled in. The arithmetic is NOAA's, checked against an independent implementation over 107 place-days: worst disagreement 26 s below 55 degrees of latitude, 118 s nearer the poles. Polar days are reported as themselves rather than as a missing time. Not run on a watch yet -- 64 host tests and no panel, so expect a caption a character too wide."
+
+[[versions]]
+version = "0.2.0"
+rev     = "ffdef14da33e6d269149de66250c469e407a050d"
+sdk_rev = "apps-v1.4.0"
+notes   = "Both upcoming events at once, an icon and a time each, in the order they happen -- so once today's sunrise has been, the second row is tomorrow's, and nothing on the card is in the past. The icons replace the words sunrise and sunset, which were spending a third of the panel saying what a picture says, and the caption is now just the countdown. On a kernel that will not grant five controls the words come back instead. Still not run on a watch."
