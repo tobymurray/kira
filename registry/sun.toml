@@ -1,0 +1,66 @@
+# What the sun is going to do next, on one card.
+#
+# A glance answers one question, so this one does: the next event and how long
+# until it -- "sunrise 04:50, in 1h12m, sets 19:17" -- rather than a table of
+# today's two times, which is a screen you would have to open.
+#
+# It knows where it is because you tell it once, in the two boxes below, and
+# that is a better fit for the question than a GNSS fix would be. Sunrise moves
+# about four minutes per degree of longitude, so a position good to 25 km is
+# good to under a minute; 25 km is "which town". A cold fix, meanwhile, takes
+# tens of seconds and real battery, and the carousel stops a glance's service
+# the moment you scroll past -- so a card that tried to locate itself would
+# spend the power and still show nothing. A coordinate typed in February is
+# also exactly as correct in August: the date is an input, not part of the
+# position.
+#
+# What it will not do is guess. With no position it shows two dashes and says
+# so, because the default in a pair of unset coordinates is (0, 0) -- the Gulf
+# of Guinea, where the sun rises at about six all year round and the screen
+# looks perfectly healthy. Above the Arctic circle it says "midnight sun" or
+# "polar night" rather than inventing a time for a day that has neither. And if
+# the watch's time zone stops matching the position -- you flew somewhere, the
+# clock followed, the coordinates did not -- the caption changes to "times are
+# for home", which is the one failure no other part of the app could notice.
+#
+# There is no screen behind it. Tapping the card opens nothing: everything the
+# app has to say is three lines, which is what a glance is for.
+app_id     = "CCAC55621745C147"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "SunGlance"
+folder     = "Sun"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# Both boxes are needed, so both are marked required: without them the app has
+# no position and shows no time at all.
+#
+# Decimal degrees only, and the app is deliberately fussy about them -- it
+# rejects rather than interprets. "45,4215" with a decimal comma, "45.4215N"
+# with a compass letter, and degrees-minutes-seconds are all refused, because a
+# reader lenient enough to accept them would quietly turn the first into 45 and
+# throw away a hemisphere in the second. A file it will not read says so on the
+# card as "input.json rejected"; one it misread would not.
+[config]
+file   = "input.json"
+schema = 1
+
+[[config.fields]]
+path      = "values.lat"
+title     = "Latitude"
+help      = "Decimal degrees, north positive: 45.4215 for Ottawa, -33.8688 for Sydney. Two decimal places is already more precision than sunrise can tell the difference between."
+maxLength = 12
+required  = true
+
+[[config.fields]]
+path      = "values.lon"
+title     = "Longitude"
+help      = "Decimal degrees, east positive: -75.6972 for Ottawa, 151.2093 for Sydney. Mind the minus sign -- west of Greenwich is negative, and dropping it moves sunrise by hours rather than minutes."
+maxLength = 13
+required  = true
+
+[[versions]]
+version = "0.1.0"
+rev     = "cfada78867c05253c0a554582f79d54ee20697b9"
+sdk_rev = "apps-v1.4.0"
+notes   = "First build. Shows the next sun event and the countdown to it, from a latitude and longitude you set here; nothing is compiled in. The arithmetic is NOAA's, checked against an independent implementation over 107 place-days: worst disagreement 26 s below 55 degrees of latitude, 118 s nearer the poles. Polar days are reported as themselves rather than as a missing time. Not run on a watch yet -- 64 host tests and no panel, so expect a caption a character too wide."
