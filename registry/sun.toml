@@ -70,3 +70,9 @@ version = "0.2.0"
 rev     = "ffdef14da33e6d269149de66250c469e407a050d"
 sdk_rev = "apps-v1.4.0"
 notes   = "Both upcoming events at once, an icon and a time each, in the order they happen -- so once today's sunrise has been, the second row is tomorrow's, and nothing on the card is in the past. The icons replace the words sunrise and sunset, which were spending a third of the panel saying what a picture says, and the caption is now just the countdown. On a kernel that will not grant five controls the words come back instead. Still not run on a watch."
+
+[[versions]]
+version = "0.3.0"
+rev     = "b43828b5a4fb0bac1e8ad382404fd7c5c28e7c4b"
+sdk_rev = "apps-v1.4.0"
+notes   = "Both times side by side now -- left is what happens next, right is the one after it, with the countdown under them. That is also the fix for a clipped bottom row in 0.2.0: stacking made height the binding constraint on a panel that is wide and short, and the font was a size too big for the band holding it. Nothing is positioned by hand any more. The arrangement, the font and every box are worked out from the area the kernel reports, which the app now writes to glance.txt."
