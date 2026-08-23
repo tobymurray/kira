@@ -23,6 +23,9 @@ RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
       bash git curl ca-certificates jq \
       cmake make \
       python3-full python3-pip python-is-python3 \
+      # The SDK's app packer imports both, and cmake runs it after every app
+      # links, so an image without them can pack nothing.
+      python3-pyelftools python3-pil \
  && rm -rf /var/lib/apt/lists/*
 
 # The image ships these unexecutable, and every job had to fix that itself.
