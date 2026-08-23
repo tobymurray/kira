@@ -1,5 +1,21 @@
 # A watch app whose GUI is drawn by Rust and embedded-graphics through the SDK's
 # CustomGUI entry point, instead of TouchGFX.
+#
+# It exists to answer whether that is worth doing, so it carries the two things
+# that decide it. A live accelerometer, because a GUI process on this platform
+# cannot read a sensor at all -- the Service half owns it and hands samples over
+# the message bus, which is the path any real app has to use and the half a
+# rendering demo cannot show. And a split screen of one luminance ramp quantised
+# two ways: the panel has four levels per channel, so the left half can only be
+# four bands, and the right half is ordered-dithered and reads as a gradient.
+# TouchGFX ships a texture mapper, a gradient painter and anti-aliased vector
+# shapes for this pixel format, and no dithering at all, so it draws the left
+# half.
+#
+# The GUI half links no TouchGFX and uses 111 KB of the 600 KiB the kernel gives
+# a GUI process, against 492 KB for a TouchGFX activity of comparable scope, both
+# read off linker maps. App code executes from RAM on this platform, so that is
+# budget returned rather than flash saved.
 app_id     = "0DA61D462A61222A"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "RustGuiPoc"
@@ -18,3 +34,9 @@ version = "0.2.0"
 rev     = "9c3f7f25ea0170d9a0cfc21b073185f41ed601f6"
 sdk_rev = "apps-v1.3.0"
 notes   = "The bottom-right button now exits the app. 0.1.0 handled no button but screen-cycling and owned the message loop, so the only way out of it was rebooting the watch."
+
+[[versions]]
+version = "0.11.0"
+rev     = "127191508da9faa2dd8e62e30d125ea92ede5468"
+sdk_rev = "apps-v1.4.0"
+notes   = "First version to do anything real: a live accelerometer over the Service-to-GUI message path, and a dithered-gradient screen showing what the panel can do that a widget toolkit will not. Built against 1.4 and will not launch on a 1.3 kernel; 0.1.0 and 0.2.0 were built against 1.3 and still run on 1.4, since an app is refused only by a kernel older than itself. 0.3.0 to 0.10.0 were development builds and were never published."
