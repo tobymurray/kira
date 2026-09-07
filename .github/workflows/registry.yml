@@ -32,6 +32,36 @@ permissions:
   contents: read
   packages: read
 
+# Queue rather than supersede, and unlike the catalogue build that is not a
+# preference. This workflow is the only thing that writes the shared binary
+# store, and each run's uploads are wanted: a run reads the store's asset list
+# once at the start of its upload job, so two runs in flight both believe an
+# asset is missing and both call `gh release upload` for it. One then fails on a
+# duplicate name -- `--clobber` is deliberately absent, because the case it would
+# paper over is the case worth failing on -- which reports a red run for a store
+# that is actually fine.
+#
+# Cancelling the older run instead would be worse. A superseded run's artifacts
+# are not always a subset of its successor's: the two plans are computed from
+# whatever the manifests said at each commit, so killing the first can drop
+# binaries nothing else will build until somebody notices the store is short.
+#
+# Three runs were in flight at once when this was written -- two pushes and a
+# pull request -- and they serialised by luck rather than by design.
+# Two lanes, because the two kinds of run have opposite needs.
+#
+# A push or a dispatch writes the store, and those queue: one lane, no
+# cancelling. A pull request writes nothing -- its publish job is gated on main --
+# so it gets a lane per pull request and supersedes itself, which is the ordinary
+# thing to want when somebody pushes a fix to a branch. Sharing one lane would
+# make a contributor's build wait behind a merge for no reason.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request'
+        && format('submissions-pr-{0}', github.event.number)
+        || 'app-binaries-store' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   # Pinned by digest, so a submission builds under the same compiler as
