@@ -95,6 +95,19 @@ pub(crate) struct Entry {
     pub notes: Option<String>,
 }
 
+/// A key kept in the schema only so an older manifest still parses.
+///
+/// Swallows whatever it was given and records nothing but that it was there,
+/// which is all any check needs and all that keeps [`Manifest`] comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Obsolete;
+
+impl<'de> Deserialize<'de> for Obsolete {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer).map(|_| Self)
+    }
+}
+
 /// A submitted app, as declared in `registry/<slug>.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,6 +131,21 @@ pub(crate) struct Manifest {
     pub maintainer: String,
     /// Every version to publish, in any order.
     pub versions: Vec<Entry>,
+    /// The settings declaration that used to live here.
+    ///
+    /// Accepted only so that a manifest written before the SDK landed app
+    /// configuration still *parses*. [`check_unchanged`] loads the base
+    /// revision's manifests with today's parser, and `deny_unknown_fields` above
+    /// means a key that simply vanished from the schema made every manifest from
+    /// before the transition unreadable -- which took the rule about a published
+    /// version's source never moving down with it, since that comparison cannot
+    /// run against a base it cannot load.
+    ///
+    /// Refused by name in [`check_one`], which is a better error than a TOML
+    /// one: silently ignoring it would leave a submitter believing the page was
+    /// writing a file it was not.
+    #[serde(default)]
+    pub config: Option<Obsolete>,
     /// Why the whole app was withdrawn, if it was.
     ///
     /// This is how a listing comes down. Deleting the manifest is not: an app
@@ -259,6 +287,16 @@ fn check_one(manifest: &Manifest, problems: &mut Vec<Problem>) {
                 "subdir {subdir:?} must be a relative path inside the repository"
             ));
         }
+    }
+
+    if manifest.config.is_some() {
+        say(
+            "config is no longer declared here: an app's settings live in its own \
+             app-manifest.json, which Kira reads at the commit each version pins. Move the \
+             block there -- the file the watch reads does not change -- and see \
+             registry/README.md"
+                .to_owned(),
+        );
     }
 
     check_folder(manifest, &mut say);
@@ -479,7 +517,16 @@ pub(crate) fn check_unchanged(
     published: &BTreeMap<AppId, Owner>,
 ) -> Vec<Problem> {
     let mut problems = Vec::new();
-    let index: BTreeMap<&str, &Manifest> = after.iter().map(|m| (m.slug.as_str(), m)).collect();
+    // Keyed on the AppID, not on the slug. What the rule protects is an app
+    // identity: a published version of *this app* must go on naming the source it
+    // was built from. The file it is declared in is not part of that -- renaming
+    // `barcode.toml` to `barcode-old-id.toml` and starting a new listing under
+    // the clean name moves no artifact and repoints no version, but keyed on the
+    // slug it read as the old listing having swapped its AppID and dropped its
+    // published version. [`check_against_published`] already asks the same
+    // question by AppID, against what is actually served; this is now the same
+    // question asked of git history rather than a different one.
+    let index: BTreeMap<AppId, &Manifest> = after.iter().map(|m| (m.app_id, m)).collect();
 
     for old in before {
         // Nothing to protect: this app has never reached the catalogue, so no
@@ -488,29 +535,32 @@ pub(crate) fn check_unchanged(
         if !published.contains_key(&old.app_id) {
             continue;
         }
-        let Some(new) = index.get(old.slug.as_str()) else {
+        let Some(new) = index.get(&old.app_id) else {
             problems.push(Problem {
                 slug: old.slug.clone(),
-                message: "manifest was removed; retire an app by adding versions, not by \
-                          deleting it, so a watch carrying it is still recognised"
-                    .to_owned(),
+                message: format!(
+                    "no manifest claims AppID {} any more; retire an app by giving a \
+                     reason, not by deleting it, so a watch carrying it is still \
+                     recognised",
+                    old.app_id
+                ),
             });
             continue;
         };
 
-        if new.app_id != old.app_id {
-            problems.push(Problem {
-                slug: old.slug.clone(),
-                message: format!(
-                    "AppID changed from {} to {}, which makes this a different app",
-                    old.app_id, new.app_id
-                ),
-            });
-        }
+        // Worth saying out loud when something else about the app is wrong: the
+        // two problems read very differently depending on whether the listing
+        // moved file.
+        let moved = (new.slug != old.slug).then(|| format!(" (now {})", new.slug));
+        let moved = moved.unwrap_or_default();
+
         if new.source != old.source {
             problems.push(Problem {
                 slug: old.slug.clone(),
-                message: format!("source changed from {} to {}", old.source, new.source),
+                message: format!(
+                    "source changed from {} to {}{moved}",
+                    old.source, new.source
+                ),
             });
         }
 
@@ -518,7 +568,7 @@ pub(crate) fn check_unchanged(
             match new.versions.iter().find(|e| e.version == entry.version) {
                 None => problems.push(Problem {
                     slug: old.slug.clone(),
-                    message: format!("published version {} was removed", entry.version),
+                    message: format!("published version {} was removed{moved}", entry.version),
                 }),
                 Some(now)
                     if now.rev != entry.rev
@@ -528,9 +578,9 @@ pub(crate) fn check_unchanged(
                     problems.push(Problem {
                         slug: old.slug.clone(),
                         message: format!(
-                            "version {} was already published from {} at {}; publish a new \
-                             version instead of repointing this one — if the app moved, set \
-                             subdir on the new version and leave this one alone",
+                            "version {} was already published from {} at {}{moved}; publish \
+                             a new version instead of repointing this one — if the app moved, \
+                             set subdir on the new version and leave this one alone",
                             entry.version,
                             entry.rev,
                             old.subdir_for(entry)
@@ -1031,25 +1081,103 @@ sdk_rev = "apps-v1.3.0"
              [[config.fields]]\npath = \"values.id\"\ntitle = \"Id\"\nmaxLength = 8\n\n\
              [[versions]]",
         );
-        let err = parse("tide-clock", &text).expect_err("no longer a key here");
-        assert!(format!("{err:#}").contains("config"), "{err:#}");
+        // It still parses, deliberately: `check_unchanged` reads the base
+        // revision's manifests with this parser, and every manifest from before
+        // the SDK landed app configuration has one of these. A parse error there
+        // would take the rule about a published version's source never moving
+        // with it -- which is exactly what it did the first time this shipped.
+        let manifest = parse("tide-clock", &text).expect("an older manifest still parses");
+        let problems = checked(&manifest);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("config is no longer declared here")),
+            "{problems:?}"
+        );
+    }
+
+    /// Renaming the file a published listing lives in changes no recipe.
+    ///
+    /// The case that made this matter: an app given a new `AppID` needs a second
+    /// listing, the clean slug goes to the app still on offer, and the old
+    /// identity moves to `<slug>-old-id.toml` keeping every version it published.
+    /// Keyed on the slug that read as one listing swapping its `AppID` and
+    /// dropping its published version -- two of the three things this check
+    /// exists to refuse, reported about a change that moved nothing.
+    #[test]
+    fn a_published_listing_may_move_to_a_different_file() {
+        let before = vec![good()];
+
+        let mut renamed = good();
+        renamed.slug = "tide-clock-old-id".into();
+        renamed.retired = Some("UNA assigned this app a registered AppID".into());
+
+        let mut current = good();
+        current.slug = "tide-clock".into();
+        current.app_id = AppId::new(0x4095_06B8_B69E_C13E);
+        current.versions[0].version = Version::new(2, 0, 0);
+        current.versions[0].rev = "f".repeat(40);
+
+        assert!(
+            check_unchanged(&before, &[renamed.clone(), current], &live()).is_empty(),
+            "the published identity is still claimed, by the same source at the same commit"
+        );
+
+        // What it must still catch, through the rename: the moved listing
+        // repointing the version it already published.
+        let mut repointed = renamed;
+        repointed.versions[0].rev = "e".repeat(40);
+        let problems = check_unchanged(&before, &[repointed], &live());
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("already published")
+                    && p.message.contains("now tide-clock-old-id")),
+            "{problems:?}"
+        );
+    }
+
+    /// The transition this has to survive: a base revision carrying the old key,
+    /// compared against a current one that does not.
+    #[test]
+    fn a_base_revision_from_before_the_move_can_still_be_compared_against() {
+        let before = parse(
+            "tide-clock",
+            &GOOD.replace(
+                "[[versions]]",
+                "[config]\nfile = \"input.json\"\nschema = 1\n\n\
+                 [[config.fields]]\npath = \"values.id\"\ntitle = \"Id\"\nmaxLength = 8\n\n\
+                 [[versions]]",
+            ),
+        )
+        .expect("the older manifest parses");
+        let after = good();
+        assert_eq!(before.app_id, after.app_id);
+        assert!(
+            check_unchanged(&[before], &[after], &live()).is_empty(),
+            "dropping the obsolete block is not a change to the recipe"
+        );
     }
 
     #[test]
     fn a_manifest_cannot_be_deleted_or_have_its_identity_swapped() {
         let before = vec![good()];
+        let gone = check_unchanged(&before, &[], &live());
+        assert!(gone[0].message.contains("no manifest claims"), "{gone:?}");
         assert!(
-            check_unchanged(&before, &[], &live())[0]
-                .message
-                .contains("was removed")
+            gone[0].message.contains(&before[0].app_id.to_string()),
+            "the message names the identity nothing claims: {gone:?}"
         );
 
+        // Swapping the id under the same file is refused for the same reason
+        // rather than a special one: the published identity has stopped being
+        // claimed by anything, whatever the file it used to live in now says.
         let mut after = good();
         after.app_id = AppId::new(0xDEAD_BEEF_DEAD_BEEF);
         assert!(
             check_unchanged(&before, &[after], &live())
                 .iter()
-                .any(|p| p.message.contains("different app"))
+                .any(|p| p.message.contains("no manifest claims"))
         );
     }
 
@@ -1108,7 +1236,7 @@ sdk_rev = "apps-v1.3.0"
         assert!(
             check_unchanged(&before, &[], &live())[0]
                 .message
-                .contains("was removed")
+                .contains("no manifest claims")
         );
 
         // And a retired app is still buildable, so its binary can be recognised.
@@ -1159,7 +1287,7 @@ sdk_rev = "apps-v1.3.0"
         assert!(
             check_unchanged(&before, &[], &live())[0]
                 .message
-                .contains("was removed")
+                .contains("no manifest claims")
         );
     }
 

@@ -363,8 +363,12 @@ jobs:
           # catalogue build can see one -- it fetches no source of its own.
           if retry gh release download "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" -D built --clobber \
                --pattern '*.uapp' --pattern '*.manifest.json' 2>/dev/null; then
-            binaries=$(ls built/*.uapp 2>/dev/null | wc -l | tr -d ' ')
-            declared=$(ls built/*.manifest.json 2>/dev/null | wc -l | tr -d ' ')
+            # `find`, not `ls` with a glob: under `pipefail` an unmatched glob
+            # makes the whole assignment fail and takes the step with it, and
+            # "no declarations stored yet" is the ordinary state on the first
+            # run after they were introduced.
+            binaries=$(find built -maxdepth 1 -name '*.uapp' | wc -l | tr -d ' ')
+            declared=$(find built -maxdepth 1 -name '*.manifest.json' | wc -l | tr -d ' ')
             echo "$binaries built binaries and $declared stored declarations available"
           else
             echo "no $BINARIES_TAG release; publishing upstream binaries throughout"
