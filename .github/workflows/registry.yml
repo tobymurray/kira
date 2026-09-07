@@ -352,7 +352,22 @@ jobs:
     name: Upload to the app-binaries store
     needs: [check, build]
     # Merging to main is what publishes; a pull request builds and stops.
-    if: github.event_name == 'push' && needs.check.outputs.builds != '0'
+    #
+    # A dispatch on main publishes too, and that is not a widening of who may
+    # publish: dispatching needs write access to this repository, and anyone
+    # holding it could push the same commit instead. What it buys is a way to
+    # repair the store. A run that failed before its upload leaves the store
+    # missing artifacts the catalogue then reports as unpublished versions, and
+    # until this the only way to ask for them again was to push a commit
+    # touching `registry/**` with nothing to say -- which is a lie in the history
+    # to work around a gap in the pipeline. Gated on `main` explicitly, because
+    # `push` is gated to that branch by its own trigger and a dispatch can name
+    # any ref.
+    if: >-
+      needs.check.outputs.builds != '0'
+      && (github.event_name == 'push'
+          || (github.event_name == 'workflow_dispatch'
+              && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
