@@ -94,6 +94,25 @@ impl Recipe {
             self.key()
         )
     }
+
+    /// Name of the cached declaration that goes with this recipe's artifact.
+    ///
+    /// The app's `app-manifest.json`, wrapped so that "declares nothing" is
+    /// sayable, stored beside the binary and keyed by the same recipe. It has to
+    /// be stored rather than derived later: the declaration comes out of the
+    /// source at the pinned commit, and the catalogue build reads the artifact
+    /// store rather than fetching anybody's source.
+    ///
+    /// See [`crate::app_manifest::Sidecar`].
+    #[must_use]
+    pub(crate) fn manifest_name(&self, label: &str) -> String {
+        format!(
+            "{}-{}-{}.manifest.json",
+            sanitise(label),
+            self.build_version,
+            self.key()
+        )
+    }
 }
 
 /// Keep a label safe for a flat asset name.
@@ -129,6 +148,14 @@ pub(crate) struct Wanted {
     /// Still built: a withdrawn app keeps its binary so a watch carrying it can
     /// be recognised and its owner told why.
     pub retired: Option<String>,
+    /// Whether the store should also hold this build's `app-manifest.json`.
+    ///
+    /// True for a submission, whose source Kira checks out and can read one
+    /// from. False for an SDK app: upstream's release zips carry binaries and
+    /// nothing else, and its example apps declare no configuration, so there is
+    /// no declaration to store and no reason to rebuild every cached artifact to
+    /// find that out.
+    pub wants_manifest: bool,
 }
 
 /// What to do about a wanted artifact.
@@ -154,12 +181,21 @@ impl Action {
 ///
 /// `available` is the set of asset names already in the cache. Pure, so the
 /// network stays in the workflow and this stays testable.
+///
+/// A submission whose binary is cached but whose declaration is not still has to
+/// be built, because the declaration is only readable from the source and the
+/// build is what has it. That rebuild produces the same bytes and the upload
+/// step skips an asset already in the store, so the cost is one build per app,
+/// once.
 pub(crate) fn plan(wanted: &[Wanted], available: &BTreeSet<String>) -> Vec<(Wanted, Action)> {
     wanted
         .iter()
         .map(|item| {
             let name = item.recipe.artifact_name(&item.folder);
-            let action = if available.contains(&name) {
+            let have_binary = available.contains(&name);
+            let have_manifest = !item.wants_manifest
+                || available.contains(&item.recipe.manifest_name(&item.folder));
+            let action = if have_binary && have_manifest {
                 Action::Fetch(name)
             } else {
                 Action::Build(name)
@@ -212,6 +248,7 @@ pub(crate) fn wanted_from_sdk(
             app_id: declared.app_id,
             folder: folder.clone(),
             retired: None,
+            wants_manifest: false,
             recipe: Recipe {
                 app_source: format!("sdk:{sdk_rev}:Examples/Apps/{folder}"),
                 sdk_rev: sdk_rev.to_owned(),
@@ -233,6 +270,14 @@ pub(crate) struct PlanItem {
     pub version: String,
     pub recipe: String,
     pub asset: String,
+    /// Asset name for this build's stored declaration, when it has one.
+    ///
+    /// Named in the plan because the plan is the only statement of what a run is
+    /// allowed to upload: the workflow uploads the names it asked for and
+    /// nothing else, so a declaration that is not listed here cannot reach the
+    /// store however it got onto the runner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_asset: Option<String>,
     /// `"fetch"` or `"build"`, for a workflow to branch on.
     pub action: &'static str,
     /// Canonical source identity, e.g. `git:https://host/repo@<sha>:<subdir>`.
@@ -258,6 +303,9 @@ pub(crate) fn plan_items(planned: &[(Wanted, Action)]) -> Vec<PlanItem> {
             version: wanted.recipe.build_version.to_string(),
             recipe: wanted.recipe.key(),
             asset: action.asset().to_owned(),
+            manifest_asset: wanted
+                .wants_manifest
+                .then(|| wanted.recipe.manifest_name(&wanted.folder)),
             action: match action {
                 Action::Fetch(_) => "fetch",
                 Action::Build(_) => "build",
@@ -383,12 +431,14 @@ mod tests {
                 folder: "Alarm".into(),
                 recipe: recipe(),
                 retired: None,
+                wants_manifest: false,
             },
             Wanted {
                 app_id: AppId::new(0xA135_8F7C_2E9D_4BA6),
                 folder: "GlanceHR".into(),
                 recipe: recipe(),
                 retired: None,
+                wants_manifest: false,
             },
         ];
         let available = BTreeSet::from([wanted[0].recipe.artifact_name(&wanted[0].folder)]);
@@ -409,6 +459,7 @@ mod tests {
             folder: "Alarm".into(),
             recipe: recipe(),
             retired: None,
+            wants_manifest: false,
         };
         let available = BTreeSet::from([old.recipe.artifact_name(&old.folder)]);
 
@@ -420,12 +471,73 @@ mod tests {
     }
 
     #[test]
+    fn a_submission_whose_declaration_is_not_cached_is_built_again() {
+        // The binary is in the store and the declaration is not, which is every
+        // app in the catalogue the day this landed. The bytes come out the same;
+        // what the rebuild is for is reading `app-manifest.json` at the pinned
+        // commit, which only the build has the source for.
+        let item = Wanted {
+            app_id: ALARM,
+            folder: "Barcode".into(),
+            recipe: recipe(),
+            retired: None,
+            wants_manifest: true,
+        };
+        let binary_only = BTreeSet::from([item.recipe.artifact_name(&item.folder)]);
+        assert!(matches!(
+            plan(std::slice::from_ref(&item), &binary_only)[0].1,
+            Action::Build(_)
+        ));
+
+        let both = BTreeSet::from([
+            item.recipe.artifact_name(&item.folder),
+            item.recipe.manifest_name(&item.folder),
+        ]);
+        assert!(matches!(
+            plan(std::slice::from_ref(&item), &both)[0].1,
+            Action::Fetch(_)
+        ));
+
+        // An SDK app wants none, so a cached binary is enough on its own.
+        let sdk = Wanted {
+            wants_manifest: false,
+            ..item.clone()
+        };
+        assert!(matches!(plan(&[sdk], &binary_only)[0].1, Action::Fetch(_)));
+    }
+
+    #[test]
+    fn the_declaration_is_named_in_the_plan_only_when_one_is_wanted() {
+        let submission = Wanted {
+            app_id: ALARM,
+            folder: "Barcode".into(),
+            recipe: recipe(),
+            retired: None,
+            wants_manifest: true,
+        };
+        let items = plan_items(&plan(std::slice::from_ref(&submission), &BTreeSet::new()));
+        assert_eq!(
+            items[0].manifest_asset.as_deref(),
+            Some(submission.recipe.manifest_name("Barcode").as_str())
+        );
+        assert_eq!(items[0].asset, submission.recipe.artifact_name("Barcode"));
+
+        let sdk = Wanted {
+            wants_manifest: false,
+            ..submission
+        };
+        let items = plan_items(&plan(&[sdk], &BTreeSet::new()));
+        assert!(items[0].manifest_asset.is_none());
+    }
+
+    #[test]
     fn an_empty_cache_builds_everything() {
         let wanted = vec![Wanted {
             app_id: ALARM,
             folder: "Alarm".into(),
             recipe: recipe(),
             retired: None,
+            wants_manifest: false,
         }];
         let planned = plan(&wanted, &BTreeSet::new());
         assert!(matches!(planned[0].1, Action::Build(_)));

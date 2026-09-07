@@ -42,58 +42,24 @@ maintainer = "tobymurray"
 
 # Every field is optional and the app records a useful night with no file at
 # all -- the defaults are the most informative run, not the cheapest, because a
-# first night with everything subscribed answers the most questions.
+# first night with everything subscribed answers the most questions. What it
+# reads is probe.json in its own folder.
 #
-# Leave a box blank and the default stands. A value outside its range is
-# refused rather than clamped: clamping turns a typo into a silently different
-# experiment, recording a night at some rate nobody chose while the log looks
-# perfectly healthy.
-[config]
-file   = "probe.json"
-schema = 1
-
-[[config.fields]]
-path      = "values.hr"
-title     = "Heart rate"
-help      = "Type continuous, off, or duty. Leave blank for continuous. Run one night on continuous and one on off -- the difference between them is what overnight heart rate costs, which is the single number that decides whether a sleep app can afford it."
-maxLength = 10
-
-[[config.fields]]
-path      = "values.hr_duty_on_sec"
-title     = "Duty: seconds on"
-help      = "Only read when heart rate is set to duty. Leave blank for 60. Must be less than the period below, or the mode falls back to continuous and says so."
-maxLength = 4
-
-[[config.fields]]
-path      = "values.hr_duty_per_sec"
-title     = "Duty: seconds per cycle"
-help      = "Only read when heart rate is set to duty. Leave blank for 300, so heart rate is on for one minute in five."
-maxLength = 4
-
-[[config.fields]]
-path      = "values.accel_period_ms"
-title     = "Accelerometer period (ms)"
-help      = "Leave blank for 40, which asks for 25 Hz. It is a request, not a promise -- what the watch actually delivers is what this app exists to measure, and the two are not the same number."
-maxLength = 4
-
-[[config.fields]]
-path      = "values.accel_latency_ms"
-title     = "Accelerometer batching (ms)"
-help      = "How long the watch may hold samples before delivering them in one go. Leave blank for 5000. Without batching, 25 Hz is 25 wake-ups a second for eight hours, which is itself part of what is being measured."
-maxLength = 5
-
-[[config.fields]]
-path      = "values.spo2"
-title     = "Record SpO2"
-help      = "Type off to skip it. Leave blank or type on. Whether the firmware produces a single SpO2 sample is unknown, and one night settles it -- which is the entire reason this box is on by default."
-maxLength = 8
-
-[[config.fields]]
-path      = "values.ppg"
-title     = "Record raw PPG"
-help      = "Type on to subscribe the raw optical waveform as well. Leave blank for off: 20 Hz all night is a great deal of traffic to answer a question a short run answers just as well."
-maxLength = 8
-
+# There is no form for it on the card any more. A settings form now comes out of
+# the app's own `app-manifest.json`, read at the commit the binary was built
+# from, so it is part of the recipe rather than a claim made in this file, and
+# the Probe has no manifest yet.
+#
+# What the declaration should say, when it is written: `hr` as a string with a
+# pattern of `(?:[Cc]ontinuous|[Oo]ff|[Dd]uty)` and a default of `continuous`;
+# `hr_duty_on_sec` and `hr_duty_per_sec` as ints defaulting to 60 and 300;
+# `accel_period_ms` and `accel_latency_ms` as ints defaulting to 40 and 5000; and
+# `spo2` and `ppg` as bools defaulting to on and off. Four of those are typed
+# words here only because this convention had no other type -- the SDK's model
+# has bools and bounded ints, so the range checks the app repeats on the watch
+# would be in the declaration where the form can enforce them, and a rate nobody
+# chose could not be typed in the first place.
+#
 [[versions]]
 version = "0.1.0"
 rev     = "9b37dbf45d80dc23192bf1d639ecf351590198ac"

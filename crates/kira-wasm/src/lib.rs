@@ -152,6 +152,100 @@ pub fn source_ref(app_source: &str) -> Result<JsValue, JsError> {
     }
 }
 
+/// A settings declaration, flattened by hand for the boundary.
+///
+/// The catalogue carries a field in the shape `app-manifest.json` uses, which
+/// puts the per-type keys behind `#[serde(flatten)]` — and `serde_wasm_bindgen`
+/// turns a flattened struct into a `Map` rather than an object, so every
+/// property reads as `undefined` on the far side. It does not fail, which is the
+/// unpleasant part: the page renders a row per field with no label and a text
+/// box for a switch. So the crossing is spelled out here, the same way
+/// [`AppView`] spells out an app.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigView<'a> {
+    file: &'a str,
+    fields: Vec<FieldView<'a>>,
+}
+
+/// One field of a declaration, as the form needs it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FieldView<'a> {
+    id: &'a str,
+    label: &'a str,
+    description: &'a str,
+    required: bool,
+    validation_message: Option<&'a str>,
+    /// `string`, `bool`, `int` or `float`: which control the field gets.
+    #[serde(rename = "type")]
+    field_type: &'static str,
+    /// The app's own default, as an input would hold it.
+    ///
+    /// Text for every type, including a number, because that is what an input
+    /// holds and what `configCheck` takes — and because formatting it here means
+    /// the page shows exactly the digits Kira would write back.
+    default: String,
+    /// Rendered after the input, and never part of the value.
+    unit: Option<&'a str>,
+    /// Bounds for a number, for the element's own `min` and `max`.
+    min: Option<f64>,
+    /// Upper bound for a number.
+    max: Option<f64>,
+    /// Shortest usable string, in UTF-8 bytes.
+    min_length: Option<usize>,
+    /// Longest string, in UTF-8 bytes.
+    max_length: Option<usize>,
+    /// The dialect-checked expression, carried for display alone: matching is
+    /// `configCheck`'s job, so the page never compiles this.
+    pattern: Option<&'a str>,
+}
+
+impl<'a> ConfigView<'a> {
+    fn of(spec: &'a config::Spec) -> Self {
+        Self {
+            file: &spec.file,
+            fields: spec.fields.iter().map(FieldView::of).collect(),
+        }
+    }
+}
+
+impl<'a> FieldView<'a> {
+    fn of(field: &'a config::Field) -> Self {
+        let (min, max) = match &field.kind {
+            config::Kind::Int { min, max, .. } => (Some(f64::from(*min)), Some(f64::from(*max))),
+            config::Kind::Float { min, max, .. } => (Some(f64::from(*min)), Some(f64::from(*max))),
+            config::Kind::String { .. } | config::Kind::Bool { .. } => (None, None),
+        };
+        let (min_length, max_length, pattern) = match &field.kind {
+            config::Kind::String {
+                min_length,
+                max_length,
+                pattern,
+                ..
+            } => (Some(*min_length), Some(*max_length), pattern.as_deref()),
+            config::Kind::Bool { .. } | config::Kind::Int { .. } | config::Kind::Float { .. } => {
+                (None, None, None)
+            }
+        };
+        Self {
+            id: &field.id,
+            label: &field.label,
+            description: &field.description,
+            required: field.required,
+            validation_message: field.validation_message.as_deref(),
+            field_type: field.kind.type_name(),
+            default: field.default_text(),
+            unit: field.unit(),
+            min,
+            max,
+            min_length,
+            max_length,
+            pattern,
+        }
+    }
+}
+
 /// An app with its rendered history line, ready to display.
 ///
 /// Fields are listed rather than flattened from [`App`]: `serde_wasm_bindgen`
@@ -195,8 +289,15 @@ struct AppView<'a> {
     /// Who publishes this app, when it is not upstream's. Its presence is what
     /// makes an entry a submission; it is not a rank.
     publisher: Option<&'a catalog::Publisher>,
-    /// A settings file the app reads from its own folder, if it declares one.
-    config: Option<&'a config::Spec>,
+    /// The settings file the *selected build* reads from its own folder, if its
+    /// source declared one.
+    ///
+    /// The selected build rather than the app, because that is what it is
+    /// derived from: the declaration comes out of the `app-manifest.json` at the
+    /// commit that version was built from, and an update may add a field, drop
+    /// one or re-specify it. A card offering the newest declaration beside an
+    /// older binary would write keys that build never reads.
+    config: Option<ConfigView<'a>>,
     /// Why the app is no longer offered, if it is not.
     retired: Option<&'a str>,
     /// Labels of this app's builds that will not start on the firmware the view
@@ -470,7 +571,7 @@ impl Store {
                     ambiguous_name: self.ambiguous.contains(&app.name),
                     superseded_by: app.superseded_by,
                     publisher: app.publisher.as_ref(),
-                    config: app.config.as_ref(),
+                    config: chosen.config.as_ref().map(ConfigView::of),
                     retired: app.retired.as_deref(),
                     needs_newer_kernel: app
                         .versions
@@ -695,28 +796,35 @@ impl Store {
         }
     }
 
-    /// Why one value is unusable, or nothing when it is fine.
+    /// Why one answer is unusable, or nothing when it is fine.
     ///
     /// Separate from [`Self::config_document`] so the form can say what is wrong
     /// beside the field it is wrong about, while it is being typed, rather than
-    /// only at the point of writing to a watch.
+    /// only at the point of writing to a watch. Every rule the SDK fixes lives
+    /// here rather than in the page — the check order, byte lengths, bounds and
+    /// the pattern dialect — so that what the form refuses and what
+    /// [`Self::config_document`] refuses cannot drift apart.
+    ///
+    /// An empty answer to an optional field is fine and means "not set", which
+    /// is how a value is reset to the app's own default.
     ///
     /// # Errors
-    /// If the app is unknown, declares no config, or has no such field — all of
-    /// which are page bugs rather than anything the user did.
+    /// If the app is unknown, its selected build declares no settings, or it has
+    /// no such field — all of which are page bugs rather than anything the user
+    /// did.
     #[wasm_bindgen(js_name = configCheck)]
     pub fn config_check(
         &self,
         app_id: &str,
-        path: &str,
+        id: &str,
         value: &str,
     ) -> Result<Option<String>, JsError> {
         let spec = self.config_spec(app_id)?;
         let field = spec
             .fields
             .iter()
-            .find(|f| f.path == path)
-            .ok_or_else(|| JsError::new(&format!("{app_id} declares no field {path}")))?;
+            .find(|f| f.id == id)
+            .ok_or_else(|| JsError::new(&format!("{app_id} declares no field {id}")))?;
         Ok(config::check_value(field, value).err())
     }
 
@@ -726,9 +834,14 @@ impl Store {
     /// are: it is the part where a mistake reaches a device, and here it is
     /// covered by tests that run without a browser.
     ///
+    /// `values` is keyed by field id, and an id the page has nothing for is the
+    /// same as an empty answer. Which keys actually reach the file is the SDK's
+    /// rule rather than "all of them": see [`config::document`].
+    ///
     /// # Errors
-    /// If the app declares no config, a value is missing or rejected, or the
-    /// result would be too large. The message is meant to be shown as-is.
+    /// If the selected build declares no settings, a required answer is missing,
+    /// an answer is rejected, or the result would be too large. The message is
+    /// meant to be shown as-is.
     #[wasm_bindgen(js_name = configDocument)]
     pub fn config_document(&self, app_id: &str, values: JsValue) -> Result<String, JsError> {
         let spec = self.config_spec(app_id)?;
@@ -737,13 +850,27 @@ impl Store {
         config::document(spec, &values).map_err(|problem| JsError::new(&problem))
     }
 
+    /// The declaration for the build a card is currently showing.
+    ///
+    /// Selected the same way [`Self::apps`] selects it, so the form on a card
+    /// and the file it writes always belong to the same binary: pinning an older
+    /// version changes which fields are asked for.
     fn config_spec(&self, app_id: &str) -> Result<&config::Spec, JsError> {
         let id: AppId = app_id.parse().map_err(js_err)?;
-        self.catalog
+        let app = self
+            .catalog
             .apps
             .iter()
             .find(|a| a.app_id == id)
-            .and_then(|a| a.config.as_ref())
+            .ok_or_else(|| JsError::new(&format!("no app with id {app_id}")))?;
+        let chosen = self
+            .pinned
+            .get(&app.app_id)
+            .and_then(|label| app.find(label))
+            .unwrap_or_else(|| self.catalog.default_build(app, self.firmware));
+        chosen
+            .config
+            .as_ref()
             .ok_or_else(|| JsError::new(&format!("{app_id} declares no settings file")))
     }
 

@@ -16,10 +16,10 @@ folder     = "BikeMap"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# No [config] block: which pack to draw is answered from where the wearer is,
-# not from a filename somebody typed. That was the deliberate choice -- the
-# answer changes when you travel, which is exactly when you cannot plug the
-# watch into a computer to edit a JSON file.
+# No settings, declared or otherwise: which pack to draw is answered from where
+# the wearer is, not from a filename somebody typed. That was the deliberate
+# choice -- the answer changes when you travel, which is exactly when you cannot
+# plug the watch into a computer to edit a JSON file.
 
 [[versions]]
 version = "0.1.0"

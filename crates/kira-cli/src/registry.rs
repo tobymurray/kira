@@ -118,16 +118,6 @@ pub(crate) struct Manifest {
     pub maintainer: String,
     /// Every version to publish, in any order.
     pub versions: Vec<Entry>,
-    /// A settings file the app reads from its own folder on the watch.
-    ///
-    /// Everything else in the catalogue is derived from a binary Kira built
-    /// itself. This cannot be: nothing in a `.uapp` says what it reads. So it is
-    /// the submitter's word, and it is the one claim the page *acts* on rather
-    /// than merely displays — it names a file written to somebody's watch.
-    /// Checked by [`kira_core::config::check_spec`] on every catalogue build,
-    /// not only when the pull request was reviewed.
-    #[serde(default)]
-    pub config: Option<kira_core::config::Spec>,
     /// Why the whole app was withdrawn, if it was.
     ///
     /// This is how a listing comes down. Deleting the manifest is not: an app
@@ -269,15 +259,6 @@ fn check_one(manifest: &Manifest, problems: &mut Vec<Problem>) {
                 "subdir {subdir:?} must be a relative path inside the repository"
             ));
         }
-    }
-
-    // The one declaration that is acted on rather than displayed: it names a
-    // file the page writes into somebody's watch. Re-checked on every catalogue
-    // build, so tightening the rules later catches manifests already merged.
-    if let Some(config) = &manifest.config
-        && let Err(problem) = kira_core::config::check_spec(config)
-    {
-        say(format!("config: {problem}"));
     }
 
     check_folder(manifest, &mut say);
@@ -448,6 +429,15 @@ pub(crate) fn validate(
             });
         }
 
+        // A withdrawn listing is never offered for installation, so it cannot put
+        // a second `.uapp` in anybody's folder and has no claim to make on one.
+        // Skipping it here is what lets an app that was given a new AppID -- a
+        // different app as far as the watch is concerned -- take the folder its
+        // own retired listing still names. `mark_superseded` reaches the same
+        // conclusion from the other end, for the catalogue.
+        if manifest.retired.is_some() {
+            continue;
+        }
         let folder_key = manifest.folder.to_ascii_lowercase();
         if let Some(owner) = taken_folders
             .get(&folder_key)
@@ -696,6 +686,11 @@ pub(crate) fn wanted(manifests: &[Manifest], toolchain: &str) -> Vec<Wanted> {
                 app_id: manifest.app_id,
                 folder: manifest.folder.clone(),
                 retired: manifest.retired_for(&entry).map(ToOwned::to_owned),
+                // A submission's source is checked out to build it, so its
+                // `app-manifest.json` is readable at exactly the commit the
+                // recipe pins -- which is the whole reason a configuration
+                // declaration is now derived rather than asserted.
+                wants_manifest: true,
                 recipe: manifest.recipe_for(&entry, toolchain),
             });
         }
@@ -984,50 +979,60 @@ sdk_rev = "apps-v1.3.0"
         assert!(problems.iter().any(|p| p.message.contains("was removed")));
     }
 
-    /// A settings declaration is optional, and most manifests have none.
+    /// Configuration is no longer declared here.
+    ///
+    /// It moved into the app's own `app-manifest.json` when the SDK landed app
+    /// configuration, which is what makes it checkable: the same commit that
+    /// produced the binary produced the declaration. A manifest still carrying
+    /// the old block is refused rather than ignored — silently dropping it would
+    /// leave a submitter believing the page was writing a file it was not.
+    /// An app whose `AppID` was reassigned needs both listings, in one folder.
+    ///
+    /// The retired one is never offered for installation, so it cannot put a
+    /// second `.uapp` in that folder -- and refusing the pair would mean the app
+    /// could not be published under the identity UNA gave it without abandoning
+    /// the folder its own users already have.
     #[test]
-    fn a_manifest_without_settings_is_still_valid() {
-        assert!(good().config.is_none());
-        assert!(checked(&good()).is_empty());
-    }
+    fn a_retired_listing_does_not_hold_a_folder_against_a_live_one() {
+        let mut old_id = good();
+        old_id.slug = "tide-clock-old-id".into();
+        old_id.app_id = AppId::new(0x865E_8CB2_1BF7_E1ED);
+        old_id.retired = Some("UNA assigned this app a registered AppID".into());
+        let current = good();
+        assert_eq!(old_id.folder, current.folder);
 
-    /// The declaration names a file the page writes to a device, so a manifest
-    /// that would send it outside the app's own folder has to fail the same
-    /// check that everything else does — and fail it on every build, not only
-    /// on the pull request that introduced it.
-    #[test]
-    fn a_settings_file_that_escapes_the_app_folder_is_refused() {
-        let manifest = parse(
-            "tide-clock",
-            &GOOD.replace(
-                "[[versions]]",
-                "[config]\nfile = \"../../../evil.json\"\nschema = 1\n\n\
-                 [[config.fields]]\npath = \"values.id\"\ntitle = \"Id\"\nmaxLength = 8\n\n\
-                 [[versions]]",
-            ),
-        )
-        .expect("parses");
-        let problems = checked(&manifest);
         assert!(
-            problems.iter().any(|p| p.contains("config:")),
+            validate(
+                &[old_id.clone(), current.clone()],
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            )
+            .is_empty(),
+            "a retired listing and a live one may share a folder"
+        );
+
+        // Two live listings in one folder stay refused: that is the case the
+        // watch cannot resolve, since it loads whichever .uapp it finds first.
+        let mut second = current.clone();
+        second.slug = "tide-clock-two".into();
+        second.app_id = AppId::new(0x1111_2222_3333_4444);
+        let problems = validate(&[current, second], &BTreeMap::new(), &BTreeMap::new());
+        assert!(
+            problems.iter().any(|p| p.message.contains("also claimed")),
             "{problems:?}"
         );
     }
 
     #[test]
-    fn a_well_formed_settings_declaration_passes() {
-        let manifest = parse(
-            "tide-clock",
-            &GOOD.replace(
-                "[[versions]]",
-                "[config]\nfile = \"input.json\"\nschema = 1\n\n\
-                 [[config.fields]]\npath = \"values.id\"\ntitle = \"Id\"\nmaxLength = 8\n\n\
-                 [[versions]]",
-            ),
-        )
-        .expect("parses");
-        assert!(checked(&manifest).is_empty());
-        assert_eq!(manifest.config.expect("declared").file, "input.json");
+    fn a_settings_block_in_a_submission_manifest_is_refused() {
+        let text = GOOD.replace(
+            "[[versions]]",
+            "[config]\nfile = \"input.json\"\nschema = 1\n\n\
+             [[config.fields]]\npath = \"values.id\"\ntitle = \"Id\"\nmaxLength = 8\n\n\
+             [[versions]]",
+        );
+        let err = parse("tide-clock", &text).expect_err("no longer a key here");
+        assert!(format!("{err:#}").contains("config"), "{err:#}");
     }
 
     #[test]

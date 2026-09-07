@@ -147,11 +147,18 @@ const state = {
    */
   excluded: new Set(),
   /**
-   * What has been typed into each app's settings form, keyed by AppID.
+   * What has been typed into each settings form, keyed by AppID and version.
    *
    * Held outside the DOM because a card is rebuilt whenever anything else on
    * the page changes — pinning a version, re-scanning the watch — and losing a
    * half-typed id to an unrelated re-render would be maddening.
+   *
+   * Keyed by the *build* rather than the app, because the declaration comes out
+   * of the version's own `app-manifest.json`: two versions of one app can ask
+   * for different fields, so their answers cannot share a drawer. Each entry
+   * holds the answers and which of them somebody has actually touched — the
+   * second is not inferrable from the first, since the answers start out
+   * pre-filled from the app's own defaults.
    */
   configDraft: new Map(),
   /**
@@ -162,7 +169,7 @@ const state = {
    * in for closed without wiping that default on the next re-render.
    */
   configOpen: new Map(),
-  /** Apps whose existing settings file has already been read off the watch. */
+  /** Builds whose existing settings file has already been read off the watch. */
   configLoaded: new Set(),
 };
 
@@ -1013,28 +1020,77 @@ function renderCard(app, entry) {
 // ------------------------------------------------------------------ settings
 
 /**
- * Read the value a dotted path points at, or '' if the file does not have it.
+ * Form state for one *build* of one app, not one app.
  *
- * The file is somebody's hand-edited JSON as often as it is Kira's, so every
- * step has to survive the wrong shape.
+ * The declaration comes out of the `app-manifest.json` of the version being
+ * shown, so pinning a different version can change which fields exist, what
+ * they are called and what they default to. Keying the draft on the build means
+ * switching versions shows that build's own form rather than the last one's
+ * half-filled answers.
  */
-function atPath(doc, path) {
-  let node = doc;
-  for (const key of path.split('.')) {
-    if (node === null || typeof node !== 'object' || Array.isArray(node)) return '';
-    node = node[key];
+function configKey(app) {
+  return `${app.appId}:${app.selected}`;
+}
+
+/** The draft answers for a build's form, created on first sight. */
+function configState(app) {
+  const key = configKey(app);
+  let held = state.configDraft.get(key);
+  if (!held) {
+    // `touched` is what stops a re-render, or the read off the watch, from
+    // overwriting something being typed. It cannot be inferred from the values:
+    // those start out pre-filled from the app's own defaults.
+    held = { values: {}, touched: new Set() };
+    state.configDraft.set(key, held);
   }
-  return typeof node === 'string' ? node : '';
+  return held;
 }
 
 /**
- * Whether this app declares a value it cannot work without.
+ * Whether this build declares a value the app cannot work without.
  *
- * The submitter's word, and unverifiable against the binary, so it only ever
- * changes how the page presents the form — never whether an install is allowed.
+ * Unlike the arrangement this replaced, `required` is now the app's own word in
+ * its manifest rather than a claim in a submission's registry entry, and it is
+ * acted on: an empty required field stops the file being written. It still has
+ * no bearing on downloading or installing the binary.
  */
 function configIsRequired(app) {
   return Boolean(app.config?.fields?.some((field) => field.required));
+}
+
+/**
+ * The default this field would fall back to, as the input shows it.
+ *
+ * Already text when it crosses from Rust, whatever the field's type, so that the
+ * digits shown for a number are the ones Kira would write back rather than
+ * whatever JavaScript makes of the same float.
+ */
+function defaultText(field) {
+  return field.default;
+}
+
+/**
+ * What the file on the watch holds for one field, as the input would show it,
+ * or '' when it holds nothing usable.
+ *
+ * The file is somebody's hand-edited JSON as often as it is Kira's, and the
+ * envelope is fixed — `{"schema": 1, "values": {...}}` keyed by field id — so
+ * every step has to survive the wrong shape. A value of the wrong JSON type is
+ * treated as absent, which is exactly what `SDK::AppConfig` does with it.
+ */
+function fileText(field, doc) {
+  const values = doc?.values;
+  if (values === null || typeof values !== 'object' || Array.isArray(values)) return '';
+  const raw = values[field.id];
+  switch (field.type) {
+    case 'bool':
+      return typeof raw === 'boolean' ? String(raw) : '';
+    case 'int':
+    case 'float':
+      return typeof raw === 'number' && Number.isFinite(raw) ? String(raw) : '';
+    default:
+      return typeof raw === 'string' ? raw : '';
+  }
 }
 
 /**
@@ -1044,7 +1100,7 @@ function configIsRequired(app) {
  *            is itself the answer: every required field is missing.
  */
 function missingRequired(spec, doc) {
-  return spec.fields.filter((field) => field.required && !(doc && atPath(doc, field.path)));
+  return spec.fields.filter((field) => field.required && fileText(field, doc) === '');
 }
 
 /** This app's row in the current plan, if a watch is connected. */
@@ -1113,6 +1169,9 @@ async function writeConfig(app, text) {
   const handle = await dir.getFileHandle(app.config.file, { create: true });
   const writable = await handle.createWritable();
   try {
+    // From offset zero and nothing else, so a shorter document cannot leave
+    // stale bytes behind a valid one -- the same rule the SDK puts on a
+    // companion app writing this file over Bluetooth.
     await writable.write(bytes);
     await writable.close();
   } catch (err) {
@@ -1129,7 +1188,49 @@ async function writeConfig(app, text) {
 }
 
 /**
- * The per-app settings form.
+ * The control one field gets, by the type the app declared it.
+ *
+ * §9.4 of the SDK's specification fixes these, and the bounds go on the element
+ * so the browser's own keypad and steppers match what the field accepts. None of
+ * it is validation: every answer goes through `configCheck` in Rust, which is
+ * also what a paste past a limit or a locale decimal comma has to answer to.
+ */
+function configInput(field) {
+  const input = document.createElement('input');
+  input.spellcheck = false;
+  input.autocapitalize = 'off';
+  input.autocomplete = 'off';
+  switch (field.type) {
+    case 'bool':
+      input.type = 'checkbox';
+      break;
+    case 'int':
+    case 'float':
+      input.type = 'number';
+      input.min = field.min;
+      input.max = field.max;
+      // Whole numbers only for an int, and a decimal keypad for a float.
+      input.step = field.type === 'int' ? '1' : 'any';
+      input.inputMode = field.type === 'int' ? 'numeric' : 'decimal';
+      break;
+    default:
+      input.type = 'text';
+      // A hint rather than the rule: this counts UTF-16 units and the app's
+      // limit is in UTF-8 bytes, so the byte counter below and the check in
+      // Rust are what actually hold the line.
+      input.maxLength = field.maxLength;
+      break;
+  }
+  return input;
+}
+
+/** How long this answer is in the bytes the app counts, for a string field. */
+function byteCount(text) {
+  return new TextEncoder().encode(text).length;
+}
+
+/**
+ * The per-build settings form.
  *
  * Chromium desktop only, like installing and for the same reason: writing to a
  * removable drive needs the File System Access API. The generated scripts
@@ -1137,29 +1238,40 @@ async function writeConfig(app, text) {
  */
 function renderConfig(app) {
   const spec = app.config;
-  const draft = state.configDraft.get(app.appId) ?? {};
-  state.configDraft.set(app.appId, draft);
+  const held = configState(app);
+  const draft = held.values;
+  const key = configKey(app);
+
+  // Pre-filled from the app's own defaults before anything is read off a watch,
+  // so the form says what the app would do if it were left alone -- which is
+  // information even with no watch plugged in.
+  for (const field of spec.fields) {
+    if (draft[field.id] === undefined) draft[field.id] = defaultText(field);
+  }
 
   const required = configIsRequired(app);
-
-  const box = document.createElement('details');
-  box.className = required ? 'config config-required' : 'config';
-  // Collapsed hides the one thing the app cannot start without, and "Settings"
-  // reads as a preference. A required field opens by default; an explicit toggle
-  // still wins, so closing it stays closed across re-renders.
-  box.open = state.configOpen.get(app.appId) ?? required;
-  box.addEventListener('toggle', () => {
-    state.configOpen.set(app.appId, box.open);
-  });
-
-  const summary = document.createElement('summary');
-  summary.textContent = required ? 'Setup' : 'Settings';
-  box.appendChild(summary);
 
   // A folder another app owns is not written to at all -- not the settings file,
   // and not the read that prefills it either.
   const foreign = configFolderOwner(app);
   const writable = state.mode === 'write' && state.appsDir && !foreign;
+
+  const box = document.createElement('details');
+  box.className = required ? 'config config-required' : 'config';
+  // Collapsed hides the one thing the app cannot start without, and "Settings"
+  // reads as a preference -- so a form with a required field opens itself, but
+  // only once there is a watch to fill it in on. With none connected every input
+  // is disabled anyway, and an app declaring nineteen fields would otherwise
+  // open nineteen rows of them on a card somebody is only browsing past. An
+  // explicit toggle still wins, so closing it stays closed across re-renders.
+  box.open = state.configOpen.get(key) ?? (required && Boolean(writable));
+  box.addEventListener('toggle', () => {
+    state.configOpen.set(key, box.open);
+  });
+
+  const summary = document.createElement('summary');
+  summary.textContent = required ? 'Setup' : 'Settings';
+  box.appendChild(summary);
 
   const where = document.createElement('p');
   where.className = 'meta';
@@ -1168,9 +1280,9 @@ function renderConfig(app) {
   // "as plain text" is on the visible line rather than only in the tooltip
   // because of what these fields invite: the format exists for a value only its
   // owner knows, and the examples that reach for it are an athlete id, a transit
-  // pass, an account token. The first two are nobody's secret. The third is, and
-  // whoever is about to type one should not have to hover to find out where it
-  // lands.
+  // pass, a coordinate. None of those is a secret, and the SDK says outright
+  // that this is not the place for one -- but whoever is about to type something
+  // should not have to hover to find out where it lands.
   where.textContent = foreign
     ? `This app reads Apps/${app.folder}/${spec.file} on the watch.`
     : `Written to Apps/${app.folder}/${spec.file} on the watch, as plain text.`;
@@ -1178,7 +1290,8 @@ function renderConfig(app) {
     'The watch presents its storage as a USB drive, so this file can be read by ' +
     'anything on any computer it is plugged into, and by any other app on the ' +
     'watch. Fine for an id or a preference. Not somewhere to put a password or an ' +
-    'account token you would mind somebody else having.';
+    'account token you would mind somebody else having, which is why the SDK gives ' +
+    'these fields no secret type.';
   box.appendChild(where);
 
   if (foreign) {
@@ -1192,7 +1305,7 @@ function renderConfig(app) {
     const note = document.createElement('p');
     note.className = 'meta config-note';
     note.textContent = CAN_WRITE
-      ? 'Connect a watch to fill this in.'
+      ? 'Connect a watch to fill this in. The values shown are the app\'s own defaults.'
       : 'This browser can read the watch but not write to it, so settings have to be ' +
         `typed into Apps/${app.folder}/${spec.file} by hand. The generated install ` +
         'script does not carry them.';
@@ -1203,53 +1316,94 @@ function renderConfig(app) {
   status.className = 'meta config-status';
 
   const inputs = new Map();
+  const marks = new Map();
   for (const field of spec.fields) {
-    const label = document.createElement('label');
-    label.className = 'config-field';
+    const row = document.createElement('label');
+    row.className = 'config-field';
 
     const name = document.createElement('span');
-    name.textContent = field.title;
-    label.appendChild(name);
+    name.className = 'config-label';
+    name.textContent = field.label;
+    if (field.required) {
+      const flag = document.createElement('span');
+      flag.className = 'config-flag';
+      flag.textContent = 'needed';
+      name.appendChild(flag);
+    }
+    row.appendChild(name);
 
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.maxLength = field.maxLength;
-    input.spellcheck = false;
-    input.autocapitalize = 'off';
-    input.autocomplete = 'off';
+    const line = document.createElement('span');
+    line.className = 'config-input';
+    const input = configInput(field);
     input.disabled = !writable;
-    input.value = draft[field.path] ?? '';
-    input.addEventListener('input', () => {
-      draft[field.path] = input.value;
-      const problem = input.value === '' ? null : state.store.configCheck(app.appId, field.path, input.value);
+    if (field.type === 'bool') input.checked = draft[field.id] === 'true';
+    else input.value = draft[field.id];
+    line.appendChild(input);
+
+    // Decoration, and never part of the stored value: that is the SDK's rule
+    // for `unit`, and it is why the suffix sits outside the input.
+    if (field.unit) {
+      const unit = document.createElement('span');
+      unit.className = 'config-unit';
+      unit.textContent = field.unit;
+      line.appendChild(unit);
+    }
+
+    // Says which answers the app is deciding for itself. Kira writes a key only
+    // when its answer differs from the declared default, so a row marked
+    // "default" is a key that is absent from the file -- which is what lets the
+    // app tell "they chose this" from "this is mine".
+    const mark = document.createElement('span');
+    mark.className = 'config-mark';
+    line.appendChild(mark);
+    marks.set(field.id, mark);
+    row.appendChild(line);
+
+    const help = document.createElement('span');
+    help.className = 'config-help';
+    help.textContent = field.description;
+    row.appendChild(help);
+
+    const say = () => {
+      const text = field.type === 'bool' ? String(input.checked) : input.value;
+      draft[field.id] = text;
+      held.touched.add(field.id);
+      // An empty optional field is the reset gesture and says nothing; an empty
+      // required one is the whole reason a save would be refused, so it says so
+      // while it is empty rather than at the point of pressing the button.
+      const problem =
+        text === '' && !field.required
+          ? null
+          : state.store.configCheck(app.appId, field.id, text);
       input.setCustomValidity(problem ?? '');
       status.textContent = problem ?? '';
       status.className = problem ? 'meta config-status bad' : 'meta config-status';
-    });
-    label.appendChild(input);
-    inputs.set(field.path, input);
-
-    if (field.help) {
-      const help = document.createElement('span');
-      help.className = 'config-help';
-      help.textContent = field.help;
-      label.appendChild(help);
-    }
-    box.appendChild(label);
+      refreshMark(field, text, mark);
+    };
+    input.addEventListener('input', say);
+    refreshMark(field, draft[field.id], mark);
+    inputs.set(field.id, input);
+    box.appendChild(row);
   }
 
-  // Prefill from the watch once, and only for fields the user has not started
-  // typing into — a re-render must not overwrite what is being entered.
-  if (writable && !state.configLoaded.has(app.appId)) {
-    state.configLoaded.add(app.appId);
+  // Prefill from the watch once per build, and only for fields nobody has typed
+  // into: a re-render must not overwrite what is being entered.
+  if (writable && !state.configLoaded.has(key)) {
+    state.configLoaded.add(key);
     void readConfig(app).then((doc) => {
       for (const field of spec.fields) {
-        if (draft[field.path] !== undefined) continue;
-        const value = doc ? atPath(doc, field.path) : '';
-        if (!value) continue;
-        draft[field.path] = value;
-        const input = inputs.get(field.path);
-        if (input && input.value === '') input.value = value;
+        if (held.touched.has(field.id)) continue;
+        const value = fileText(field, doc);
+        // Absent, or unusable: the app falls back to its default, so the form
+        // shows the default too rather than an empty row that means nothing.
+        if (value === '') continue;
+        draft[field.id] = value;
+        const input = inputs.get(field.id);
+        if (input) {
+          if (field.type === 'bool') input.checked = value === 'true';
+          else input.value = value;
+        }
+        refreshMark(field, value, marks.get(field.id));
       }
 
       // Only claimed once the watch has actually been read: an install that
@@ -1258,7 +1412,7 @@ function renderConfig(app) {
       // why. Says nothing when there is nothing to chase.
       const missing = missingRequired(spec, doc);
       if (missing.length > 0 && !status.textContent) {
-        const names = missing.map((f) => f.title).join(', ');
+        const names = missing.map((f) => f.label).join(', ');
         status.textContent =
           missing.length === 1
             ? `${names} is not set on the watch yet, and the app needs it.`
@@ -1267,6 +1421,9 @@ function renderConfig(app) {
       }
     });
   }
+
+  const actions = document.createElement('div');
+  actions.className = 'config-actions';
 
   const save = document.createElement('button');
   save.type = 'button';
@@ -1278,12 +1435,15 @@ function renderConfig(app) {
       save.disabled = true;
       try {
         const values = {};
-        for (const field of spec.fields) values[field.path] = draft[field.path] ?? '';
+        for (const field of spec.fields) values[field.id] = draft[field.id] ?? '';
         // Rust assembles and screens it: the same code the tests cover, and the
-        // only place that decides what reaches a device.
+        // only place that decides what reaches a device -- including which keys
+        // are written at all.
         const text = state.store.configDocument(app.appId, values);
         await writeConfig(app, text);
-        status.textContent = 'Saved. Eject the watch and reboot it to pick this up.';
+        // Not "reboot the watch", which is what installing needs: the app reads
+        // this file when it starts, so opening it again is the whole of it.
+        status.textContent = 'Saved. The app picks this up the next time you open it.';
         status.className = 'meta config-status ok';
         log(`${app.name} settings → Apps/${app.folder}/${spec.file}`, 'ok');
       } catch (err) {
@@ -1294,10 +1454,64 @@ function renderConfig(app) {
       }
     })();
   });
-  box.appendChild(save);
+  actions.appendChild(save);
+
+  // The way back to the app's own answers. It writes the file rather than
+  // deleting it, and Kira leaves out every key that matches its default, so what
+  // lands is an empty `values` object -- which is how the SDK says a field is
+  // reset: the key is removed, not set to the default.
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'config-reset';
+  reset.textContent = 'Back to defaults';
+  reset.disabled = !writable;
+  reset.addEventListener('click', () => {
+    for (const field of spec.fields) {
+      const text = defaultText(field);
+      draft[field.id] = text;
+      held.touched.add(field.id);
+      const input = inputs.get(field.id);
+      if (input) {
+        if (field.type === 'bool') input.checked = text === 'true';
+        else input.value = text;
+        input.setCustomValidity('');
+      }
+      refreshMark(field, text, marks.get(field.id));
+    }
+    status.textContent = 'Every field is back to the app\'s default. Save to write that.';
+    status.className = 'meta config-status';
+  });
+  actions.appendChild(reset);
+
+  box.appendChild(actions);
   box.appendChild(status);
 
   return box;
+}
+
+/**
+ * Mark a row as holding the app's default, or say how long a string answer is.
+ *
+ * Two things a form for this format has to show that an ordinary one does not:
+ * which answers are the app's rather than its owner's, and how many *bytes* a
+ * value takes, since the app sized its buffer in bytes and four characters of
+ * Cyrillic are eight of them.
+ */
+function refreshMark(field, text, mark) {
+  if (!mark) return;
+  if (text === defaultText(field)) {
+    mark.textContent = 'default';
+    mark.className = 'config-mark';
+    return;
+  }
+  if (field.type === 'string') {
+    const bytes = byteCount(text);
+    mark.textContent = `${bytes}/${field.maxLength} bytes`;
+    mark.className = bytes > field.maxLength ? 'config-mark bad' : 'config-mark';
+    return;
+  }
+  mark.textContent = '';
+  mark.className = 'config-mark';
 }
 
 function renderCatalogue() {

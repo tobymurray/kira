@@ -1,5 +1,6 @@
 //! `kira` — build the catalogue, serve it locally, and generate the site icons.
 
+mod app_manifest;
 mod build;
 mod build_app;
 mod icons;
@@ -131,6 +132,13 @@ enum Command {
         /// Where to write the verified .uapp.
         #[arg(long)]
         out: PathBuf,
+        /// Where to write the app's app-manifest.json, wrapped for the store.
+        ///
+        /// This is what carries a configuration declaration into the catalogue,
+        /// so a build for the artifact store passes the name `registry plan`
+        /// asked for. Written even when the app declares nothing.
+        #[arg(long)]
+        manifest_out: Option<PathBuf>,
         /// `CMake` generator. Output is identical either way.
         #[arg(long, default_value = "Unix Makefiles")]
         generator: String,
@@ -410,6 +418,7 @@ fn main() -> Result<()> {
             sdk,
             version,
             out,
+            manifest_out,
             generator,
             jobs,
             toolchain,
@@ -427,6 +436,7 @@ fn main() -> Result<()> {
                     .parse()
                     .map_err(|e| anyhow::anyhow!("--version: {e}"))?,
                 out,
+                manifest_out,
                 generator,
                 jobs,
                 toolchain,

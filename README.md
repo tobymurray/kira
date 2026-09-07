@@ -228,35 +228,72 @@ installers.
 
 ### Settings an app reads
 
-Some apps need a value only their owner knows: an athlete id, a transit pass, an
-account token. The watch has four buttons and no keyboard, and the SDK offers no
-way to send one in, so the app reads it from a file in its own folder and Kira
-fills that file in over the same USB handle it installs through.
+Some apps need a value only their owner knows: an athlete id, a coordinate, how
+many minutes to lap at. The watch has four buttons and no keyboard, so the app
+reads it from a file in its own folder, and the SDK's answer to how that file
+gets there is a *declaration*: an app lists its configuration fields in its own
+`app-manifest.json`, a companion app asks for them and writes the answers next to
+the `.uapp`, and `SDK::AppConfig` reads them back when the app starts. See
+[`Docs/app-config-fields.md`](https://github.com/UNAWatch/una-sdk/blob/main/Docs/app-config-fields.md)
+in the SDK; section 9 of it is what a companion app has to do.
+
+Kira is a companion app that goes over the cable instead of over Bluetooth, and
+that is the only difference. It reads the same declaration, offers the same form,
+and writes the same file to the same place — `Apps/<Folder>/<configFile>` — over
+the USB handle it installs through.
+
+**The declaration comes out of the app's own source, at the commit the binary was
+built from.** That is what changed when the SDK landed configuration, and it is
+worth being precise about what it fixes. Before, a submission asserted what it
+read in its `registry/<slug>.toml`, and nothing could check the claim: no part of
+a `.uapp` says what file it opens. Now the app declares it in a file beside its
+code, the SDK's own `validate_app_config.py` checks it in the app's CI, Kira's
+build reads it at the pinned commit and stores it beside the binary it produced,
+and the catalogue build checks it again before publishing it. Anyone can fetch
+that commit and see the same fields. It is part of the recipe rather than a note
+attached to one.
+
+It also belongs to the **version** rather than to the app, because that is what
+it is derived from. An update may add a field, drop one or change its bounds, so
+pinning an older version on a card shows that build's own form — offering the
+newest declaration beside an older binary would write keys that build never
+reads.
 
 **What lands there is plain text, and nothing about it is private.** The watch
 presents its storage as a USB drive, so the file is readable by anything on any
 computer it is plugged into, and by any other app on the watch. There is no
-encryption and no keystore, and nowhere to put one: the app has to read the value
-back with a bounded JSON parser and four buttons. That is fine for an id or a
-preference, which is what these fields are for. It is not somewhere to put a
-password or an account token you would mind somebody else having, and the form
-says so where the value is typed, not only here.
+encryption and no keystore, and nowhere to put one. The SDK says the same thing
+in stronger terms — it gives these fields no `secret` type, for exactly this
+reason — and the form says so where the value is typed, not only here.
 
-**The app owns the format entirely.** Its manifest declares the file name, the
-schema number and every key; Kira assembles the document, refuses values the app
-could not read back, and writes it. Nothing about the convention is Kira's, which
-matters because it is nobody's standard yet. The SDK ships `SDK::Variant::Config`
-with this same shape (an exact `schema` major, an app-owned subtree the reader
-treats as opaque, a size ceiling checked before allocating, defaults on every
-failure) but only for configs the platform itself writes. See
-[UNAWatch/una-sdk#225](https://github.com/UNAWatch/una-sdk/issues/225).
+**Kira does not repair an answer, and it does not invent one.** Every field is
+typed (`string`, `bool`, `int`, `float`) and carries its own bounds, a default,
+and optionally a regular expression, so the form is what the app asked for: a
+switch for a switch, a numeric keypad for a number, the unit rendered beside the
+input and never stored in the value. Each answer is checked in the order the SDK
+fixes — type, required, length, range, pattern — and refused rather than
+corrected: an over-long id is a *wrong* id, and a number outside its range is a
+target nobody asked for. Lengths are counted in UTF-8 bytes, because that is what
+the app sized its buffer in.
 
-This is the one thing on a card that **cannot come from the binary**. Nothing in a
-`.uapp` says what it reads, so it is the submitter's assertion, and the only
-assertion Kira acts on instead of merely rendering, since it names a file written
-to somebody's watch. It is checked on every catalogue build, not just at review:
-the name must be a plain file in the app's own folder, must not look like an app
-binary, and every key must be dot-separated plain segments.
+Two of those checks exist only here. The watch clamps a number and truncates a
+string, but `SDK::AppConfig` has no regular-expression engine and never looks at
+`pattern`, so a value that fails one is a value the app would read and act on;
+Kira applies it, in the restricted dialect the SDK specifies, with an engine
+small enough to ship to a browser. And which keys are written is the SDK's rule
+rather than "all of them": a required field is always present, and an optional
+answer that matches the app's own default is left out, which is what lets
+`AppConfig::has()` keep meaning "the owner chose this" and makes clearing a field
+the way to reset it.
+
+None of this is enforced against the binary, and it cannot be: the declaration is
+in the source, not in the bytes. What it is checked against is itself — the file
+name has to be a plain `.json` name in the app's own folder that no host resolves
+to a device, every id has to be unique and spelled the way the SDK spells one,
+every default has to satisfy its own field, every pattern has to be in the
+dialect, and the widest answers the fields could hold have to fit in a file the
+app will read. A manifest that fails any of it fails the build that would have
+published it.
 
 ### Installing safely
 
@@ -353,7 +390,7 @@ the recipe immutable; it makes a move impossible to miss.
 
 ### Module size
 
-The published `.wasm` is ~78 kB gzipped:
+The published `.wasm` is ~135 kB gzipped:
 
 | | gzipped |
 | --- | --- |
@@ -361,12 +398,39 @@ The published `.wasm` is ~78 kB gzipped:
 | the module at the time of the rewrite | 58.2 kB |
 | ...plus release notes, submissions and per-version notes since | 72.2 kB |
 | ...plus the settings form | 79.7 kB |
+| the same commit, re-measured on the current toolchain | 102.0 kB |
+| ...plus the SDK's typed app configuration | 134.7 kB |
 | `catalog.json` (13 releases, 151 versions) | 20.6 kB |
 | one app install, e.g. Running 1.3.0 | 520 kB |
 
 The first two rows are the rewrite's own measurement, kept because the argument
-below is about it. The rest is drift since, measured the same way: the module has
-grown 21.5 kB across four features with nobody watching.
+below is about it. The next two are drift since, measured the same way: the module
+had grown 21.5 kB across four features with nobody watching.
+
+The fifth row is the same commit as the fourth, built again with the compiler
+`rust-toolchain.toml` pins today: 22 kB of the growth is the standard library's,
+not this repository's, and the older numbers are left as they were rather than
+retconned. **Measure a change against a build of `HEAD` from the same toolchain**,
+or the toolchain's drift gets attributed to whatever landed last.
+
+The last of the module rows is app configuration, and it is worth breaking down,
+because it is the largest single feature in the table:
+
+| | gzipped |
+| --- | --- |
+| `f32::from_str` — parsing a `float` field's answer | 14.6 kB |
+| the regular-expression engine for a field's `pattern` | 10.0 kB |
+| the typed field model, its checks and their messages | 7.7 kB |
+
+Both of the first two have a cheaper alternative that was considered and turned
+down. The number could be parsed by JavaScript and handed over as a `f64`, and
+the pattern could be applied with the browser's own `RegExp` — the SDK even
+specifies the recipe for it, since that is what a JavaScript companion app would
+do. Both move a rule that decides what reaches a device out of the one place that
+holds every other one, and out of reach of tests that run without a browser. If
+these kilobytes ever have to go, the `RegExp` route is the one to take: the
+dialect is checked before a declaration is published either way, and the check
+that a default matches its own pattern already runs in the CLI.
 
 So the rewrite costs ~56 kB on first load, against a page that already transfers
 20 kB of catalogue and half a megabyte for every app anybody installs. It is
@@ -387,9 +451,10 @@ size still matters for parse time and memory, so it is a real trade, just not on
 that helps a visitor on a network. Measure gzipped output before adding it.
 
 What remains is mostly unavoidable: ~12 kB of float-to-decimal formatting pulled
-in by serde's error machinery, ~5 kB of allocator, and ~10 kB of generated
-deserializers. Removing an unused `sha2` dependency from `kira-core` changed
-nothing measurable, since LTO was already discarding it.
+in by serde's error machinery — which is why *formatting* a config number costs
+nothing extra and *parsing* one costs 14.6 kB — ~5 kB of allocator, and ~10 kB of
+generated deserializers. Removing an unused `sha2` dependency from `kira-core`
+changed nothing measurable, since LTO was already discarding it.
 
 ### Icons
 

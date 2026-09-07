@@ -1,30 +1,36 @@
-# A parkrun-style Code 128 barcode for an athlete id the user supplies, read from
-# a JSON file written into the app's own folder over USB.
-app_id     = "865E8CB21BF7E1ED"
+# A barcode for an id you supply, drawn on the watch and nowhere else.
+#
+# The problem it solves is narrow and complete: a parkrun athlete id, a
+# membership number, a transit pass -- a value only its owner knows, printed on a
+# card that is easy to leave at home. The watch has four buttons and no keyboard,
+# so nothing about it can be typed on the device. The ids come from the phone
+# through the SDK's app configuration, and the watch's only job is to draw them.
+#
+# It holds six, cycled with the top-left and bottom-left buttons, each with an
+# optional name and its own symbology. Code 128 is the default because every
+# laser scanner reads it; QRCode is there for the readers that are a phone camera
+# on a piece of glass, and ITF for numeric ids where the extra density is worth
+# it. The encoder is diffed against zint, an independent implementation, over its
+# whole input space rather than trusted.
+#
+# The GUI is Rust and embedded-graphics through the SDK's CustomGUI entry point
+# rather than TouchGFX, which is what makes a barcode possible at all: the bars
+# need sub-pixel coverage on a round 240-pixel panel, and a widget toolkit has no
+# way to express that.
+#
+# The previous listing for this app, under an AppID derived from a URL rather
+# than the one UNA registered, is registry/barcode-old-id.toml. A watch carrying
+# that 0.1.0 is carrying a different app as far as the kernel is concerned;
+# installing this one replaces what is in Apps/Barcode/.
+app_id     = "409506B8B69EC13E"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "Barcode"
 folder     = "Barcode"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# The app reads its athlete id out of a file in its own folder, because the watch
-# has no keyboard to type one on. Kira fills that file in over USB. The app owns
-# the name, the schema number and the key; it validates the value again itself.
-[config]
-file   = "input.json"
-schema = 1
-
-[[config.fields]]
-path      = "values.id"
-title     = "Athlete id"
-help      = "The characters printed under the barcode on your parkrun card, e.g. A1234567."
-maxLength = 16
-# Nothing is compiled in, so without this the app draws no barcode at all, only a
-# prompt saying what to write. Not a preference to be left for later.
-required  = true
-
 [[versions]]
-version = "0.1.0"
-rev     = "2c0d6d89210ac51f91fef4fdf11c7a25cd8c8d94"
-sdk_rev = "apps-v1.3.0"
-notes   = "First build. Draws a Code 128 barcode for an id read from Apps/Barcode/input.json, which you write over USB — nothing is compiled in, so a fresh install tells you what to write rather than showing a placeholder that would scan as somebody else's number."
+version = "0.9.0"
+rev     = "0d16a4ba06caba7e4a42f80d04be1c6e42af688f"
+sdk_rev = "apps-v1.4.0"
+notes   = "First build under the AppID UNA registered, and the app has moved a long way since the one that carried the old id. Six codes rather than one, each with a name and a symbology -- Code 128, QRCode or ITF. The GUI is Rust through CustomGUI instead of TouchGFX, which is what gives the bars real sub-pixel coverage and the text its Poppins faces. The backlight comes up while a code is on screen, and the last one shown survives a relaunch. Built against 1.4 and will not launch on a 1.3 kernel."

@@ -57,78 +57,115 @@ cargo run -p kira-cli -- registry plan --toolchain unpinned
 ```
 
 `--catalog` is optional. Without it the manifest is still checked on its own terms
-(the charset rules, the licence, the commit shas, the settings declaration) but not
-against the identities already published, which is the check most likely to send a
-pull request back. CI always runs it with one.
+(the charset rules, the licence, the commit shas) but not against the identities
+already published, which is the check most likely to send a pull request back. CI
+always runs it with one. Your app's configuration declaration is checked by the
+build, since it lives in your source rather than here.
 
 ## If your app reads a settings file
 
-A watch with four buttons and no keyboard cannot be told an athlete id, a transit
-pass or an account token, and the SDK offers no way to send one in. If your app
-reads such a value from a file in its own folder, say so and the page will offer a
-form that writes it over USB:
+**Declare it in your app's `app-manifest.json`, not here.** The SDK landed app
+configuration: an app lists the fields it reads, a companion app asks the user to
+fill them in and writes the answers into the app's own directory on the watch,
+and `SDK::AppConfig` reads them back at launch. Kira is a companion app that goes
+over the USB cable instead of over Bluetooth, so a declaration Kira honours is
+the same one the phone honours, and there is nothing extra to add to a manifest
+here.
 
-```toml
-[config]
-file   = "input.json"     # written into Apps/<folder>/; a plain name, never a path
-schema = 1                # the document's top-level "schema", for apps that gate on it
-
-[[config.fields]]
-path      = "values.id"   # where the value goes, dot-separated
-title     = "Athlete id"  # the label
-help      = "The characters printed under the barcode on your parkrun card."
-maxLength = 16
-required  = true          # optional: the app does nothing useful without it
+```json
+{
+  "manifest_version": 1,
+  "configFile": "input.json",
+  "configFields": [
+    {
+      "id": "athleteId",
+      "type": "string",
+      "label": "Athlete id",
+      "description": "The characters printed under the barcode on your parkrun card.",
+      "default": "",
+      "maxLength": 16,
+      "pattern": "[ -~]{1,16}",
+      "required": true,
+      "validationMessage": "Up to 16 plain characters, copied exactly."
+    }
+  ]
+}
 ```
 
-`required` changes how the page presents a field, not what gets written. A
-required field is shown above the download instead of in a collapsed panel
-underneath it, and once a watch is connected the card says when the value is not
-on it yet. Otherwise an install that worked and a value nobody wrote look
-identical, which is how somebody ends up holding an app that does nothing with no
-way to tell why. Leave it off when the app is fine either way: `Barcode` scans as
-nothing without an id, but `Squash` records a perfectly good activity with its IMU
-flag untouched, and nagging about that would be wrong.
-
-It is not enforced. Like everything else in this block it is your word and cannot
-be checked against a binary, so nothing refuses an install over it; somebody may
-want the `.uapp` now and the value later, or may write the file by hand.
-
-which produces
+which produces, in `Apps/<folder>/input.json`:
 
 ```json
 {
   "schema": 1,
   "values": {
-    "id": "A1234567"
+    "athleteId": "A1234567"
   }
 }
 ```
 
-**You own the format; Kira only assembles it.** The file name, the schema number
-and every key come from here, so nothing about the convention is Kira's to
-change. Add a field and the form grows a row.
+The specification is
+[`Docs/app-config-fields.md`](https://github.com/UNAWatch/una-sdk/blob/main/Docs/app-config-fields.md)
+in the SDK, and it is the whole of the format: the file name, the field ids, the
+types, the bounds and the defaults are yours, and Kira only assembles the answers.
+Validate yours the way the SDK does before opening a pull request:
+
+```sh
+python Utilities/Scripts/app_packer/validate_app_config.py --check app-manifest.json
+```
+
+Kira runs the same rules again, in Rust, when it builds your app — and refuses the
+build rather than publishing a declaration it cannot act on.
+
+### What Kira does with it
+
+- **It reads the declaration at the commit you pinned**, stores it beside the
+  binary it built, and publishes it per *version*. So a card shows the form the
+  selected build asked for: add a field in 1.1.0 and 1.0.0's card still shows
+  1.0.0's fields.
+- **Your `appVersion` has to match the version you are publishing.** A manifest
+  that names a different one is a mis-pinned commit, and the build says so instead
+  of publishing a form labelled with a version its own source does not claim. If
+  you bump `appVersion` in a commit of its own, pin *that* commit.
+- **Every answer is checked and refused, never repaired**, in the order §3.1 of
+  the specification fixes: type, required, length in UTF-8 bytes, range, then
+  pattern. An over-long id is a wrong id.
+- **`pattern` is applied by Kira**, in the restricted dialect of §3.2, because
+  `SDK::AppConfig` has no regular-expression engine and never looks at it. A
+  pattern outside the dialect fails the build, the same as it fails the SDK's own
+  validator.
+- **A key is written only when it means something.** A `required` field is always
+  written; an optional answer that matches your `default` is left out, so
+  `has()` on the watch keeps meaning "the user chose this" and clearing a field
+  resets it. Nothing is written for a field the user left alone.
+- **`required` blocks the save, not the download.** Somebody may want the `.uapp`
+  now and the value later, so a required field being empty stops the settings
+  file being written and nothing else. Once a watch is connected, the card says
+  when a required value is not on it yet.
+- **Chromium desktop only**, like installing. The generated scripts carry no
+  settings by design: see the README.
 
 Worth knowing before you rely on it:
 
-- **This is the one thing on a card that cannot come from your binary.** Nothing
-  in a `.uapp` says what it reads, so it is your word for it. Unlike `notes`,
-  which is only displayed, this is *acted on*: it names a file written to
-  somebody's watch. Expect the checks to be fussier than the shape needs, and
-  expect them to run on every catalogue build, not only on your pull request.
-- **Values are restricted to printable ASCII without `\` or `"`.** That is not
-  JSON's rule. A reader built on coreJSON gets the raw slice with escapes
-  undecoded, so an escaped character would reach your app as the literal
-  characters of its escape sequence. A value that cannot survive the trip is
-  refused in the form, where there is somewhere to explain why.
-- **Over-long values are refused, never trimmed.** A shortened id is a wrong id.
+- **This is plain text on a FAT volume**, readable over USB by anything and by
+  every other app on the watch. Fine for an id, a coordinate or a preference.
+  Not somewhere for a password or an account token — which is why the SDK gives
+  these fields no `secret` type.
 - **Validate again on the watch.** The form is a convenience; the file is a text
-  file on a mass-storage volume that anyone can edit with Notepad. Bound the read
-  before you allocate, gate on the schema number, and fall back to a default
-  rather than failing to start. `SDK::Variant::Config` in the SDK is the
-  reference for all three.
-- **Chromium desktop only**, like installing. The generated scripts carry no
-  settings by design: see the README.
+  file anyone can edit with Notepad. `SDK::AppConfig` already bounds the read,
+  gates on the schema number, clamps numbers and falls back to your defaults, and
+  it is the reference for how an app should treat this file — but it does not
+  check `pattern`, so anything your pattern is load-bearing for has to be checked
+  in the app too.
+- **A field id is forever.** Renaming one is indistinguishable from deleting a
+  field and adding another, and the user's value is lost (§7.3).
+- **The old `[config]` block in this manifest is gone.** It predates the SDK's
+  feature and was the one claim in a submission nothing could check, since no
+  part of a `.uapp` says what file it reads. A manifest still carrying one is
+  refused with the key named, rather than ignored — being quietly dropped would
+  leave you believing the page was writing a file it was not. Move it into your
+  app's `app-manifest.json`: the envelope Kira wrote was already the SDK's, so a
+  `path` of `values.id` becomes an `id` of `id`, and the file the app reads does
+  not change.
 
 ## One repository or several?
 
@@ -172,8 +209,9 @@ the old ones to where they actually lived.
 | `licence` is a recognised open licence | Source-accessible is the premise. If yours is missing from the list, add it in the same pull request. |
 | A published version's `rev` never changes | Somebody's watch may be carrying it. Change anything by publishing a new version. |
 | A manifest is retired, not deleted, once published | An app that vanishes leaves every watch carrying it holding something the catalogue cannot name. A submission that never reached the catalogue can simply be withdrawn. |
-| `config.file` is a plain name in the app's own folder, and not a `.uapp` | It is a path the page writes to a device. A name that escaped the folder would write anywhere on the volume; one ending in `.uapp` could be the file the watch boots. |
-| Every `config.fields[].path` is dot-separated plain segments, unique, and not nested inside another | The keys go straight into a document the app parses. Two fields writing the same place, or one inside another, cannot both be satisfied. |
+| `configFile` in your `app-manifest.json` is a plain `.json` name in the app's own folder | It is a path the page writes to a device. A name that escaped the folder would write anywhere on the volume, and one a host resolves to a device (`nul.json`) writes nowhere at all, leaving the app looking for a file that was never created. |
+| Every `configFields[].id` is unique, spelled the way the SDK spells one, and every default satisfies its own field | The ids are keys in a document the app parses, compared case-insensitively; a default that breaks its own bounds is a form that starts out invalid. |
+| Your `appVersion`, when you declare one, is the version being published | The declaration is published beside that binary. A manifest naming another version belongs to another build of the app. |
 
 CI then fetches exactly that commit, builds it, and checks the result against what
 your own `CMakeLists.txt` declares: `AppID`, type, version, and the `.uapp`'s CRC.

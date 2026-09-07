@@ -1,0 +1,23 @@
+# The first Squash listing, under a locally derived AppID.
+#
+# UNA has since assigned this app a registered id, and an AppID is the whole of
+# an app's identity on the watch -- so the app carrying the new one is a
+# different app as far as the watch, the phone and this catalogue are concerned.
+# It is listed separately, and this listing stays to name the binary anybody who
+# installed 0.1.0 is still carrying.
+#
+# The current app is registry/squash.toml.
+retired = "UNA assigned this app a registered AppID, which makes it a new identity; the current listing is squash.toml"
+
+app_id     = "A1E5C38B7D2F9046"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "Squash"
+folder     = "Squash"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+[[versions]]
+version = "0.1.0"
+rev     = "49130de567edfb7ed78a338693ace5d884c3ebcd"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build. Squash sessions recorded as FIT with sport=racket and sub_sport=squash, on the Workout app's session handling: HR and zones, calories, laps, crash recovery. It does not detect shots, because tuning that needs labelled recordings that do not exist yet -- so what ships is the recorder that collects them, streaming the raw 100 Hz IMU to CSV. Its settings form is gone: the flag was declared here rather than in the app. See 0.6.0 in the current listing."

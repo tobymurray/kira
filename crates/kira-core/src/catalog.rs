@@ -32,8 +32,13 @@ pub use crate::uapp::{AppType, VariantOrigin};
 /// watch carrying one is offered the release rather than reported as a stranger.
 /// 8 carries [`Variant`]: `apps-v1.4.0` shipped `Walk`, a code-less alias that
 /// runs the `Hike` binary, and until it had a model of its own it was published
-/// as an ordinary app whose "code" had supposedly not changed.
-pub const SCHEMA: u32 = 8;
+/// as an ordinary app whose "code" had supposedly not changed. 9 moves a
+/// settings declaration from the app to the version and reshapes it: the SDK
+/// landed app configuration, so what a build reads is now declared in its own
+/// `app-manifest.json` — typed fields with bounds, defaults and a pattern — and
+/// it belongs to the version whose source declared it, since an update may add,
+/// drop or re-specify a field.
+pub const SCHEMA: u32 = 9;
 
 /// A complete catalogue, as published to `data/catalog.json`.
 ///
@@ -120,15 +125,6 @@ pub struct App {
     /// submission, and it is deliberately not a rank: see `registry/README.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher: Option<Publisher>,
-    /// A settings file this app reads from `Apps/<Folder>/`, if it has one.
-    ///
-    /// The only thing on a card that cannot be derived from the binary: nothing
-    /// in a `.uapp` says what it reads, so this is the submitter's assertion.
-    /// It is also the only assertion Kira acts on rather than merely renders —
-    /// it decides a file name written to a device — which is why
-    /// [`crate::config::check_spec`] is stricter than the shape needs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config: Option<crate::config::Spec>,
     /// Why the whole app is no longer offered, if it is not.
     ///
     /// A retired app stays listed and keeps its binaries, so a watch carrying it
@@ -338,6 +334,23 @@ pub struct VersionEntry {
     /// never offered, stuck until they deleted it by hand.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supersedes_sha256: Vec<String>,
+    /// The settings file this build reads from `Apps/<Folder>/`, if its source
+    /// declared one.
+    ///
+    /// Read out of the `app-manifest.json` at the commit this version was built
+    /// from, so it is part of the recipe rather than a claim made beside it: the
+    /// SDK's `validate_app_config.py` checks it in the app's own CI and
+    /// [`crate::config::check_spec`] checks it again before the page acts on it.
+    ///
+    /// Per version rather than per app because that is what it is derived from.
+    /// An update may add a field, drop one, or re-specify it (§7.3 of the SDK's
+    /// `Docs/app-config-fields.md`), and a card showing the newest declaration
+    /// beside an older binary would offer to write keys that build never reads.
+    ///
+    /// Absent for every SDK app: upstream's release zips carry binaries alone,
+    /// so there is no manifest to read one out of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<crate::config::Spec>,
     /// Why this particular version is no longer offered, if it is not.
     ///
     /// Independent of the app's own [`App::retired`]: a submitter can withdraw
@@ -742,18 +755,28 @@ pub fn mark_superseded(apps: &mut [App], incumbents: &BTreeSet<AppId>) {
     // and displacing them to make room would break exactly the people who took the
     // app when it was the only thing on offer.
     //
-    // Ranked rather than branched, so the rule is one comparison: incumbency
-    // first, then the newest build, then the id to keep the outcome independent of
-    // iteration order.
+    // A withdrawn app is the exception, and it comes first in the ranking:
+    // withdrawal already means never offered for installation, so it has no claim
+    // to defend and nobody is displaced by another app taking the folder. Without
+    // this, an app that got a new identity -- a reassigned AppID, which is a
+    // different app to the watch -- would be blocked by the retired listing of
+    // its own former self, and *neither* could be installed. Its owners are not
+    // harmed: their build is still described, still downloadable, and still says
+    // why it was withdrawn.
+    //
+    // Ranked rather than branched, so the rule is one comparison: on offer at all,
+    // then incumbency, then the newest build, then the id to keep the outcome
+    // independent of iteration order.
     let rank = |app: &App| {
         (
+            app.retired.is_none(),
             incumbents.contains(&app.app_id),
             app.latest().precedence(),
             app.app_id,
         )
     };
 
-    let mut best: BTreeMap<String, (bool, Precedence, AppId)> = BTreeMap::new();
+    let mut best: BTreeMap<String, (bool, bool, Precedence, AppId)> = BTreeMap::new();
     for app in apps.iter() {
         let candidate = rank(app);
         best.entry(app.folder.clone())
@@ -766,7 +789,7 @@ pub fn mark_superseded(apps: &mut [App], incumbents: &BTreeSet<AppId>) {
     }
 
     for app in apps {
-        if let Some(&(_, _, winner)) = best.get(&app.folder) {
+        if let Some(&(.., winner)) = best.get(&app.folder) {
             app.superseded_by = (winner != app.app_id).then_some(winner);
         }
     }
@@ -999,6 +1022,7 @@ mod tests {
             built_from: None,
             upstream_sha256: None,
             matches_upstream: None,
+            config: None,
             retired: None,
             notes: None,
         }
@@ -1015,7 +1039,6 @@ mod tests {
             icon_small: None,
             superseded_by: None,
             publisher: None,
-            config: None,
             retired: None,
         }
     }
@@ -1397,6 +1420,38 @@ mod tests {
             by_id(0x1111_2222_3333_4444).superseded_by,
             Some(AppId::new(0xA1E5_C38B_7D2F_9046)),
             "the newer arrival is listed but never offered"
+        );
+    }
+
+    #[test]
+    fn a_withdrawn_incumbent_yields_the_folder_to_the_app_still_on_offer() {
+        // The case this exists for: an app whose AppID was reassigned. The old
+        // identity is published, retired, and holds the folder; the new one is a
+        // different app to the watch and wants the same folder. Incumbency alone
+        // would hand it to the retired listing and leave *neither* installable.
+        let mut withdrawn = app(vec![version_entry("0.1.0")]);
+        withdrawn.app_id = AppId::new(0x865E_8CB2_1BF7_E1ED);
+        withdrawn.retired = Some("UNA assigned this app a registered AppID".to_owned());
+        let mut current = app(vec![version_entry("0.9.0")]);
+        current.app_id = AppId::new(0x4095_06B8_B69E_C13E);
+        assert_eq!(withdrawn.folder, current.folder);
+
+        let mut apps = vec![withdrawn, current];
+        mark_superseded(
+            &mut apps,
+            &BTreeSet::from([AppId::new(0x865E_8CB2_1BF7_E1ED)]),
+        );
+
+        let by_id = |id: u64| apps.iter().find(|a| a.app_id == AppId::new(id)).unwrap();
+        assert_eq!(
+            by_id(0x4095_06B8_B69E_C13E).superseded_by,
+            None,
+            "the app that can still be installed keeps the folder"
+        );
+        assert_eq!(
+            by_id(0x865E_8CB2_1BF7_E1ED).superseded_by,
+            Some(AppId::new(0x4095_06B8_B69E_C13E)),
+            "the withdrawn listing points at what took its place"
         );
     }
 

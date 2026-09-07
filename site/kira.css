@@ -549,20 +549,75 @@ details.config .meta {
   color: var(--ink-soft);
 }
 
+/* The label, and the tag marking a field the app cannot work without. Written
+   with the row in the selector so it outranks the `display: block` above, which
+   would otherwise leave the tag butted against the label with no gap. */
+.config-field > span.config-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.config-flag {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--warn-ink);
+}
+
+/* The input, its unit and its marker on one line: a unit belongs beside the
+   number it labels, and it is decoration rather than part of the value, so it
+   sits outside the box that holds one. */
+.config-field > span.config-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
 .config-field input {
   display: block;
   width: 100%;
-  margin-top: 3px;
   padding: 5px 7px;
   font: inherit;
   font-size: 13px;
   /* An id gets read back character by character off a card or a screen, so the
-     unambiguous shapes are worth it. */
+     unambiguous shapes are worth it. Numbers get it too, for the zero. */
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--ink);
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 6px;
+  min-width: 0;
+}
+
+/* A switch is not a box to type in: it takes the space it needs and keeps the
+   label beside it rather than stretching across the card. */
+.config-field input[type='checkbox'] {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.config-unit {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+/* Which answers are the app's own, and how many bytes a string one takes. Right
+   aligned so a column of them reads as a column. */
+.config-mark {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.config-mark.bad {
+  color: var(--bad);
 }
 
 .config-field input:focus-visible {
@@ -582,7 +637,14 @@ details.config .meta {
   color: var(--ink-soft);
 }
 
-button.config-save {
+.config-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+button.config-save,
+button.config-reset {
   font: inherit;
   font-size: 12px;
   padding: 4px 10px;
@@ -593,14 +655,22 @@ button.config-save {
   cursor: pointer;
 }
 
-button.config-save:hover:enabled {
+button.config-save:hover:enabled,
+button.config-reset:hover:enabled {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-button.config-save:disabled {
+button.config-save:disabled,
+button.config-reset:disabled {
   color: var(--ink-soft);
   cursor: not-allowed;
+}
+
+/* The way back to what the app would do on its own. Quieter than saving, which
+   is the action somebody came here for. */
+button.config-reset {
+  color: var(--ink-soft);
 }
 
 /* Why nothing will be written: the folder belongs to another app. A refusal, not

@@ -254,6 +254,7 @@ mod tests {
             built_from: None,
             upstream_sha256: None,
             matches_upstream: None,
+            config: None,
             retired: None,
             notes: None,
         }
@@ -270,7 +271,6 @@ mod tests {
             icon_small: None,
             superseded_by: None,
             publisher: None,
-            config: None,
             retired: None,
         }
     }

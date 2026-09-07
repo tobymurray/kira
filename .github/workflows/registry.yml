@@ -258,6 +258,10 @@ jobs:
             folder=$(jq -r '.folder' <<<"$item")
             version=$(jq -r '.version' <<<"$item")
             asset=$(jq -r '.asset' <<<"$item")
+            # What the app declares it reads, taken from the same commit as the
+            # bytes. Always written, so "declares nothing" is a stored answer
+            # rather than an absent one.
+            manifest_asset=$(jq -r '.manifestAsset // empty' <<<"$item")
             sdk_rev=$(jq -r '.sdkRev' <<<"$item")
             app_source=$(jq -r '.appSource' <<<"$item")
 
@@ -290,12 +294,15 @@ jobs:
             git -C sdk clean -xdfq
 
             # build-app verifies the result against what the source declares:
-            # AppID, type, version and the .uapp's own CRC.
+            # AppID, type, version and the .uapp's own CRC. It also reads the
+            # app's app-manifest.json and refuses a version the manifest does
+            # not claim, before spending a compile on it.
             if kira build-app \
                  --app "src/$subdir" \
                  --sdk sdk \
                  --version "$version" \
                  --out "artifacts/$asset" \
+                 ${manifest_asset:+--manifest-out "artifacts/$manifest_asset"} \
                  --toolchain "$TOOLCHAIN" \
                  --app-source "$app_source" \
                  --sdk-rev "$sdk_rev" < /dev/null; then
@@ -326,6 +333,12 @@ jobs:
             for file in artifacts/*.uapp; do
               [ -e "$file" ] || continue
               echo "- \`$(basename "$file")\` — $(stat -c%s "$file") bytes, sha256 $(sha256sum "$file" | cut -c1-16)…"
+            done
+            echo
+            for file in artifacts/*.manifest.json; do
+              [ -e "$file" ] || continue
+              fields=$(jq '(.appManifest.configFields // []) | length' "$file")
+              echo "- \`$(basename "$file")\` — $fields declared setting(s)"
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -377,12 +390,19 @@ jobs:
           # because the hash is taken from whatever is stored.
           #
           # So: upload the names the plan asked for, and nothing else.
-          jq -r '.[] | select(.action == "build") | .asset' plan.json | sort -u > wanted.txt
-          (cd artifacts && ls -1 -- *.uapp 2>/dev/null || true) | sort -u > produced.txt
+          # Both names a build may produce: the binary, and the declaration
+          # stored beside it. The declaration is on the allowlist for exactly the
+          # reason the binary is -- it decides a file name the page writes into
+          # somebody's watch, so a submission must not be able to slip one into
+          # the store under a recipe key nobody planned.
+          jq -r '.[] | select(.action == "build") | .asset, (.manifestAsset // empty)' \
+            plan.json | sort -u > wanted.txt
+          (cd artifacts && ls -1 -- *.uapp *.manifest.json 2>/dev/null || true) \
+            | sort -u > produced.txt
 
           stray=$(comm -13 wanted.txt produced.txt)
           if [ -n "$stray" ]; then
-            echo "::error::the build produced .uapp files no recipe asked for; refusing to publish"
+            echo "::error::the build produced files no recipe asked for; refusing to publish"
             printf '::error::  unexpected: %s\n' $stray
             exit 1
           fi
@@ -431,7 +451,7 @@ jobs:
                 continue
               fi
               echo "::error::$asset is already stored with different bytes"
-              echo "::error::two binaries are claiming one recipe; refusing to overwrite"
+              echo "::error::two files are claiming one recipe name; refusing to overwrite"
               exit 1
             fi
 
@@ -456,7 +476,14 @@ jobs:
       #
       # The upload step has already refused anything the plan did not ask for, so
       # by here artifacts/ holds exactly the recipes' own output.
+      #
+      # The stored declarations are attested too. They are not code, but they are
+      # the other half of what gets published from a build: one names the file
+      # the page writes into somebody's watch and the keys it puts there, so
+      # "this came out of this workflow" is worth being able to check about it.
       - name: Attest what was published
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: 'artifacts/*.uapp'
+          subject-path: |
+            artifacts/*.uapp
+            artifacts/*.manifest.json

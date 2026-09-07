@@ -1,0 +1,23 @@
+# The first Barcode listing, under an AppID derived from a URL.
+#
+# UNA has since assigned this app a registered id, and an AppID is the whole of
+# an app's identity on the watch -- so the app carrying the new one is not this
+# app as far as the watch, the phone or this catalogue is concerned. It is listed
+# separately, and this listing stays to name the binary anybody who installed
+# 0.1.0 is still carrying.
+#
+# The current app is registry/barcode.toml.
+retired = "UNA assigned this app a registered AppID, which makes it a new identity; the current listing is barcode.toml"
+
+app_id     = "865E8CB21BF7E1ED"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "Barcode"
+folder     = "Barcode"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+[[versions]]
+version = "0.1.0"
+rev     = "2c0d6d89210ac51f91fef4fdf11c7a25cd8c8d94"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build. Draws a Code 128 barcode for an id read from Apps/Barcode/input.json, which you write over USB — nothing is compiled in, so a fresh install tells you what to write rather than showing a placeholder that would scan as somebody else's number. Its settings form is gone: the file it reads was declared in this repository rather than in the app, which is the arrangement the SDK's app configuration replaced. 0.9.0 in the current listing declares its own."

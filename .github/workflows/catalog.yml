@@ -357,9 +357,15 @@ jobs:
 
           # Absent release simply means nothing has been built yet, in which case
           # every version falls back to upstream's binary and says so.
+          # Two patterns: the binaries, and the declarations stored beside them.
+          # A submission's settings form comes out of the `app-manifest.json` at
+          # the commit it was built from, and this store is the only place the
+          # catalogue build can see one -- it fetches no source of its own.
           if retry gh release download "$BINARIES_TAG" -R "$GITHUB_REPOSITORY" -D built --clobber \
-               --pattern '*.uapp' 2>/dev/null; then
-            echo "$(ls built | wc -l | tr -d ' ') built binaries available"
+               --pattern '*.uapp' --pattern '*.manifest.json' 2>/dev/null; then
+            binaries=$(ls built/*.uapp 2>/dev/null | wc -l | tr -d ' ')
+            declared=$(ls built/*.manifest.json 2>/dev/null | wc -l | tr -d ' ')
+            echo "$binaries built binaries and $declared stored declarations available"
           else
             echo "no $BINARIES_TAG release; publishing upstream binaries throughout"
           fi

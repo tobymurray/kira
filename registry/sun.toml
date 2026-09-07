@@ -32,33 +32,30 @@ folder     = "Sun"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# Both boxes are needed, so both are marked required: without them the app has
-# no position and shows no time at all.
+# The two coordinates come out of input.json in the app's own folder, and the
+# card has no form for them any more. The reason is worth recording, because this
+# app is the one it costs the most: a settings form now comes out of the app's
+# own `app-manifest.json`, read at the commit the binary was built from, so it is
+# part of the recipe rather than a claim made in this file -- and SunGlance has
+# no manifest yet. Until it does, the file has to be written by hand, and the
+# card says nothing about it, which for an app that shows two dashes without one
+# is the worst place for this gap to fall.
 #
-# Decimal degrees only, and the app is deliberately fussy about them -- it
-# rejects rather than interprets. "45,4215" with a decimal comma, "45.4215N"
-# with a compass letter, and degrees-minutes-seconds are all refused, because a
-# reader lenient enough to accept them would quietly turn the first into 45 and
-# throw away a hemisphere in the second. A file it will not read says so on the
-# card as "input.json rejected"; one it misread would not.
-[config]
-file   = "input.json"
-schema = 1
-
-[[config.fields]]
-path      = "values.lat"
-title     = "Latitude"
-help      = "Decimal degrees, north positive: 45.4215 for Ottawa, -33.8688 for Sydney. Two decimal places is already more precision than sunrise can tell the difference between."
-maxLength = 12
-required  = true
-
-[[config.fields]]
-path      = "values.lon"
-title     = "Longitude"
-help      = "Decimal degrees, east positive: -75.6972 for Ottawa, 151.2093 for Sydney. Mind the minus sign -- west of Greenwich is negative, and dropping it moves sunrise by hours rather than minutes."
-maxLength = 13
-required  = true
-
+# What the declaration should say, when it is written: two required `float`
+# fields, `lat` and `lon`, with min/max of -90..90 and -180..180 and a unit of
+# `deg`. The file that reaches the watch is unchanged by the move -- Kira's old
+# convention wrote `values.lat` into the same envelope the SDK specifies, so a
+# field id of `lat` produces exactly the same document, and a watch already
+# carrying one keeps working.
+#
+# Typing them is also easier under the SDK's model than it was here. This form
+# was two text boxes and the app was deliberately fussy about what went in them:
+# "45,4215" with a decimal comma, "45.4215N" with a compass letter and
+# degrees-minutes-seconds were all refused, because a reader lenient enough to
+# accept them would turn the first into 45 and throw away a hemisphere in the
+# second. A declared `float` field is a number to the form, the bounds are the
+# app's own, and none of those three can be entered in the first place.
+#
 [[versions]]
 version = "0.1.0"
 rev     = "cfada78867c05253c0a554582f79d54ee20697b9"

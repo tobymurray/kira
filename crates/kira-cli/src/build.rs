@@ -524,10 +524,6 @@ fn process_release(
             // An SDK app's publisher is the catalogue's own source, and upstream
             // withdraws an app by dropping it from a release rather than saying so.
             publisher: None,
-            // Only a submission can declare one. An SDK app's would have to come
-            // from upstream, and nothing upstream publishes says what an app
-            // reads off its own folder.
-            config: None,
             retired: None,
         });
 
@@ -569,6 +565,11 @@ fn process_release(
             upstream_sha256: Some(chosen.upstream_sha256),
             matches_upstream: Some(chosen.matches_upstream),
             built_from: chosen.built_from,
+            // Nothing to read one out of. A declaration lives in an app's
+            // `app-manifest.json`, and upstream's release zips carry `.uapp`
+            // files alone -- no manifest ships with them, and the SDK's own
+            // example apps declare no configuration in the first place.
+            config: None,
             retired: None,
             // Upstream describes a release, not an app: which of its notes could
             // reach a given watch app is inferred from the body, in notes.rs.
@@ -862,6 +863,8 @@ fn fold_registry(
                 &format_args!("{} {}", manifest.slug, entry.version),
             )?;
 
+            let config = stored_config(built, &recipe, manifest, entry.version, &mut counts)?;
+
             let file = device_file_name(&header.name, header.version);
             let download = format!("apps/registry/{}/{}/{file}", manifest.slug, manifest.folder);
             let target = data.join(&download);
@@ -882,7 +885,6 @@ fn fold_registry(
                     repo: manifest.source.clone(),
                     maintainer: manifest.maintainer.clone(),
                 }),
-                config: manifest.config.clone(),
                 retired: manifest.retired.clone(),
             });
 
@@ -895,6 +897,7 @@ fn fold_registry(
                 sha256: sha256_hex(&bytes),
                 payload_sha256: sha256_hex(uapp.payload()),
                 variant: Variant::of(&uapp),
+                config,
                 file,
                 download,
             }));
@@ -927,6 +930,8 @@ struct SubmittedBuild<'a> {
     payload_sha256: String,
     /// Set when the submitted build is a variant alias rather than an app.
     variant: Option<Variant>,
+    /// What this build's own `app-manifest.json` declares it reads, if anything.
+    config: Option<kira_core::config::Spec>,
     file: String,
     download: String,
 }
@@ -942,6 +947,7 @@ fn submitted_version(built: SubmittedBuild<'_>) -> VersionEntry {
         sha256,
         payload_sha256,
         variant,
+        config,
         file,
         download,
     } = built;
@@ -979,10 +985,43 @@ fn submitted_version(built: SubmittedBuild<'_>) -> VersionEntry {
         // compare against -- unknown, rather than a claim either way.
         upstream_sha256: None,
         matches_upstream: None,
+        // Derived from the source this version pins, not from the manifest in
+        // this repository: what a build reads is the build's own business, and
+        // an update may add or drop a field.
+        config,
         // The app's own withdrawal is recorded on the app; this is per-version.
         retired: entry.retired.clone(),
         notes: entry.notes.clone(),
     }
+}
+
+/// What a stored build says it reads, if anything.
+///
+/// Checked all over again here rather than taken on trust from the build that
+/// stored it — the same stance the CRC and the `AppID` are read with, and for
+/// the same reason: the store is a release asset, not a value this process
+/// computed. A missing declaration is the same window as a missing binary, a
+/// store that has not caught up; the version publishes without a settings form
+/// rather than not at all, since the bytes are fine and a form is not what
+/// installs them.
+fn stored_config(
+    built: &BuiltStore,
+    recipe: &Recipe,
+    manifest: &Manifest,
+    version: Version,
+    counts: &mut RegistryCounts,
+) -> Result<Option<kira_core::config::Spec>> {
+    let path = built.dir.join(recipe.manifest_name(&manifest.folder));
+    if !path.is_file() {
+        eprintln!(
+            "  ! {} {version}: no stored declaration, so this version is published with \
+             no settings form",
+            manifest.slug
+        );
+        counts.undeclared += 1;
+        return Ok(None);
+    }
+    Ok(crate::app_manifest::Sidecar::read(&path)?.config)
 }
 
 /// What the submissions contributed, for the run summary.
@@ -991,6 +1030,9 @@ struct RegistryCounts {
     manifests: usize,
     versions: usize,
     missing: usize,
+    /// Versions published without their stored declaration, which is a store
+    /// that has not caught up rather than an app that declares nothing.
+    undeclared: usize,
     retired: usize,
 }
 
@@ -1181,6 +1223,13 @@ fn report(
             "{} submitted app(s): {} version(s) published, {} with no stored artifact",
             registry.manifests, registry.versions, registry.missing
         );
+        if registry.undeclared > 0 {
+            println!(
+                "{} submitted version(s) published with no stored declaration, so no \
+                 settings form",
+                registry.undeclared
+            );
+        }
         if registry.retired > 0 {
             println!(
                 "{} submitted version(s) withdrawn, listed but never offered",
@@ -1730,6 +1779,7 @@ sdk_rev = "apps-v1.3.0"
             built_from: None,
             upstream_sha256: None,
             matches_upstream: None,
+            config: None,
             retired: None,
             notes: None,
         }
@@ -1754,7 +1804,6 @@ sdk_rev = "apps-v1.3.0"
             icon_small: None,
             superseded_by: None,
             publisher: None,
-            config: None,
             retired: None,
         };
         collapse_candidates(&mut app);

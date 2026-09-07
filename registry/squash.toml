@@ -1,32 +1,30 @@
-# A squash activity app, and the raw 100 Hz IMU recorder it is being built out
-# of: shot detection needs labelled court data that does not exist yet, so the
-# app ships the means to collect it before anything derived from it.
-app_id     = "A1E5C38B7D2F9046"
+# A squash session, and the raw motion recorder it is being built out of.
+#
+# The activity half is ordinary and finished: the clock, your heart rate and the
+# zone it puts you in, laps, and a FIT file whose session says squash rather than
+# a workout that covered no ground. A paired chest strap is used when one is
+# connected and the wrist sensor when it is not.
+#
+# The other half is why it exists. Counting shots needs labelled court data, and
+# there is none -- so rather than shipping a detector tuned on nothing, the app
+# ships the means to collect the data: a switch that streams the wrist sensor's
+# raw 100 Hz motion to a CSV beside the activity, in a format the SDK's simulator
+# replays. It fills flash fast and stops itself at 8 MB or 30 minutes, whichever
+# comes first, so it is off unless somebody turns it on.
+#
+# The previous listing for this app, under a locally derived AppID rather than the
+# one UNA registered, is registry/squash-old-id.toml. A watch carrying that 0.1.0
+# is carrying a different app as far as the kernel is concerned; installing this
+# one replaces what is in Apps/Squash/.
+app_id     = "9E526672EAFB61B6"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "Squash"
 folder     = "Squash"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# The recorder is off unless this file says otherwise, and there is no on-watch
-# toggle for it — four buttons and no keyboard. The app owns the name, the schema
-# and the key, and validates the value again itself, falling back to off.
-#
-# There is no checkbox field type, so the flag is a word. The app accepts
-# on/yes/true/1/enabled in any case and treats everything else as off, which is
-# the safe direction for something whose only effect is to start filling flash.
-[config]
-file   = "input.json"
-schema = 1
-
-[[config.fields]]
-path      = "values.record_imu"
-title     = "Record raw IMU"
-help      = "Type on to stream the raw 100 Hz accelerometer and gyroscope to a CSV alongside each activity, for tuning shot detection later. Costs about 4.3 KiB per second and stops itself at 8 MB or 30 minutes. Leave blank or type off for a normal session."
-maxLength = 8
-
 [[versions]]
-version = "0.1.0"
-rev     = "49130de567edfb7ed78a338693ace5d884c3ebcd"
-sdk_rev = "apps-v1.3.0"
-notes   = "First build. Squash sessions recorded as FIT with sport=racket and sub_sport=squash, on the Workout app's session handling: HR and zones, calories, laps, crash recovery. It does not detect shots or count rallies, because tuning that needs labelled squash recordings which do not exist yet -- so what ships is the recorder that collects them, streaming the raw 100 Hz IMU to CSV in a format the SDK simulator replays. Tick the box above to enable it. Untested on hardware."
+version = "0.6.0"
+rev     = "0307738997d0c8a36fa9352c17ead2d612257465"
+sdk_rev = "apps-v1.4.0"
+notes   = "First build under the AppID UNA registered. The IMU switch is read through SDK::AppConfig now, so it is declared in the app's own manifest and this card's form comes out of that rather than out of Kira's registry. Laps are declared as supported, having turned out to be reachable, and pressing one during a research recording writes a marker into the CSV -- which is what makes a labelled session possible. Its own icon rather than the stock figure. Will not launch on a 1.3 kernel."

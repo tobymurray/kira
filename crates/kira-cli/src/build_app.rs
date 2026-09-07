@@ -232,6 +232,14 @@ pub(crate) struct Args {
     pub version: Version,
     /// Where to write the verified `.uapp`.
     pub out: PathBuf,
+    /// Where to write the app's stored declaration, when the store wants one.
+    ///
+    /// The app's `app-manifest.json` wrapped in
+    /// [`crate::app_manifest::Sidecar`], so that a source declaring no
+    /// configuration says so rather than looking like a build from before Kira
+    /// stored any. Written whether or not the app declares configuration; the
+    /// envelope is what carries the difference.
+    pub manifest_out: Option<PathBuf>,
     /// `CMake` generator. Output is identical either way; this exists to make that
     /// testable rather than assumed.
     pub generator: String,
@@ -261,6 +269,8 @@ pub(crate) struct Built {
     pub artifact: String,
     pub size: usize,
     pub sha256: String,
+    /// What the app's own `app-manifest.json` declares, if it has one.
+    pub declaration: crate::app_manifest::Declaration,
 }
 
 fn run(command: &mut Command, what: &str) -> Result<()> {
@@ -269,6 +279,56 @@ fn run(command: &mut Command, what: &str) -> Result<()> {
         .with_context(|| format!("could not start {what}"))?;
     ensure!(status.success(), "{what} failed with {status}");
     Ok(())
+}
+
+/// Read the app's `app-manifest.json`, and check it names this build.
+///
+/// A manifest claiming a different `appVersion` is a mis-pinned recipe: the
+/// declaration Kira would publish beside these bytes would be labelled with a
+/// version its own source does not claim. Refused rather than warned about,
+/// because the alternative is a card whose settings form belongs to a different
+/// build of the app.
+///
+/// `publishing` is what makes that a rule rather than a nuisance. It is true for
+/// a submission, whose registry manifest names the version being built, and
+/// false for an SDK app, where the version comes from the release tag upstream
+/// shipped and a manifest's own `appVersion` is UNA's store metadata rather than
+/// a claim about this build. Enforcing it there would let a single manifest
+/// appearing in the SDK tree fail every app in a release.
+fn read_manifest(
+    app: &Path,
+    version: Version,
+    publishing: bool,
+) -> Result<(crate::app_manifest::Declaration, Option<serde_json::Value>)> {
+    let (declaration, verbatim) = crate::app_manifest::read(app)?;
+    if let Some(claimed) = declaration.app_version
+        && publishing
+    {
+        ensure!(
+            claimed == version,
+            "{} says this app is {claimed}, and {version} was requested: pin a commit \
+             whose manifest names the version being published",
+            crate::app_manifest::path_in(app).display()
+        );
+    }
+    match &declaration.config {
+        Some(spec) => println!(
+            "  declares {} setting(s) in {}",
+            spec.fields.len(),
+            spec.file
+        ),
+        None => println!("  declares no settings"),
+    }
+    Ok((declaration, verbatim))
+}
+
+/// Write the declaration the artifact store carries beside the binary.
+fn write_sidecar(path: &Path, manifest: Option<serde_json::Value>) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let text = serde_json::to_string_pretty(&crate::app_manifest::Sidecar::of(manifest))?;
+    fs::write(path, format!("{text}\n")).with_context(|| format!("writing {}", path.display()))
 }
 
 /// Build one app and verify the result against what its source declares.
@@ -291,6 +351,11 @@ pub(crate) fn run_build(args: &Args) -> Result<Built> {
         args.version,
         project.display()
     );
+
+    // Before the compile rather than after it, because a manifest that
+    // contradicts the build is a mis-pinned recipe and there is no point paying
+    // for a binary Kira would then refuse to publish a declaration beside.
+    let (declaration, verbatim) = read_manifest(&app, args.version, args.manifest_out.is_some())?;
 
     let build_dir = project.join("build");
     fs::create_dir_all(&build_dir)?;
@@ -358,6 +423,11 @@ pub(crate) fn run_build(args: &Args) -> Result<Built> {
     }
     fs::write(&args.out, &bytes).with_context(|| format!("writing {}", args.out.display()))?;
 
+    if let Some(path) = &args.manifest_out {
+        write_sidecar(path, verbatim)?;
+        println!("  declaration name: {}", recipe.manifest_name(&label));
+    }
+
     let sha256 = crate::sha256_hex(&bytes);
     println!(
         "  ok  {} bytes  id={}  recipe={}  sha256={sha256}",
@@ -373,6 +443,7 @@ pub(crate) fn run_build(args: &Args) -> Result<Built> {
         artifact,
         size: bytes.len(),
         sha256,
+        declaration,
     })
 }
 

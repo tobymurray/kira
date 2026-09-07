@@ -25,54 +25,22 @@ folder     = "FwDump"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# The default region needs no configuration and the app ships working without
-# this file — flash is what all but one user of this will want. What it buys is
-# pointing the same app at a different window (SRAM, a peripheral block) without
-# rebuilding it, so no field is required and every failure falls back to the
-# built-in flash region rather than refusing to start.
+# The app reads its region out of fwdump.json in its own folder, and the default
+# needs no file at all -- flash is what all but one user of this will want. That
+# is not something Kira can offer a form for any more, and the reason is worth
+# recording: a settings form now comes out of the app's own `app-manifest.json`,
+# read at the commit the binary was built from, so it is part of the recipe
+# rather than a claim made in this file. FwDump has no manifest yet, so the card
+# carries no form and the file has to be written by hand.
 #
-# Addresses are hex without an 0x prefix, matching the manifest the app writes
-# and sidestepping the fact that JSON has no hex literal — writing 0x08000000 as
-# a decimal number is how somebody ends up dumping the wrong region. The app
-# rejects anything that is not entirely hex digits rather than parsing as far as
-# it can, because this field names memory it is about to dereference.
+# What the declaration would say, when it is written: four optional string
+# fields, `base`, `size`, `chunk` and `subwrite`, hex without an 0x prefix (JSON
+# has no hex literal, and writing 0x08000000 as a decimal number is how somebody
+# ends up dumping the wrong region), each at most 8 bytes, with the built-in
+# flash region as every default. `pattern` of `[0-9A-Fa-f]{1,8}` would refuse a
+# value the app would otherwise reject on the watch -- which matters here more
+# than anywhere, since this field names memory the app is about to dereference.
 #
-# Geometry must tile exactly: size a whole number of chunks, chunk a whole number
-# of sub-writes, sub-write no larger than 16 KiB. It is validated again on the
-# watch and discarded whole if it does not hold, so a half-applied geometry
-# cannot tile the region wrongly.
-#
-# A configured region is read exactly as flash is. What changes is the chance
-# that an address does not decode — which faults rather than returning an error,
-# and a fault takes the app down. The default is a region already known readable.
-[config]
-file   = "fwdump.json"
-schema = 1
-
-[[config.fields]]
-path      = "base"
-title     = "Base address (hex)"
-help      = "First address to read, hex without 0x. Leave blank for 08000000, the internal flash this app exists to dump. Anything else is your risk: an address that does not decode faults and ends the app."
-maxLength = 8
-
-[[config.fields]]
-path      = "size"
-title     = "Bytes to read (hex)"
-help      = "How much to read from the base address, hex without 0x. Leave blank for 00400000, the whole 4 MB. Must be a whole number of chunks."
-maxLength = 8
-
-[[config.fields]]
-path      = "chunk"
-title     = "Bytes per file (hex)"
-help      = "Size of each output file, hex without 0x. Leave blank for 00020000 (128 KiB), which gives 32 files. Smaller chunks lose less to an interruption and make more files."
-maxLength = 8
-
-[[config.fields]]
-path      = "subwrite"
-title     = "Bytes per write (hex)"
-help      = "How much is read, hashed and written at a time, hex without 0x. Leave blank for 00001000 (4 KiB). This is where the app yields, so it bounds how long the dump can go without answering a message. Must divide the chunk size and cannot exceed 4000."
-maxLength = 8
-
 [[versions]]
 version = "1.0.0"
 rev     = "555bca30980ac3402f2c371afcbce915b75a4679"

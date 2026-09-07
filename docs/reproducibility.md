@@ -21,6 +21,16 @@ Built binaries are stored as assets on a long-lived `app-binaries` release, name
 `<app>-<version>-<recipe key>.uapp`. That is unrelated to the Actions cache under
 Settings, which holds cargo build caches.
 
+A submission's build stores a second asset beside its binary,
+`<app>-<version>-<recipe key>.manifest.json`: the app's own `app-manifest.json`
+at that same commit, wrapped so that "this source declares no configuration" is
+sayable rather than being indistinguishable from a build made before Kira stored
+any. It is there because a settings declaration is now derived rather than
+asserted — it comes out of the pinned source, so it belongs to the recipe — and
+because the catalogue build reads this store and fetches no source of its own.
+Like the binary, it is re-checked when it is read rather than trusted for having
+been produced by an earlier run of the same pipeline.
+
 `crates/kira-cli/src/recipe.rs` hashes a canonical serialisation of those into a
 short key, and `RECIPE_SCHEME` exists so the meaning of a recipe can be changed
 explicitly, invalidating every cached artifact instead of silently reusing one
@@ -151,6 +161,10 @@ without taking this repository's word for anything:
 ```sh
 gh attestation verify Alarm-1.3.0-<recipe>.uapp --repo tobymurray/kira
 ```
+
+The stored declarations are attested the same way. They are not code, but one
+names a file the page writes into somebody's watch and the keys it puts there,
+so "this came out of that workflow run" is worth being able to check about it.
 
 That closes the weaker half of the sentence above, the hashes living alongside the
 artifacts, and none of the stronger half. An attestation says which workflow

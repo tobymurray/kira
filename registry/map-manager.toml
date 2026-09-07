@@ -15,8 +15,8 @@ folder     = "MapManager"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# No [config] block: the screen only reports, it does not command, and the app
-# reads no settings file. What it acts on is the packs themselves, which arrive
+# No settings, declared or otherwise: the screen only reports, it does not
+# command, and the app reads no settings file. What it acts on is the packs themselves, which arrive
 # over USB as files rather than as a value somebody has to be asked for.
 
 [[versions]]
