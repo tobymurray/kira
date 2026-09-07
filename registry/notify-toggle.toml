@@ -18,6 +18,11 @@
 # other version the app refuses and says so. The floor the phone checks is a
 # minimum rather than an exact match, so a newer watch can install this and meet
 # a screen telling it the app will not act.
+#
+# The history here starts at 0.4.0, the first version carrying the AppID UNA
+# assigned. 0.2.0 to 0.3.0 carried a locally derived id, which makes them a
+# different app to the watch; they were never published here, so nothing is left
+# unrecognised by leaving them out.
 app_id     = "26FBAA925F61BA27"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "NotifyToggle"
@@ -32,7 +37,37 @@ maintainer = "tobymurray"
 # this app's own CI builds against, and it leaves the kernel interface where
 # apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
 [[versions]]
+version = "0.4.0"
+rev     = "98d68dca76257df37292b05a61e7431ee8e7d7f7"
+sdk_rev = "sdk-v1.4.0"
+notes   = "First published build. One switch for the watch-wide phone-notification setting -- the real flag the paired phone app edits, not a per-app capability -- taking effect at once. Turning on Save to watch settings splices it into the watch's own settings.json so it survives a restart, and the app proves the firmware first and says on screen when a change will not last. The splice is scoped to phone.notifications and tested. Earlier versions carried a locally derived id and were never published here."
+
+[[versions]]
+version = "0.4.1"
+rev     = "dbaa28ec69a6e46075ab4a713194b451130e5028"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Four defects an adversarial read of the whole app turned up."
+
+[[versions]]
+version = "0.5.0"
+rev     = "f73692311320ad7e25cd2c9d855b1faa0db2b0d1"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Gives the icon a bell, so it says which setting it toggles."
+
+[[versions]]
+version = "0.5.1"
+rev     = "4f5fcc50ba525cb69303faf1e451b7da97b353e7"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Stops the firmware gate comparing two things this app pulls apart: proving the build and deciding whether a change can be made durable are separate questions, and one answer was standing in for both."
+
+[[versions]]
+version = "0.6.0"
+rev     = "42cb3d47176cead5e22a657726982d3bf3750d4a"
+sdk_rev = "sdk-v1.4.0"
+notes   = "A version number and nothing else. On-screen wording about saving being a setting rather than a limit was written and then reverted before this was tagged, so the only difference from 0.5.1 is the stamped version -- which is why this card reports the code as unchanged."
+
+[[versions]]
 version = "0.6.1"
 rev     = "fb705cfa457d60bd5c0f578829339287fe0f9647"
 sdk_rev = "sdk-v1.4.0"
-notes   = "First published build. A single switch for the watch-wide phone-notification setting, taking effect at once; turn on Save to watch settings and it is written into the watch's own settings.json so it survives a restart, which needs software 1.4.0 exactly and is refused with a reason on anything else. This version matches the notification field at the depth the phone object holds it, where an earlier one could match the wrong key. Rust through CustomGUI, no TouchGFX."
+notes   = "Matches the notification field at the depth the phone object actually holds it, where the previous versions could match a key of the same name elsewhere in the settings file."
