@@ -40,3 +40,9 @@ version = "0.11.0"
 rev     = "127191508da9faa2dd8e62e30d125ea92ede5468"
 sdk_rev = "apps-v1.4.0"
 notes   = "First version to do anything real: a live accelerometer over the Service-to-GUI message path, and a dithered-gradient screen showing what the panel can do that a widget toolkit will not. Built against 1.4 and will not launch on a 1.3 kernel; 0.1.0 and 0.2.0 were built against 1.3 and still run on 1.4, since an app is refused only by a kernel older than itself. 0.3.0 to 0.10.0 were development builds and were never published."
+
+[[versions]]
+version = "0.12.0"
+rev     = "a282543895bf349af66516ae51458cc807828c74"
+sdk_rev = "apps-v1.4.0"
+notes   = "A third screen, and the one that answers the question this app exists to ask: a polar interference field recomputed per pixel every frame, in 18 fully saturated colours dithered between adjacent hues. The panel holds four levels a channel, so anything near the grey axis collapses -- this palette cannot, which is why it reads as a gradient where pastels wash out. A widget toolkit cannot express spending the CPU on it. The heartbeat is grounded in the clock now, not the frame counter."

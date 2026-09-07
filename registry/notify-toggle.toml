@@ -1,0 +1,32 @@
+# One switch, for the watch-wide phone-notification setting.
+#
+# It flips the real thing rather than a copy of it: the phone.notifications flag
+# the paired UNA phone app edits, which is watch-wide and not a per-app
+# capability. The change applies at once.
+#
+# Making it *last* is the interesting part, and it is why the app has a setting of
+# its own. No app-facing message can read or write this flag -- the SDK's
+# RequestSystemSettings payload does not carry the phone group at all, and there
+# is no setter anywhere -- and the sandboxed filesystem API cannot reach
+# settings.json either. So persistence means splicing the file directly, on
+# addresses derived by reverse-engineering one watch on one firmware version. The
+# app therefore proves the firmware before it touches anything, and says on
+# screen when a change will not last instead of claiming one that would not.
+#
+# That is what the switch below is: saving is off by default, and turning it on
+# is a decision, not a convenience. It needs watch software 1.4.0 exactly; on any
+# other version the app refuses and says so. The floor the phone checks is a
+# minimum rather than an exact match, so a newer watch can install this and meet
+# a screen telling it the app will not act.
+app_id     = "26FBAA925F61BA27"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "NotifyToggle"
+folder     = "NotifyToggle"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+[[versions]]
+version = "0.6.1"
+rev     = "fb705cfa457d60bd5c0f578829339287fe0f9647"
+sdk_rev = "apps-v1.4.0"
+notes   = "First published build. A single switch for the watch-wide phone-notification setting, taking effect at once; turn on Save to watch settings and it is written into the watch's own settings.json so it survives a restart, which needs software 1.4.0 exactly and is refused with a reason on anything else. This version matches the notification field at the depth the phone object holds it, where an earlier one could match the wrong key. Rust through CustomGUI, no TouchGFX."

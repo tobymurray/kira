@@ -1,0 +1,35 @@
+# A stationary bike ride, recorded as a ride that goes nowhere.
+#
+# The point of the app is one field in the file it writes. Record an indoor ride
+# as plain cycling and every consumer downstream reads it as a bike ride that
+# covered no ground: 45 minutes, 0.0 km, an average speed of zero, and a place in
+# your distance totals it did not earn. The session here says sub_sport =
+# indoor_cycling, which is the field that means the distance is absent because
+# there was never any.
+#
+# On the watch it is the clock, your heart rate and the zone it puts you in, from
+# a paired chest strap when one is connected and the wrist sensor when it is not
+# -- and every record says which, so a ride can be read back knowing where its
+# beats came from. Laps sum to the session, each with its own averages and time
+# in zone, and a session with no lap at all is never written, since many FIT
+# readers quietly drop one.
+#
+# The settings below are the parts a bike's own console knows and the watch does
+# not. Zone floors can be given outright or left at zero to be spread evenly, and
+# after a ride it can ask for the kilojoules the console reports and save them as
+# work and average power -- the watch cannot measure either.
+#
+# Forked from Squash for its service half, which already had the indoor,
+# GPS-free shape of an activity right, then given a Rust CustomGUI frontend.
+app_id     = "1B8D0B8FA049E33F"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "Spin"
+folder     = "Spin"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+[[versions]]
+version = "0.9.0"
+rev     = "d7962d47f6ce3df7d911339b7eee353bea222b69"
+sdk_rev = "apps-v1.4.0"
+notes   = "First published build. An indoor ride written as indoor_cycling rather than as a bike ride that covered no ground, with heart rate from a strap or the wrist and a field on every record saying which. Auto-lap, a target time, configurable zone floors, and an optional prompt for the kilojoules your bike's console reports, saved as work and average power. The GUI is Rust through CustomGUI and its settings come from the phone. Built against 1.4 and will not launch on a 1.3 kernel."
