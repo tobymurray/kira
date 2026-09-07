@@ -25,8 +25,14 @@ folder     = "NotifyToggle"
 licence    = "MIT"
 maintainer = "tobymurray"
 
+# Built against sdk-v1.4.0 rather than an apps release, and it has to be: the
+# app reads its configuration through SDK::AppConfig, which landed in the SDK
+# after apps-v1.4.0 shipped, so no apps release in existence can compile it.
+# sdk-v1.4.0 is the library release that first carries it, it is the revision
+# this app's own CI builds against, and it leaves the kernel interface where
+# apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
 [[versions]]
 version = "0.6.1"
 rev     = "fb705cfa457d60bd5c0f578829339287fe0f9647"
-sdk_rev = "apps-v1.4.0"
+sdk_rev = "sdk-v1.4.0"
 notes   = "First published build. A single switch for the watch-wide phone-notification setting, taking effect at once; turn on Save to watch settings and it is written into the watch's own settings.json so it survives a restart, which needs software 1.4.0 exactly and is refused with a reason on anything else. This version matches the notification field at the depth the phone object holds it, where an earlier one could match the wrong key. Rust through CustomGUI, no TouchGFX."

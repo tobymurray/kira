@@ -11,5 +11,6 @@
   "apps-v1.1.1": "0fea23afe0e8eeebfb51fcf73f68138ae37dbfd0",
   "apps-v1.1.2": "395cd10148eb099256dafb8e6c14795c3fc10e55",
   "apps-v1.2.0": "d64d85554763d7fcfe306dfa5dc11e563cf618a1",
-  "apps-v1.3.0": "7a556a3e8538c0b1b495d45fe21a53b00a60a594"
+  "apps-v1.3.0": "7a556a3e8538c0b1b495d45fe21a53b00a60a594",
+  "sdk-v1.4.0": "8cdb73140a3d97455b80c22d32e5012e26f72291"
 }

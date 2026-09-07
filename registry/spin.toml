@@ -28,8 +28,14 @@ folder     = "Spin"
 licence    = "MIT"
 maintainer = "tobymurray"
 
+# Built against sdk-v1.4.0 rather than an apps release, and it has to be: the
+# app reads its configuration through SDK::AppConfig, which landed in the SDK
+# after apps-v1.4.0 shipped, so no apps release in existence can compile it.
+# sdk-v1.4.0 is the library release that first carries it, it is the revision
+# this app's own CI builds against, and it leaves the kernel interface where
+# apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
 [[versions]]
 version = "0.9.0"
 rev     = "d7962d47f6ce3df7d911339b7eee353bea222b69"
-sdk_rev = "apps-v1.4.0"
+sdk_rev = "sdk-v1.4.0"
 notes   = "First published build. An indoor ride written as indoor_cycling rather than as a bike ride that covered no ground, with heart rate from a strap or the wrist and a field on every record saying which. Auto-lap, a target time, configurable zone floors, and an optional prompt for the kilojoules your bike's console reports, saved as work and average power. The GUI is Rust through CustomGUI and its settings come from the phone. Built against 1.4 and will not launch on a 1.3 kernel."

@@ -236,8 +236,15 @@ jobs:
       - name: Check the SDK tags still point where they did
         run: |
           set -euo pipefail
-          git ls-remote --tags https://github.com/UNAWatch/una-sdk.git 'refs/tags/apps-v*' \
-            > upstream-tags.txt
+          # Both families, because both get named as a build target. `apps-v*` is
+          # what the catalogue publishes from; `sdk-v*` is a release of the
+          # library alone, and a submission has to name one when it uses
+          # something no apps release carries yet -- `SDK::AppConfig` is the case
+          # that forced it. A locked tag missing from this listing is a hard
+          # failure below, so a family that is locked but not fetched would fail
+          # every build.
+          git ls-remote --tags https://github.com/UNAWatch/una-sdk.git \
+            'refs/tags/apps-v*' 'refs/tags/sdk-v*' > upstream-tags.txt
           python3 - <<'CHECK'
           import json, pathlib, sys
 

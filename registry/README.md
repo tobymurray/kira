@@ -35,10 +35,30 @@ maintainer = "someone"                                   # GitHub handle
 [[versions]]
 version = "1.0.0"
 rev     = "3f9a1c8e5d2b7046af13c9e8b25d704a6f1c8e3d"     # full commit sha
-sdk_rev = "apps-v1.3.0"                                  # SDK release to build against
+sdk_rev = "apps-v1.4.0"                                  # upstream release to build against
 notes   = "What changed in this version."                # optional, shown on the card
 # subdir = "old/path"                                    # optional, if this version lived elsewhere
 ```
+
+### Which `sdk_rev` to name
+
+Either family of upstream tag, and which one depends on what your app uses.
+
+- **`apps-v*`** is an apps release, the thing this catalogue is built around and
+  what every app UNA ships is stamped from. Name one of these unless you need
+  something it does not have.
+- **`sdk-v*`** is a release of the library on its own schedule. Sometimes it is
+  the only thing that can build an app: `SDK::AppConfig` landed after
+  `apps-v1.4.0` shipped, so **an app that reads its configuration through
+  `SDK::AppConfig` must name `sdk-v1.4.0` or later** and will not compile against
+  any apps release in existence. If your app's own CI pins an SDK commit, the tag
+  containing that commit is the revision to name here.
+
+A tag either way, never a bare commit: `sdk-tags.lock.json` can only watch a tag
+for movement, and the kernel requirement shown on your card is worked out from
+the version in the tag. A revision newer than Kira's kernel table has been
+checked against gets no answer rather than a guess, so a card may say it cannot
+tell which firmware is needed until the table catches up.
 
 Then open a pull request. You can check what's in the catalog today:
 
@@ -207,6 +227,7 @@ the old ones to where they actually lived.
 | `subdir` stays inside the repository | It is a path handed to a build. |
 | A published version's `subdir` never changes | The path is part of the recipe. Moving an app is fine; rewriting where an old version came from is not. |
 | `licence` is a recognised open licence | Source-accessible is the premise. If yours is missing from the list, add it in the same pull request. |
+| `sdk_rev` names an upstream release tag, `apps-v*` or `sdk-v*` | A tag is something upstream published and something the tag lock can watch for movement; a bare commit is neither, and the kernel requirement on your card is derived from the version in the tag. |
 | A published version's `rev` never changes | Somebody's watch may be carrying it. Change anything by publishing a new version. |
 | A manifest is retired, not deleted, once published | An app that vanishes leaves every watch carrying it holding something the catalogue cannot name. A submission that never reached the catalogue can simply be withdrawn. |
 | `configFile` in your `app-manifest.json` is a plain `.json` name in the app's own folder | It is a path the page writes to a device. A name that escaped the folder would write anywhere on the volume, and one a host resolves to a device (`nul.json`) writes nowhere at all, leaving the app looking for a file that was never created. |

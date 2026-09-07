@@ -23,8 +23,14 @@ folder     = "Squash"
 licence    = "MIT"
 maintainer = "tobymurray"
 
+# Built against sdk-v1.4.0 rather than an apps release, and it has to be: the
+# app reads its configuration through SDK::AppConfig, which landed in the SDK
+# after apps-v1.4.0 shipped, so no apps release in existence can compile it.
+# sdk-v1.4.0 is the library release that first carries it, it is the revision
+# this app's own CI builds against, and it leaves the kernel interface where
+# apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
 [[versions]]
 version = "0.6.0"
 rev     = "0307738997d0c8a36fa9352c17ead2d612257465"
-sdk_rev = "apps-v1.4.0"
+sdk_rev = "sdk-v1.4.0"
 notes   = "First build under the AppID UNA registered. The IMU switch is read through SDK::AppConfig now, so it is declared in the app's own manifest and this card's form comes out of that rather than out of Kira's registry. Laps are declared as supported, having turned out to be reachable, and pressing one during a research recording writes a marker into the CSV -- which is what makes a labelled session possible. Its own icon rather than the stock figure. Will not launch on a 1.3 kernel."

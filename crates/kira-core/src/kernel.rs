@@ -90,6 +90,21 @@ fn rank(releases: &[Release], tag: &str) -> Option<Precedence> {
 ///
 /// `None` where the table cannot say: an unparseable tag, or a release newer than
 /// [`CHECKED_THROUGH`].
+///
+/// Takes either family of upstream tag, and places both by the version number in
+/// the tag rather than by its prefix. `apps-v1.4.0` is the apps release;
+/// `sdk-v1.4.0` is the library release cut from the same line a week later, and
+/// it is what an app using `SDK::AppConfig` has to be built against, since that
+/// landed after the apps release shipped. Ranking it as 1.4.0 is the right answer
+/// for the same reason the apps release is: its commit descends from
+/// `apps-v1.4.0`, it leaves `KERNEL_INTERFACE_VERSION` untouched, and the SDK's
+/// own specification says app configuration needs no firmware change.
+///
+/// That the two families share a number is a fact about these two tags, not a
+/// rule -- so nothing here assumes it holds again. A future `sdk-v1.5.0` ranks
+/// above [`CHECKED_THROUGH`] and gets no answer, which is the direction that
+/// hedges rather than the one that claims a build will start on a kernel that
+/// would refuse it.
 #[must_use]
 pub fn interface_of(releases: &[Release], sdk_rev: &str) -> Option<Interface> {
     let built = rank(releases, sdk_rev)?;
@@ -309,6 +324,40 @@ mod tests {
         assert_eq!(interface_of(&c.releases, "apps-v1.3.0"), Some(2));
         assert_eq!(interface_of(&c.releases, "apps-v1.4.0-rc1"), Some(3));
         assert_eq!(interface_of(&c.releases, "apps-v1.4.0"), Some(3));
+    }
+
+    /// An SDK library release places by its version, not by its prefix.
+    ///
+    /// This is what lets an app built against `SDK::AppConfig` be placed at all.
+    /// The feature landed after `apps-v1.4.0` shipped, so no apps release
+    /// contains it and every app using it names `sdk-v1.4.0` instead -- a tag
+    /// that appears in no release list the catalogue holds.
+    #[test]
+    fn a_library_release_is_placed_by_the_version_in_its_tag() {
+        let c = catalog(Vec::new());
+        // The same answer as the apps release it was cut from, which is correct:
+        // the commit descends from it and leaves the interface constant alone.
+        assert_eq!(interface_of(&c.releases, "sdk-v1.4.0"), Some(3));
+        assert_eq!(
+            interface_of(&c.releases, "sdk-v1.4.0"),
+            interface_of(&c.releases, "apps-v1.4.0")
+        );
+        // Older library releases place below the bump, as their versions say.
+        assert_eq!(interface_of(&c.releases, "sdk-v1.3.0"), Some(2));
+    }
+
+    /// And the guard still holds across the other family.
+    ///
+    /// Sharing a version number is a fact about the 1.4.0 pair rather than a
+    /// rule, so anything above what the table has been checked against gets no
+    /// answer -- the direction that hedges instead of claiming a build will start
+    /// on a kernel that would refuse it.
+    #[test]
+    fn a_library_release_newer_than_the_table_gets_no_answer() {
+        let c = catalog(Vec::new());
+        assert_eq!(interface_of(&c.releases, "sdk-v1.5.0"), None);
+        assert_eq!(interface_of(&c.releases, "sdk-v2.0.0"), None);
+        assert_eq!(interface_of(&c.releases, "apps-v1.5.0"), None);
     }
 
     #[test]

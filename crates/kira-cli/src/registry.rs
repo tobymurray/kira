@@ -389,9 +389,23 @@ fn check_versions(manifest: &Manifest, say: &mut impl FnMut(String)) {
                 entry.version, entry.rev
             ));
         }
-        if !entry.sdk_rev.starts_with("apps-v") {
+        // Either family of upstream tag, and the difference matters. `apps-v*`
+        // is an apps release, which is what the catalogue is built around and
+        // what every SDK app is stamped from. `sdk-v*` is a release of the
+        // library itself, cut on its own schedule -- and it is sometimes the only
+        // thing that can build an app: `SDK::AppConfig` landed after
+        // `apps-v1.4.0` shipped, so every app using the SDK's app configuration
+        // needs `sdk-v1.4.0` or later and cannot be compiled against any apps
+        // release in existence.
+        //
+        // A tag either way, never a bare commit. The recipe is supposed to name
+        // something upstream published, `sdk-tags.lock.json` can only watch a
+        // tag for movement, and the kernel table can only place a build whose
+        // revision carries a version number.
+        if !(entry.sdk_rev.starts_with("apps-v") || entry.sdk_rev.starts_with("sdk-v")) {
             say(format!(
-                "version {}: sdk_rev {:?} should name an SDK release tag, e.g. apps-v1.3.0",
+                "version {}: sdk_rev {:?} should name an upstream release tag, either an \
+                 apps release like apps-v1.4.0 or an SDK release like sdk-v1.4.0",
                 entry.version, entry.sdk_rev
             ));
         }
