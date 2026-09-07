@@ -21,6 +21,13 @@
 #
 # Forked from Squash for its service half, which already had the indoor,
 # GPS-free shape of an activity right, then given a Rust CustomGUI frontend.
+#
+# The history here starts at 0.5.2, which is the first version carrying the
+# AppID UNA assigned. Everything before it -- 0.1.0 through 0.5.1 -- carried an
+# id derived locally, which makes those builds a different app as far as the
+# watch, the phone and this catalogue are concerned. They were never published
+# here, so there is no watch that got one from Kira and nothing that a second,
+# retired listing for that identity would help anybody recognise.
 app_id     = "1B8D0B8FA049E33F"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "Spin"
@@ -35,7 +42,49 @@ maintainer = "tobymurray"
 # this app's own CI builds against, and it leaves the kernel interface where
 # apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
 [[versions]]
+version = "0.5.2"
+rev     = "38316cd777ae582eb50f580ed95aa9286b409ae2"
+sdk_rev = "sdk-v1.4.0"
+notes   = "First build under the AppID UNA assigned, and the app is already most of what it is now: an indoor ride written as indoor_cycling rather than as a bike ride that covered no ground, heart rate from a paired strap or the wrist with a field on every record saying which, any number of zones from two to eight drawn round the rim, and a ride that can be discarded. Earlier versions carried an id derived locally, were never published here, and are a different app to the watch."
+
+[[versions]]
+version = "0.5.3"
+rev     = "89b0522362c5533f160dfd1afb47cb7120795fe8"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Sizes the zone bucket array for the eight zones the dial supports, which is one more than it had room for."
+
+[[versions]]
+version = "0.6.0"
+rev     = "f28145dc4392bef8df20d2680e988b9f78517100"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Asks for the kilojoules the bike's console reports after a ride, and saves them as work and average power -- neither of which the watch can measure. The discard answers carry the weight the question deserves, and the watch icon is a spin bike rather than a penny-farthing."
+
+[[versions]]
+version = "0.6.1"
+rev     = "b70bb957706b9e9bb250af2ff09c69c50bb380aa"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Redraws the store icon, which was still a lone spoked wheel."
+
+[[versions]]
+version = "0.7.0"
+rev     = "4db8289001f7611c44dcfd9c576c25577be4eba6"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Draws every word and digit with TextKit's Poppins faces."
+
+[[versions]]
+version = "0.7.1"
+rev     = "c542c1ebd8ec3d8c8025d82018cf8e3496ab6b54"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Attributes zone seconds and calories to elapsed time rather than to ticks, so a ride whose ticks ran slow no longer reports less time in zone than it spent."
+
+[[versions]]
+version = "0.8.0"
+rev     = "38d54fc28279ee6049f3f89a358103a447a5a6a7"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Marks a lap with R2 while riding, so an interval can be read back afterwards with its own averages and time in zone."
+
+[[versions]]
 version = "0.9.0"
 rev     = "d7962d47f6ce3df7d911339b7eee353bea222b69"
 sdk_rev = "sdk-v1.4.0"
-notes   = "First published build. An indoor ride written as indoor_cycling rather than as a bike ride that covered no ground, with heart rate from a strap or the wrist and a field on every record saying which. Auto-lap, a target time, configurable zone floors, and an optional prompt for the kilojoules your bike's console reports, saved as work and average power. The GUI is Rust through CustomGUI and its settings come from the phone. Built against 1.4 and will not launch on a 1.3 kernel."
+notes   = "Shows the split when a lap closes. With it, five fixes in the file the ride is saved as: the target is cleared before the commit rename, as FatFs requires; a saturating average power is kept off the uint16 that means invalid; the heart rate the FIT carries is rounded the way the shared log rounds it; and the session log line is stamped with when it happened."

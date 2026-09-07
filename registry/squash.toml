@@ -16,6 +16,9 @@
 # one UNA registered, is registry/squash-old-id.toml. A watch carrying that 0.1.0
 # is carrying a different app as far as the kernel is concerned; installing this
 # one replaces what is in Apps/Squash/.
+#
+# The history here starts at 0.5.0, which is the first version carrying the
+# registered id and the first with a manifest and a CI build of its own.
 app_id     = "9E526672EAFB61B6"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "Squash"
@@ -30,7 +33,13 @@ maintainer = "tobymurray"
 # this app's own CI builds against, and it leaves the kernel interface where
 # apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
 [[versions]]
+version = "0.5.0"
+rev     = "c8331291151028dafa57673aafd922587434aee7"
+sdk_rev = "sdk-v1.4.0"
+notes   = "First published build. A squash session recorded as FIT with sport=racket and sub_sport=squash, on the Workout app's session handling: heart rate and zones, calories, laps, crash recovery. Its recording flag is read through SDK::AppConfig from the app's own declaration, which is where the form on this card comes from, and it has an icon of its own rather than the stock figure. It does not detect shots; what it ships is the recorder that collects the data for tuning that."
+
+[[versions]]
 version = "0.6.0"
 rev     = "0307738997d0c8a36fa9352c17ead2d612257465"
 sdk_rev = "sdk-v1.4.0"
-notes   = "First build under the AppID UNA registered. The IMU switch is read through SDK::AppConfig now, so it is declared in the app's own manifest and this card's form comes out of that rather than out of Kira's registry. Laps are declared as supported, having turned out to be reachable, and pressing one during a research recording writes a marker into the CSV -- which is what makes a labelled session possible. Its own icon rather than the stock figure. Will not launch on a 1.3 kernel."
+notes   = "Laps are declared as supported, having turned out to be reachable, and pressing one during a research recording writes a marker into the CSV -- which is what makes a labelled session possible at all. Built against 1.4 and will not launch on a 1.3 kernel."

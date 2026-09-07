@@ -22,6 +22,15 @@
 # than the one UNA registered, is registry/barcode-old-id.toml. A watch carrying
 # that 0.1.0 is carrying a different app as far as the kernel is concerned;
 # installing this one replaces what is in Apps/Barcode/.
+#
+# The history here starts at 0.3.2 because that is where upstream's release
+# tagging starts. Versions 0.1.0 to 0.3.1 exist as version-bump commits in
+# watch-apps with no tag against them, which is the same thing as never having
+# been released -- 0.3.5 is the case that shows why the tag is the line: it was
+# built and installed during development, superseded before it was committed,
+# and pinning it here would name a build nobody should reproduce. Note that this
+# app's 0.1.0 and the retired listing's are different binaries under different
+# AppIDs, which is a second reason not to carry the untagged ones.
 app_id     = "409506B8B69EC13E"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "Barcode"
@@ -36,7 +45,91 @@ maintainer = "tobymurray"
 # this app's own CI builds against, and it leaves the kernel interface where
 # apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
 [[versions]]
+version = "0.3.2"
+rev     = "da6a8e0acc431db8abcc0c03fa0c873fe50f2fba"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Stops lighting the L1/L2 bezel indicators to advertise code cycling. They are 23x35 ABGR2222 bitmaps and they blit corrupt on the device -- a smear of horizontal dashes where the arc should be -- which an earlier version had already found and worked around on R2 before 0.3.0 put it back on the left edge. All four are off again at every call site. Nothing is lost: the caption already says Gym 4/4, which carries the affordance without drawing anything the blit path can corrupt."
+
+[[versions]]
+version = "0.3.3"
+rev     = "eeafaf99b4adc7ed652cd7fbccbb453cd6cca677"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Carries only the two fonts the app actually draws, which takes the binary from 256,896 bytes to 113,812. Same code paths, same rendering, same declared configuration -- so it earns a patch number of its own rather than reusing 0.3.2's. That one names a specific artifact that shipped, and giving a 113 KB binary the same number would leave 0.3.2 meaning either of two byte-different builds."
+
+[[versions]]
+version = "0.3.4"
+rev     = "1217e397fc1b2f368bed3a0d61937be6f6128f2c"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Position moves out of the caption and into pager marks: dots under the code rather than a fraction in the text, so a code you did not name shows no caption at all. What a wearer reads changes; what the app accepts does not."
+
+[[versions]]
+version = "0.3.6"
+rev     = "432973e3e6a96c4dc91979d9ac2e70f53b073079"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Makes a long id fit the round panel at any width -- a smaller face, then a split across two lines. There is no 0.3.5 on purpose. It was built and installed while this was being worked out, carrying only the first two tiers, and testing it is what turned up a plausible id that overflows even 18pt; it was superseded before it was ever committed, so tagging it would have named a build nobody should reproduce."
+
+[[versions]]
+version = "0.4.0"
+rev     = "257a341c915fc09b2bc87bc1a9edd0d0b690d215"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Draws a code as a QR symbol, for the readers that are a phone camera on a piece of glass, chosen per code through a new format field. The declared configuration grows from 12 fields to 18, so a reinstall asks for something new -- but a file already on a watch names no format, the app falls back to Code128, and every code in it draws byte-identical bars. Nothing here had been read by a camera yet: 0.504 mm modules on a reflective LCD behind a polariser were still unproven."
+
+[[versions]]
+version = "0.4.1"
+rev     = "35717d05715e5f141942bc3100cf04577e38028d"
+sdk_rev = "sdk-v1.4.0"
+notes   = "A manifest-only version, and the app's first. The binary is byte-for-byte 0.4.0's, and only the version string the packer embeds differs -- but the form on this card is rendered from app-manifest.json, which never reaches the watch, so without a new number there is nothing to key a reworded field to. The value rows now say what a value is for rather than repeating rules the validation message already carries."
+
+[[versions]]
+version = "0.5.0"
+rev     = "26a7b310b08bb37e5de46fe1acf619eb399d070b"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Draws a code as ITF, whole-pixel and with bearer bars, chosen per code like QRCode. 728 bytes for the encoder, its ten-row table and the layout. Nothing that already worked changes: a Code 128 or QRCode code is byte-identical to 0.4.1's, and a file written before ITF existed still means what it meant."
+
+[[versions]]
+version = "0.5.1"
+rev     = "d289913efc818ced1353319e9d6c98845281e999"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Gives every refusal a prompt that is still true. The prompts described a Code 128 the app may not have been drawing; they now describe what it draws. A code that already adopted correctly is byte-identical to 0.5.0's."
+
+[[versions]]
+version = "0.5.2"
+rev     = "de85b1ee69b002ba3ad6e5a277be58ac0f188384"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Refuses an id with a leading or trailing space instead of encoding it. A scanner reads the space as part of the value, so an id copied in with one is a barcode that scans as somebody else's number. A code without one is byte-identical to 0.5.1's."
+
+[[versions]]
+version = "0.5.3"
+rev     = "57b92cb82a0e1f770114fa8d67d9b65b0eaa8ffc"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Boosts the backlight while a code is on screen, so a laser scanner has light to read it by. One new configuration field and nothing else: no existing field, message or drawn output changes."
+
+[[versions]]
+version = "0.6.0"
+rev     = "48d89e1d5498a28bf4a2c48442f09742e0918afd"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Remembers the last code shown, across relaunches, so the watch comes back to the one you were using rather than to the first of six."
+
+[[versions]]
+version = "0.7.0"
+rev     = "714a1eb6508f7867fbbc97fd86e2540426c52a7c"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Rewrites the GUI in Rust through the SDK's CustomGUI entry point, replacing TouchGFX -- which is what makes the rest of this version possible. Code 128 bars get real sub-pixel coverage rather than rounding, text edges are smoothed by a supersample-and-shrink renderer, and the id, caption and prompts are centred in a closer-weight font."
+
+[[versions]]
+version = "0.7.1"
+rev     = "f901d45b06fe50c442299d898a993f1d74eb518c"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Stops the id and caption text clipping its own trailing glyph."
+
+[[versions]]
+version = "0.8.0"
+rev     = "15a3635cb145d3af5a8a0d683b1845e3ecb1b9eb"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Draws the id, caption and prompts with TextKit's Poppins faces."
+
+[[versions]]
 version = "0.9.0"
 rev     = "0d16a4ba06caba7e4a42f80d04be1c6e42af688f"
 sdk_rev = "sdk-v1.4.0"
-notes   = "First build under the AppID UNA registered, and the app has moved a long way since the one that carried the old id. Six codes rather than one, each with a name and a symbology -- Code 128, QRCode or ITF. The GUI is Rust through CustomGUI instead of TouchGFX, which is what gives the bars real sub-pixel coverage and the text its Poppins faces. The backlight comes up while a code is on screen, and the last one shown survives a relaunch. Built against 1.4 and will not launch on a 1.3 kernel."
+notes   = "Raises every format's id limit to where its own geometry stops, for a wearer whose two Code 128 codes each needed two more digits than 16 allowed: Code 128 and QRCode to 22, ITF to 20, the last measured rather than assumed -- 22 digits leaves 6px of quiet zone against the 10 it wants. What the panel can draw is a separate and smaller limit that is not a character count at all, since Code 128 pairs digits into subset C, so a denser symbol is drawn anyway and said so once."
