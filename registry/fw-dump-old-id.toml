@@ -1,0 +1,59 @@
+# The first FW Dump listing, under a locally derived AppID.
+#
+# UNA has since assigned this app a registered id, and an AppID is the whole of
+# an app's identity on the watch -- so the app carrying the new one is a
+# different app as far as the watch, the phone and this catalogue are concerned.
+# It is listed separately, and this listing stays to name the binary anybody who
+# installed 1.0.0 is still carrying.
+#
+# The current app is registry/fw-dump.toml.
+retired = "UNA assigned this app a registered AppID, which makes it a new identity; the current listing is fw-dump.toml"
+
+# Reads the watch's own 4 MB of internal flash straight out of memory and writes
+# it into its own folder, 32 files of 128 KB with a CRC-32 per chunk and one for
+# the whole image, to be copied off over USB. No SWD probe and no key: the
+# release firmware is AES-encrypted in transit but sits in plaintext in flash at
+# rest, and an app here runs with no memory isolation, so a pointer is enough.
+#
+# Read-only by construction — memory reads and filesystem writes into its own
+# sandbox, and no code path that writes flash, option bytes or a peripheral
+# register. It will not even walk the MPU region table, because selecting a
+# region means writing MPU_RNR.
+#
+# Two-phase and it cannot be otherwise: the kernel stops every running app while
+# USB is connected, so the dump runs with the cable out and the files are read
+# back afterwards. Which is why it resumes — every chunk is flushed before the
+# next is opened, and a relaunch re-verifies what is already on disk against
+# memory rather than rewriting it.
+#
+# For the curious rather than the general user. It produces a 4 MB folder of
+# binaries that mean nothing without a host-side reassembler, and it is a tool
+# for reading hardware you own.
+app_id     = "5D041A7EB1D16CAA"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "FwDump"
+folder     = "FwDump"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# The app reads its region out of fwdump.json in its own folder, and the default
+# needs no file at all -- flash is what all but one user of this will want. That
+# is not something Kira can offer a form for any more, and the reason is worth
+# recording: a settings form now comes out of the app's own `app-manifest.json`,
+# read at the commit the binary was built from, so it is part of the recipe
+# rather than a claim made in this file. FwDump has no manifest yet, so the card
+# carries no form and the file has to be written by hand.
+#
+# What the declaration would say, when it is written: four optional string
+# fields, `base`, `size`, `chunk` and `subwrite`, hex without an 0x prefix (JSON
+# has no hex literal, and writing 0x08000000 as a decimal number is how somebody
+# ends up dumping the wrong region), each at most 8 bytes, with the built-in
+# flash region as every default. `pattern` of `[0-9A-Fa-f]{1,8}` would refuse a
+# value the app would otherwise reject on the watch -- which matters here more
+# than anywhere, since this field names memory the app is about to dereference.
+#
+[[versions]]
+version = "1.0.0"
+rev     = "555bca30980ac3402f2c371afcbce915b75a4679"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build. Dumps the 4 MB of internal flash at 0x08000000 to 32 files of 128 KiB plus a manifest with a CRC-32 per chunk and one for the whole image, so a host reassembler re-derives every checksum rather than taking the watch's word. Resumable: an interrupted run leaves complete chunks and a relaunch re-verifies them against memory rather than rewriting. Also records the UID and isolation registers, which are not in the dump. Read-only. Verified on hardware against two firmware versions."

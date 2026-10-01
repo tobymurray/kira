@@ -1,0 +1,63 @@
+# One switch, for the watch-wide metric/imperial setting.
+#
+# It flips the real thing rather than a copy of it: the units field the paired
+# UNA phone app edits, applied at once. Unlike Notify's flag, this one can be
+# read the supported way, so the app always shows which units are set, and after
+# a change it asks the kernel again and puts the byte back if the answer did not
+# follow.
+#
+# Making it last means splicing settings.json on addresses measured on one
+# firmware, the same SettingsKit Notify uses, so saving is off by default and the
+# app proves the firmware before writing. It needs watch software 1.4.0 exactly up
+# to 0.6.1, and 1.4.0 or 1.5.0 from 0.7.0; on any other version the app still
+# shows the units but will not change them.
+#
+# The history here starts at 0.3.0, the first version carrying the AppID UNA
+# assigned. 0.2.0 carried an all-zero placeholder and was never published here.
+app_id     = "B7D228CF5A7C91AD"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "UnitToggle"
+folder     = "UnitToggle"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# Each version names the SDK release its own CI built that tag against: the app
+# reads its configuration through SDK::AppConfig, so sdk-v1.4.0 until this app's
+# CI moved to apps-v1.5.0 on 2026-09-28. Both leave the kernel interface where
+# apps-v1.4.0 left it, so every build here needs firmware 1.4 and no more.
+
+[[versions]]
+version = "0.3.0"
+rev     = "c752601a4e531e65d7deb9cbdd8fa8bef6101ca3"
+sdk_rev = "sdk-v1.4.0"
+notes   = "First build under the AppID UNA assigned. Shows whether the watch is set to metric or imperial, and R1 switches it at once. Switch on Save to watch settings and the change lasts across a restart, on watch software 1.4.0. A write the kernel does not corroborate is put back."
+
+[[versions]]
+version = "0.3.1"
+rev     = "5772bf30793b0e847e4feb3190e1d169ba348d11"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Decides which pixels are on the glass by the shared, tested rule instead of a hand-written copy. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.5.0"
+rev     = "f150fb9385315587908d44d70c78cf836de1bf89"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Takes its panic handler from the shared PanicKit crate instead of declaring its own. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.6.0"
+rev     = "36c4f065d7acc909d3417cf836a5bf57dd18e21c"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Moves the panel's colour decoding into the shared crate that owns the palette. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.6.1"
+rev     = "5b2ca0e58dc4286fbafaed17e669155507a5b62d"
+sdk_rev = "apps-v1.5.0"
+notes   = "Built against upstream apps-v1.5.0 instead of a fork of the SDK whose one extra commit, an allocator fix, has since landed upstream. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.7.0"
+rev     = "89420d7b9f4329e8b87582061337b0f8239fda35"
+sdk_rev = "apps-v1.5.0"
+notes   = "Saving works on watch software 1.5.0 as well as 1.4.0. The 1.5.0 addresses were measured on a watch, and since both versions share a kernel interface, the firmware is told apart by signature bytes in flash."

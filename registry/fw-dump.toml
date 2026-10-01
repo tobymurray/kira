@@ -18,31 +18,23 @@
 # For the curious rather than the general user. It produces a 4 MB folder of
 # binaries that mean nothing without a host-side reassembler, and it is a tool
 # for reading hardware you own.
-app_id     = "5D041A7EB1D16CAA"
+#
+# The history here starts at 1.1.0, the first version carrying the AppID UNA
+# assigned. 1.0.0 is registry/fw-dump-old-id.toml.
+app_id     = "78C1174ADA9C5EBD"
 source     = "https://github.com/tobymurray/watch-apps"
 subdir     = "FwDump"
 folder     = "FwDump"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# The app reads its region out of fwdump.json in its own folder, and the default
-# needs no file at all -- flash is what all but one user of this will want. That
-# is not something Kira can offer a form for any more, and the reason is worth
-# recording: a settings form now comes out of the app's own `app-manifest.json`,
-# read at the commit the binary was built from, so it is part of the recipe
-# rather than a claim made in this file. FwDump has no manifest yet, so the card
-# carries no form and the file has to be written by hand.
-#
-# What the declaration would say, when it is written: four optional string
-# fields, `base`, `size`, `chunk` and `subwrite`, hex without an 0x prefix (JSON
-# has no hex literal, and writing 0x08000000 as a decimal number is how somebody
-# ends up dumping the wrong region), each at most 8 bytes, with the built-in
-# flash region as every default. `pattern` of `[0-9A-Fa-f]{1,8}` would refuse a
-# value the app would otherwise reject on the watch -- which matters here more
-# than anywhere, since this field names memory the app is about to dereference.
-#
+# Built against apps-v1.3.0, as this app's own CI builds it: a 1.3 kernel refuses
+# an app built for interface 3, and this one has to run on the firmware it is
+# reading. Its settings form comes from its own app-manifest.json, which 1.1.0 is
+# the first version to carry.
+
 [[versions]]
-version = "1.0.0"
-rev     = "555bca30980ac3402f2c371afcbce915b75a4679"
+version = "1.1.0"
+rev     = "c81735805be2987c4983cf5b7c5c8aefb386e782"
 sdk_rev = "apps-v1.3.0"
-notes   = "First build. Dumps the 4 MB of internal flash at 0x08000000 to 32 files of 128 KiB plus a manifest with a CRC-32 per chunk and one for the whole image, so a host reassembler re-derives every checksum rather than taking the watch's word. Resumable: an interrupted run leaves complete chunks and a relaunch re-verifies them against memory rather than rewriting. Also records the UID and isolation registers, which are not in the dump. Read-only. Verified on hardware against two firmware versions."
+notes   = "First build under the AppID UNA assigned. Adds a settings form for the region to read and a README beside the dump. It names the firmware from the image when the kernel will not, and refuses rather than crashing on a firmware that isolates apps or for a region outside internal flash. A whole dump takes under 10 seconds on firmware 1.5.0."
