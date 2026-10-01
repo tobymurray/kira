@@ -35,12 +35,12 @@ folder     = "Spin"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# Built against sdk-v1.4.0 rather than an apps release, and it has to be: the
-# app reads its configuration through SDK::AppConfig, which landed in the SDK
-# after apps-v1.4.0 shipped, so no apps release in existence can compile it.
-# sdk-v1.4.0 is the library release that first carries it, it is the revision
-# this app's own CI builds against, and it leaves the kernel interface where
-# apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
+# Each version names the SDK release its own CI built that tag against. The app
+# reads its configuration through SDK::AppConfig, which landed after apps-v1.4.0
+# shipped, so the earlier versions name sdk-v1.4.0, the library release that
+# first carries it. The later ones name apps-v1.5.0, which carries it too and is
+# where this app's CI moved on 2026-09-28. Both leave the kernel interface where
+# apps-v1.4.0 left it, so every build here needs firmware 1.4 and no more.
 [[versions]]
 version = "0.5.2"
 rev     = "38316cd777ae582eb50f580ed95aa9286b409ae2"
@@ -88,3 +88,45 @@ version = "0.9.0"
 rev     = "d7962d47f6ce3df7d911339b7eee353bea222b69"
 sdk_rev = "sdk-v1.4.0"
 notes   = "Shows the split when a lap closes. With it, five fixes in the file the ride is saved as: the target is cleared before the commit rename, as FatFs requires; a saturating average power is kept off the uint16 that means invalid; the heart rate the FIT carries is rounded the way the shared log rounds it; and the session log line is stamped with when it happened."
+
+[[versions]]
+version = "0.9.1"
+rev     = "c939772f691049481ad17b605552c94177abc236"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Checks the FIT writer's allocation before the ride depends on it. A heap that could not spare 92 bytes mid-ride was a store through null, a HardFault and a lost activity."
+
+[[versions]]
+version = "0.10.0"
+rev     = "4df9890342d3be381df66088efb8b9e5a1cfe59b"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Shrinks the panic handler, whose message was 78% of it. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.12.0"
+rev     = "98ffe359d1db70871b095033be78641978fb19db"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Reorganises the shared graphics crates and takes the panel's own rule for which pixels are on the glass. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.13.0"
+rev     = "7269ffb1d3fb299f3e1052f2e2f8359ddb5cddf4"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Moves the panel's colour decoding into the shared crate that owns the palette. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.14.0"
+rev     = "dba656328887ff6f3790655bb04dc50dc710dfab"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Interval sessions, declared as one string in the settings form: a buzz and an automatic lap at every step boundary, and a word on screen for how hard the step just entered is meant to be. That word is an instruction, never a compliance check, so nothing compares it with your heart rate. Avoid this build: saving a ride overflows the Service stack and faults the watch. The ride itself survives, but its line in the shared session log is lost. Fixed in 0.14.2."
+
+[[versions]]
+version = "0.14.1"
+rev     = "bb758617282b25c73f92b7ced969822cbfe3a397"
+sdk_rev = "apps-v1.5.0"
+notes   = "Built against upstream apps-v1.5.0 instead of a forked SDK. Like 0.14.0, saving a ride still faults the watch; fixed in 0.14.2."
+
+[[versions]]
+version = "0.14.2"
+rev     = "ab8a4aa9b3914e1ab700b1d9705b503124d60ecf"
+sdk_rev = "apps-v1.5.0"
+notes   = "Saving a ride no longer faults the watch. In 0.14.0 and 0.14.1 every save overflowed the Service stack after the .fit and summary were written, so the ride survived and only its line in the shared session log was lost. Proven on firmware 1.5.0, where the save path now measures 2,064 bytes against a 10,240-byte stack."

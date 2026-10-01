@@ -38,12 +38,12 @@ folder     = "Barcode"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# Built against sdk-v1.4.0 rather than an apps release, and it has to be: the
-# app reads its configuration through SDK::AppConfig, which landed in the SDK
-# after apps-v1.4.0 shipped, so no apps release in existence can compile it.
-# sdk-v1.4.0 is the library release that first carries it, it is the revision
-# this app's own CI builds against, and it leaves the kernel interface where
-# apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
+# Each version names the SDK release its own CI built that tag against. The app
+# reads its configuration through SDK::AppConfig, which landed after apps-v1.4.0
+# shipped, so the earlier versions name sdk-v1.4.0, the library release that
+# first carries it. The later ones name apps-v1.5.0, which carries it too and is
+# where this app's CI moved on 2026-09-28. Both leave the kernel interface where
+# apps-v1.4.0 left it, so every build here needs firmware 1.4 and no more.
 [[versions]]
 version = "0.3.2"
 rev     = "da6a8e0acc431db8abcc0c03fa0c873fe50f2fba"
@@ -133,3 +133,27 @@ version = "0.9.0"
 rev     = "0d16a4ba06caba7e4a42f80d04be1c6e42af688f"
 sdk_rev = "sdk-v1.4.0"
 notes   = "Raises every format's id limit to where its own geometry stops, for a wearer whose two Code 128 codes each needed two more digits than 16 allowed: Code 128 and QRCode to 22, ITF to 20, the last measured rather than assumed -- 22 digits leaves 6px of quiet zone against the 10 it wants. What the panel can draw is a separate and smaller limit that is not a character count at all, since Code 128 pairs digits into subset C, so a denser symbol is drawn anyway and said so once."
+
+[[versions]]
+version = "0.9.1"
+rev     = "33b3c8ad963b75427ee554f7b53fc516c0ae7d79"
+sdk_rev = "sdk-v1.4.0"
+notes   = "No change on the watch. The fix it was cut for is to the desktop simulator, whose preview now masks to the disc the panel lights rather than one a pixel wider."
+
+[[versions]]
+version = "0.11.0"
+rev     = "11ee09866760a996704389038b2b05fcca95ab63"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Takes its panic handler from the shared PanicKit crate instead of declaring its own. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.12.0"
+rev     = "a7c08b60ca5d0316838c1bd08a6d1a3f2d295767"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Moves the panel's colour decoding into the shared crate that owns the palette. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.12.1"
+rev     = "af44dd35f813e7499499a86941613159847ae173"
+sdk_rev = "apps-v1.5.0"
+notes   = "Built against upstream apps-v1.5.0 instead of a fork of the SDK whose one extra commit, an allocator fix, has since landed upstream. Nothing a wearer sees changes."

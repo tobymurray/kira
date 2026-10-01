@@ -14,10 +14,11 @@
 # screen when a change will not last instead of claiming one that would not.
 #
 # That is what the switch below is: saving is off by default, and turning it on
-# is a decision, not a convenience. It needs watch software 1.4.0 exactly; on any
-# other version the app refuses and says so. The floor the phone checks is a
-# minimum rather than an exact match, so a newer watch can install this and meet
-# a screen telling it the app will not act.
+# is a decision, not a convenience. It needs watch software 1.4.0 exactly up to
+# 0.9.1, and 1.4.0 or 1.5.0 from 0.10.0; on any other version the app refuses and
+# says so. The floor the phone checks is a minimum rather than an exact match, so
+# a newer watch can install this and meet a screen telling it the app will not
+# act.
 #
 # The history here starts at 0.4.0, the first version carrying the AppID UNA
 # assigned. 0.2.0 to 0.3.0 carried a locally derived id, which makes them a
@@ -30,12 +31,12 @@ folder     = "NotifyToggle"
 licence    = "MIT"
 maintainer = "tobymurray"
 
-# Built against sdk-v1.4.0 rather than an apps release, and it has to be: the
-# app reads its configuration through SDK::AppConfig, which landed in the SDK
-# after apps-v1.4.0 shipped, so no apps release in existence can compile it.
-# sdk-v1.4.0 is the library release that first carries it, it is the revision
-# this app's own CI builds against, and it leaves the kernel interface where
-# apps-v1.4.0 left it -- so these builds still need firmware 1.4 and no more.
+# Each version names the SDK release its own CI built that tag against. The app
+# reads its configuration through SDK::AppConfig, which landed after apps-v1.4.0
+# shipped, so the earlier versions name sdk-v1.4.0, the library release that
+# first carries it. The later ones name apps-v1.5.0, which carries it too and is
+# where this app's CI moved on 2026-09-28. Both leave the kernel interface where
+# apps-v1.4.0 left it, so every build here needs firmware 1.4 and no more.
 [[versions]]
 version = "0.4.0"
 rev     = "98d68dca76257df37292b05a61e7431ee8e7d7f7"
@@ -71,3 +72,45 @@ version = "0.6.1"
 rev     = "fb705cfa457d60bd5c0f578829339287fe0f9647"
 sdk_rev = "sdk-v1.4.0"
 notes   = "Matches the notification field at the depth the phone object actually holds it, where the previous versions could match a key of the same name elsewhere in the settings file."
+
+[[versions]]
+version = "0.6.2"
+rev     = "1647b9481c40b3dae989c3dae3eab9527979810b"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Puts back a settings file that a save interrupted between its two renames left under a scratch name. That now happens at launch whether or not saving is on, and whichever app carrying SettingsKit stranded it. A splice can also no longer produce a file the reader would refuse."
+
+[[versions]]
+version = "0.6.3"
+rev     = "31ff91fcb65ba16ce4fcc6a07af70c3dcc2f44fa"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Decides which pixels are on the glass by the shared, tested rule instead of a hand-written copy. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.8.0"
+rev     = "cfe56baad046247633794aed3bd61d3e66d9b164"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Takes its panic handler from the shared PanicKit crate instead of declaring its own. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.9.0"
+rev     = "48631b8c008910f29abcf8ea084daaf52e88c4c2"
+sdk_rev = "sdk-v1.4.0"
+notes   = "Moves the panel's colour decoding into the shared crate that owns the palette. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.9.1"
+rev     = "9555d6b3e642065e337ec06d015d4cab4ee4ebf1"
+sdk_rev = "apps-v1.5.0"
+notes   = "Built against upstream apps-v1.5.0 instead of a fork of the SDK whose one extra commit, an allocator fix, has since landed upstream. Nothing a wearer sees changes."
+
+[[versions]]
+version = "0.10.0"
+rev     = "f515eb47881aa7c68ed04118707d5e7871699806"
+sdk_rev = "apps-v1.5.0"
+notes   = "Saving works on watch software 1.5.0 as well as 1.4.0. The 1.5.0 addresses were measured on a watch, and since both versions share a kernel interface, the firmware is told apart by signature bytes in flash. The store description still says 1.4.0 exactly; 0.11.0 corrects it."
+
+[[versions]]
+version = "0.11.0"
+rev     = "28cefb810042c7f2e8de6410fd1a3e4547b069f4"
+sdk_rev = "apps-v1.5.0"
+notes   = "The same code as 0.10.0. Its description now says saving needs watch software 1.4.0 or 1.5.0, where 0.10.0's still said 1.4.0 exactly."
