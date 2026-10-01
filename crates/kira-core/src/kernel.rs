@@ -53,7 +53,11 @@ const BUMPS: &[(&str, Interface)] = &[("apps-v1.4.0-rc1", 3)];
 /// Bump this when a release has been read and found not to move the interface,
 /// which is a smaller claim than the table's other entries and the reason it is
 /// separate from them.
-const CHECKED_THROUGH: &str = "apps-v1.4.0";
+///
+/// `apps-v1.5.0` was read at `33a8d870`, which `sdk-v1.5.0` also names: it still
+/// defines `KERNEL_INTERFACE_VERSION` as 3, and `IKernel.hpp` has no commit
+/// between `apps-v1.4.0` and it. A commit there would falsify this.
+const CHECKED_THROUGH: &str = "apps-v1.5.0";
 
 /// A firmware generation the viewer can say their watch is on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,11 +104,11 @@ fn rank(releases: &[Release], tag: &str) -> Option<Precedence> {
 /// `apps-v1.4.0`, it leaves `KERNEL_INTERFACE_VERSION` untouched, and the SDK's
 /// own specification says app configuration needs no firmware change.
 ///
-/// That the two families share a number is a fact about these two tags, not a
-/// rule -- so nothing here assumes it holds again. A future `sdk-v1.5.0` ranks
-/// above [`CHECKED_THROUGH`] and gets no answer, which is the direction that
-/// hedges rather than the one that claims a build will start on a kernel that
-/// would refuse it.
+/// That the two families share a number is a fact about these tags, not a rule
+/// -- so nothing here assumes it holds again. A future `sdk-v1.6.0` ranks above
+/// [`CHECKED_THROUGH`] and gets no answer, which is the direction that hedges
+/// rather than the one that claims a build will start on a kernel that would
+/// refuse it.
 #[must_use]
 pub fn interface_of(releases: &[Release], sdk_rev: &str) -> Option<Interface> {
     let built = rank(releases, sdk_rev)?;
@@ -139,6 +143,7 @@ pub fn firmwares() -> Vec<Firmware> {
         version_from_tag(tag).map(|version| format!("{}.{}", version.major(), version.minor()))
     };
     let default = newest();
+    let checked = short(CHECKED_THROUGH);
     let mut out = Vec::with_capacity(BUMPS.len() + 1);
 
     // Newest first, so each bump is described by the release that introduced it
@@ -147,7 +152,11 @@ pub fn firmwares() -> Vec<Firmware> {
         let floor = short(tag).unwrap_or_else(|| (*tag).to_owned());
         let label = match BUMPS.get(index + 1).and_then(|&(above, _)| short(above)) {
             Some(ceiling) => format!("{floor} up to {ceiling}"),
-            None => format!("{floor} or newer"),
+            // Bounded by what the table has read, since a newer release may bump.
+            None => match checked.as_deref() {
+                Some(through) if through != floor => format!("{floor} to {through}"),
+                _ => floor,
+            },
         };
         out.push(Firmware {
             label,
@@ -346,6 +355,14 @@ mod tests {
         assert_eq!(interface_of(&c.releases, "sdk-v1.3.0"), Some(2));
     }
 
+    #[test]
+    fn the_1_5_0_pair_keeps_the_interface_1_4_0_introduced() {
+        let c = catalog(Vec::new());
+        assert_eq!(interface_of(&c.releases, "apps-v1.5.0"), Some(3));
+        assert_eq!(interface_of(&c.releases, "apps-v1.5.0-rc1"), Some(3));
+        assert_eq!(interface_of(&c.releases, "sdk-v1.5.0"), Some(3));
+    }
+
     /// And the guard still holds across the other family.
     ///
     /// Sharing a version number is a fact about the 1.4.0 pair rather than a
@@ -355,9 +372,9 @@ mod tests {
     #[test]
     fn a_library_release_newer_than_the_table_gets_no_answer() {
         let c = catalog(Vec::new());
-        assert_eq!(interface_of(&c.releases, "sdk-v1.5.0"), None);
+        assert_eq!(interface_of(&c.releases, "sdk-v1.6.0"), None);
         assert_eq!(interface_of(&c.releases, "sdk-v2.0.0"), None);
-        assert_eq!(interface_of(&c.releases, "apps-v1.5.0"), None);
+        assert_eq!(interface_of(&c.releases, "apps-v1.6.0"), None);
     }
 
     #[test]
@@ -376,7 +393,7 @@ mod tests {
     #[test]
     fn a_release_newer_than_the_table_gets_no_answer_rather_than_a_guess() {
         let c = catalog(Vec::new());
-        assert_eq!(interface_of(&c.releases, "apps-v1.5.0"), None);
+        assert_eq!(interface_of(&c.releases, "apps-v1.6.0"), None);
         assert_eq!(interface_of(&c.releases, "apps-v2.0.0-rc1"), None);
         // Not a release tag at all.
         assert_eq!(interface_of(&c.releases, "chrono"), None);
@@ -474,7 +491,7 @@ mod tests {
             choices[0].is_default,
             "the newest is what the page presents as"
         );
-        assert_eq!(choices[0].label, "1.4 or newer");
+        assert_eq!(choices[0].label, "1.4 to 1.5");
         assert_eq!(choices[choices.len() - 1].label, "older than 1.4");
         assert_eq!(choices[choices.len() - 1].interface, BASE);
         assert!(choices[1..].iter().all(|choice| !choice.is_default));
