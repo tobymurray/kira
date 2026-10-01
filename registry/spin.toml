@@ -117,13 +117,15 @@ notes   = "Moves the panel's colour decoding into the shared crate that owns the
 version = "0.14.0"
 rev     = "dba656328887ff6f3790655bb04dc50dc710dfab"
 sdk_rev = "sdk-v1.4.0"
-notes   = "Interval sessions, declared as one string in the settings form: a buzz and an automatic lap at every step boundary, and a word on screen for how hard the step just entered is meant to be. That word is an instruction, never a compliance check, so nothing compares it with your heart rate. Avoid this build: saving a ride overflows the Service stack and faults the watch. The ride itself survives, but its line in the shared session log is lost. Fixed in 0.14.2."
+retired = "Saving a ride overflows the Service stack and faults the watch; the ride survives but its shared-log line is lost. 0.14.2 fixes it."
+notes   = "Interval sessions, declared as one string in the settings form: a buzz and an automatic lap at every step boundary, and a word on screen for how hard the step just entered is meant to be. That word is an instruction, never a compliance check, so nothing compares it with your heart rate."
 
 [[versions]]
 version = "0.14.1"
 rev     = "bb758617282b25c73f92b7ced969822cbfe3a397"
 sdk_rev = "apps-v1.5.0"
-notes   = "Built against upstream apps-v1.5.0 instead of a forked SDK. Like 0.14.0, saving a ride still faults the watch; fixed in 0.14.2."
+retired = "Saving a ride overflows the Service stack and faults the watch; the ride survives but its shared-log line is lost. 0.14.2 fixes it."
+notes   = "Built against upstream apps-v1.5.0 instead of a forked SDK."
 
 [[versions]]
 version = "0.14.2"
