@@ -1,0 +1,40 @@
+# Reads the watch's own 4 MB of internal flash straight out of memory and writes
+# it into its own folder, 32 files of 128 KB with a CRC-32 per chunk and one for
+# the whole image, to be copied off over USB. No SWD probe and no key: the
+# release firmware is AES-encrypted in transit but sits in plaintext in flash at
+# rest, and an app here runs with no memory isolation, so a pointer is enough.
+#
+# Read-only by construction — memory reads and filesystem writes into its own
+# sandbox, and no code path that writes flash, option bytes or a peripheral
+# register. It will not even walk the MPU region table, because selecting a
+# region means writing MPU_RNR.
+#
+# Two-phase and it cannot be otherwise: the kernel stops every running app while
+# USB is connected, so the dump runs with the cable out and the files are read
+# back afterwards. Which is why it resumes — every chunk is flushed before the
+# next is opened, and a relaunch re-verifies what is already on disk against
+# memory rather than rewriting it.
+#
+# For the curious rather than the general user. It produces a 4 MB folder of
+# binaries that mean nothing without a host-side reassembler, and it is a tool
+# for reading hardware you own.
+#
+# The history here starts at 1.1.0, the first version carrying the AppID UNA
+# assigned. 1.0.0 is registry/fw-dump-old-id.toml.
+app_id     = "78C1174ADA9C5EBD"
+source     = "https://github.com/tobymurray/watch-apps"
+subdir     = "FwDump"
+folder     = "FwDump"
+licence    = "MIT"
+maintainer = "tobymurray"
+
+# Built against apps-v1.3.0, as this app's own CI builds it: a 1.3 kernel refuses
+# an app built for interface 3, and this one has to run on the firmware it is
+# reading. Its settings form comes from its own app-manifest.json, which 1.1.0 is
+# the first version to carry.
+
+[[versions]]
+version = "1.1.0"
+rev     = "c81735805be2987c4983cf5b7c5c8aefb386e782"
+sdk_rev = "apps-v1.3.0"
+notes   = "First build under the AppID UNA assigned. Adds a settings form for the region to read and a README beside the dump. It names the firmware from the image when the kernel will not, and refuses rather than crashing on a firmware that isolates apps or for a region outside internal flash. A whole dump takes under 10 seconds on firmware 1.5.0."

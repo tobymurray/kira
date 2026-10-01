@@ -1,3 +1,14 @@
+# The first FW Dump listing, under a locally derived AppID.
+#
+# UNA has since assigned this app a registered id, and an AppID is the whole of
+# an app's identity on the watch -- so the app carrying the new one is a
+# different app as far as the watch, the phone and this catalogue are concerned.
+# It is listed separately, and this listing stays to name the binary anybody who
+# installed 1.0.0 is still carrying.
+#
+# The current app is registry/fw-dump.toml.
+retired = "UNA assigned this app a registered AppID, which makes it a new identity; the current listing is fw-dump.toml"
+
 # Reads the watch's own 4 MB of internal flash straight out of memory and writes
 # it into its own folder, 32 files of 128 KB with a CRC-32 per chunk and one for
 # the whole image, to be copied off over USB. No SWD probe and no key: the
